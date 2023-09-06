@@ -80,6 +80,14 @@ yarn build
 
 # Copy the .env.example file and rename it to .env
 cp .env.example .env
+
+# Configure environment variables on the .env file 
+
+# Start PostgreSQL using Docker Compose:
+docker-compose up -d
+
+# Push the database schema
+npx prisma db push
 ```
 
 
