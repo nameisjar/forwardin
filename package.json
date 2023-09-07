@@ -21,10 +21,12 @@
   },
   "lint-staged": {
     "*.{ts,tsx,js,jsx}": [
-      "prettier --write"
+      "prettier --write",
+      "git add"
     ],
     "*.{html,css,less,ejs}": [
-      "prettier --write"
+      "prettier --write",
+      "git add"
     ]
   },
   "keywords": [],

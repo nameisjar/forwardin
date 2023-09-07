@@ -94,7 +94,7 @@ docker-compose up -d
 # Push the database schema
 npx prisma db push
 
-# Install git hooks
+# Install git (pre-commit) hooks
 npx husky install
 ```
 
