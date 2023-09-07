@@ -18,42 +18,45 @@ enum MessageStatus {
 }
 
 model User {
-  id               String            @id @default(uuid())
-  username         String            @unique
-  phone            String            @unique
-  email            String            @unique
-  password         String
-  accountApiKey    String            @unique @map("account_api_key")
-  googleId         String?           @unique @map("google_id")
-  affiliationLink  String            @map("affiliation_link")
+  pkId             Int               @id @default(autoincrement())
+  id               String            @default(uuid()) @db.Uuid
+  username         String            @unique @db.VarChar(128)
+  phone            String            @unique @db.VarChar(20)
+  email            String            @unique @db.VarChar(255)
+  password         String            @db.VarChar(255)
+  accountApiKey    String            @unique @map("account_api_key") @db.VarChar(128)
+  googleId         String?           @unique @map("google_id") @db.VarChar(128)
+  affiliationLink  String            @map("affiliation_link") @db.VarChar(255)
   createdAt        DateTime          @default(now()) @map("created_at")
   updatedAt        DateTime          @map("updated_at")
-  subscriptionId   String            @map("subsription_id")
-  privilegeId      String            @map("privilege_id")
-  subscription     Subscription      @relation(fields: [subscriptionId], references: [id])
-  privilege        Privilege         @relation(fields: [privilegeId], references: [id])
+  subscriptionId   Int               @map("subsription_id")
+  privilegeId      Int               @map("privilege_id")
+  subscription     Subscription      @relation(fields: [subscriptionId], references: [pkId])
+  privilege        Privilege         @relation(fields: [privilegeId], references: [pkId])
   customerServices CustomerService[]
   transactions     Transaction[]
   devices          Device[]
 }
 
 model CustomerService {
-  id          String    @id @default(uuid())
-  username    String    @unique
-  phone       String    @unique
-  email       String    @unique
-  password    String
+  pkId        Int       @id @default(autoincrement())
+  id          String    @default(uuid()) @db.Uuid
+  username    String    @unique @db.VarChar(128)
+  phone       String    @unique @db.VarChar(20)
+  email       String    @unique @db.VarChar(255)
+  password    String    @db.VarChar(255)
   createdAt   DateTime  @default(now()) @map("created_at")
   updatedAt   DateTime  @map("updated_at")
-  userId      String
-  privilegeId String    @map("privilege_id")
-  user        User      @relation(fields: [userId], references: [id])
-  privilege   Privilege @relation(fields: [privilegeId], references: [id])
+  userId      Int
+  privilegeId Int       @map("privilege_id")
+  user        User      @relation(fields: [userId], references: [pkId])
+  privilege   Privilege @relation(fields: [privilegeId], references: [pkId])
 }
 
 model Privilege {
-  id               String            @id @default(uuid())
-  name             String
+  pkId             Int               @id @default(autoincrement())
+  id               String            @default(uuid()) @db.Uuid
+  name             String            @db.VarChar(128)
   isSuperadmin     Boolean           @default(false) @map("is_superadmin")
   users            User[]
   roles            PrivilegeRole[]
@@ -62,45 +65,50 @@ model Privilege {
 }
 
 model PrivilegeRole {
-  id          String    @id @default(uuid())
+  pkId        Int       @id @default(autoincrement())
+  id          String    @default(uuid()) @db.Uuid
   isVisible   Boolean
   isCreate    Boolean
   isDelete    Boolean
   isRead      Boolean
   isEdit      Boolean
-  moduleId    String    @map("module_id")
-  module      Modul     @relation(fields: [moduleId], references: [id])
-  privilege   Privilege @relation(fields: [privilegeId], references: [id])
-  privilegeId String    @map("privilege_id")
+  moduleId    Int       @map("module_id")
+  module      Modul     @relation(fields: [moduleId], references: [pkId])
+  privilege   Privilege @relation(fields: [privilegeId], references: [pkId])
+  privilegeId Int       @map("privilege_id")
 }
 
 model Menu {
-  id             String          @id @default(uuid())
-  name           String
-  type           String
-  path           String
+  pkId           Int             @id @default(autoincrement())
+  id             String          @default(uuid()) @db.Uuid
+  name           String          @db.VarChar(128)
+  type           String          @db.VarChar(128)
+  path           String          @db.VarChar(255)
   isActive       Boolean         @map("is_active")
   menuPrivileges MenuPrivilege[]
 }
 
 model MenuPrivilege {
-  id          String    @id @default(uuid())
-  menu        Menu      @relation(fields: [menuId], references: [id])
-  menuId      String    @map("menu_id")
-  privilege   Privilege @relation(fields: [privilegeId], references: [id])
-  privilegeId String    @map("privilege_id")
+  pkId        Int       @id @default(autoincrement())
+  id          String    @default(uuid()) @db.Uuid
+  menu        Menu      @relation(fields: [menuId], references: [pkId])
+  menuId      Int       @map("menu_id")
+  privilege   Privilege @relation(fields: [privilegeId], references: [pkId])
+  privilegeId Int       @map("privilege_id")
 }
 
 model Modul {
-  id             String          @id @default(uuid())
-  name           String
-  controller     String
+  pkId           Int             @id @default(autoincrement())
+  id             String          @default(uuid()) @db.Uuid
+  name           String          @db.VarChar(128)
+  controller     String          @db.VarChar(255)
   privilegeRoles PrivilegeRole[]
 }
 
 model Subscription {
-  id           String        @id @default(uuid())
-  name         String
+  pkId         Int           @id @default(autoincrement())
+  id           String        @default(uuid()) @db.Uuid
+  name         String        @db.VarChar(128)
   price        Decimal       @map("price") @db.Decimal(10, 2)
   isAvailable  Boolean       @default(true) @map("is_available")
   createdAt    DateTime      @default(now()) @map("created_at")
@@ -110,30 +118,32 @@ model Subscription {
 }
 
 model Transaction {
-  id             String       @id @default(uuid())
-  name           String
+  pkId           Int          @id @default(autoincrement())
+  id             String       @default(uuid()) @db.Uuid
+  name           String       @db.VarChar(128)
   price          Decimal      @map("price") @db.Decimal(10, 2)
   createdAt      DateTime     @default(now()) @map("created_at")
   updatedAt      DateTime     @map("updated_at")
-  userId         String
-  subscriptionId String
-  user           User         @relation(fields: [userId], references: [id])
-  subscription   Subscription @relation(fields: [subscriptionId], references: [id])
+  userId         Int
+  subscriptionId Int
+  user           User         @relation(fields: [userId], references: [pkId])
+  subscription   Subscription @relation(fields: [subscriptionId], references: [pkId])
 }
 
 model Device {
-  id               String            @id @default(uuid())
-  name             String
-  phone            String            @unique
-  apiKey           String            @map("api_key")
+  pkId             Int               @id @default(autoincrement())
+  id               String            @default(uuid()) @db.Uuid
+  name             String            @db.VarChar(128)
+  phone            String            @unique @db.VarChar(20)
+  apiKey           String            @map("api_key") @db.VarChar(255)
   serverId         Int
   status           DeviceStatus      @default(NOT_CONNECTED) @map("status")
   createdAt        DateTime          @default(now()) @map("created_at")
   updatedAt        DateTime          @map("updated_at")
-  businessHourId   String?           @map("business_hour_id")
-  userId           String
-  businessHour     BusinessHour?     @relation(fields: [businessHourId], references: [id])
-  user             User              @relation(fields: [userId], references: [id])
+  businessHourId   Int?              @map("business_hour_id")
+  userId           Int
+  businessHour     BusinessHour?     @relation(fields: [businessHourId], references: [pkId])
+  user             User              @relation(fields: [userId], references: [pkId])
   sessions         Session[]
   outgoingMessages OutgoingMessage[]
   incomingMessages IncomingMessage[]
@@ -144,16 +154,18 @@ model Device {
 }
 
 model Session {
-  id       String @id @default(uuid())
+  pkId     Int    @id @default(autoincrement())
+  id       String @default(uuid()) @db.Uuid
   data     String
-  deviceId String
-  device   Device @relation(fields: [deviceId], references: [id])
+  deviceId Int
+  device   Device @relation(fields: [deviceId], references: [pkId])
 }
 
 model Contact {
-  id             String          @id @default(uuid())
-  name           String
-  phone          String          @unique
+  pkId           Int             @id @default(autoincrement())
+  id             String          @default(uuid()) @db.Uuid
+  name           String          @db.VarChar(128)
+  phone          String          @unique @db.VarChar(20)
   variablesData  String?         @map("variables_data")
   createdAt      DateTime        @default(now()) @map("created_at")
   updatedAt      DateTime        @map("updated_at")
@@ -162,84 +174,92 @@ model Contact {
 }
 
 model ContactGroup {
-  id        String  @id @default(uuid())
-  contactId String
-  groupId   String
-  contact   Contact @relation(fields: [contactId], references: [id])
-  group     Group   @relation(fields: [groupId], references: [id])
+  pkId      Int     @id @default(autoincrement())
+  id        String  @default(uuid()) @db.Uuid
+  contactId Int
+  groupId   Int
+  contact   Contact @relation(fields: [contactId], references: [pkId])
+  group     Group   @relation(fields: [groupId], references: [pkId])
 }
 
 model ContactDevice {
-  id        String  @id @default(uuid())
-  contactId String
-  deviceId  String
-  contact   Contact @relation(fields: [contactId], references: [id])
-  device    Device  @relation(fields: [deviceId], references: [id])
+  pkId      Int     @id @default(autoincrement())
+  id        String  @default(uuid()) @db.Uuid
+  contactId Int
+  deviceId  Int
+  contact   Contact @relation(fields: [contactId], references: [pkId])
+  device    Device  @relation(fields: [deviceId], references: [pkId])
 }
 
 model Group {
-  id            String         @id @default(uuid())
-  name          String
+  pkId          Int            @id @default(autoincrement())
+  id            String         @default(uuid()) @db.Uuid
+  name          String         @db.VarChar(128)
   isCampaign    Boolean        @default(false) @map("is_campaign")
   contactGroups ContactGroup[]
   campaigns     Campaign[]
 }
 
 model OutgoingMessage {
-  id        String        @id @default(uuid())
-  to        String
+  pkId      Int           @id @default(autoincrement())
+  id        String        @default(uuid()) @db.Uuid
+  to        String        @db.VarChar(20)
   message   String
   schedule  DateTime
   status    MessageStatus
-  source    String
+  source    String        @db.VarChar(20)
   createdAt DateTime      @default(now()) @map("created_at")
   updatedAt DateTime      @map("updated_at")
-  deviceId  String
-  device    Device        @relation(fields: [deviceId], references: [id])
+  deviceId  Int
+  device    Device        @relation(fields: [deviceId], references: [pkId])
 }
 
 model IncomingMessage {
-  id         String   @id @default(uuid())
-  from       String
+  pkId       Int      @id @default(autoincrement())
+  id         String   @default(uuid()) @db.Uuid
+  from       String   @db.VarChar(20)
   message    String
   receivedAt DateTime
   createdAt  DateTime @default(now()) @map("created_at")
   updatedAt  DateTime @map("updated_at")
-  deviceId   String
-  device     Device   @relation(fields: [deviceId], references: [id])
+  deviceId   Int
+  device     Device   @relation(fields: [deviceId], references: [pkId])
 }
 
 model AutoReply {
-  id        String        @id @default(uuid())
-  request   String
-  response  String
+  pkId      Int           @id @default(autoincrement())
+  id        String        @default(uuid()) @db.Uuid
+  request   String        @db.VarChar(255)
+  response  String        @db.VarChar(255)
   schedule  DateTime
   status    MessageStatus
   source    String
   createdAt DateTime      @default(now()) @map("created_at")
   updatedAt DateTime      @map("updated_at")
-  deviceId  String
-  device    Device        @relation(fields: [deviceId], references: [id])
+  deviceId  Int
+  device    Device        @relation(fields: [deviceId], references: [pkId])
 }
 
 model Campaign {
-  id                  String          @id @default(uuid())
-  name                String
-  syntaxRegistration  String          @map("syntax_registration")
+  pkId                Int             @id @default(autoincrement())
+  id                  String          @default(uuid()) @db.Uuid
+  name                String          @db.VarChar(128)
+  syntaxRegistration  String          @map("syntax_registration") @db.VarChar(255)
   registrationMessage String          @map("registration_message")
   messageRegistered   String          @map("message_registered")
-  phone               String          @unique
-  campaignMessageId   String          @map("campaign_message_id")
-  groupId             String          @map("group_id")
-  deviceId            String          @map("device_id")
-  campaignMessages    CampaignMessage @relation(fields: [campaignMessageId], references: [id])
-  group               Group           @relation(fields: [groupId], references: [id])
-  device              Device          @relation(fields: [deviceId], references: [id])
+  phone               String          @unique @db.VarChar(20)
+  campaignMessageId   Int             @map("campaign_message_id")
+  groupId             Int             @map("group_id")
+  deviceId            Int             @map("device_id")
+  campaignMessages    CampaignMessage @relation(fields: [campaignMessageId], references: [pkId])
+  group               Group           @relation(fields: [groupId], references: [pkId])
+  device              Device          @relation(fields: [deviceId], references: [pkId])
 }
 
 model CampaignMessage {
-  id        String     @id @default(uuid())
-  day       String
+  pkId      Int        @id @default(autoincrement())
+  id        String     @default(uuid()) @db.Uuid
+  day       String     @db.VarChar(128)
   message   String
   sechedule DateTime   @map("sechedule")
   delay     Int
@@ -247,7 +267,8 @@ model CampaignMessage {
 }
 
 model BusinessHour {
-  id       String   @id @default(uuid())
+  pkId     Int      @id @default(autoincrement())
+  id       String   @default(uuid()) @db.Uuid
   message  String
   monStart DateTime @map("mon_start")
   monEnd   DateTime @map("mon_end")
@@ -267,19 +288,21 @@ model BusinessHour {
 }
 
 model Order {
-  id       String  @id @default(uuid())
-  name     String
-  address  String
+  pkId     Int     @id @default(autoincrement())
+  id       String  @default(uuid()) @db.Uuid
+  name     String  @db.VarChar(128)
+  address  String  @db.VarChar(255)
   phone    Int
   ongkir   Int     @map("delivery_cost")
   price    Decimal @map("price") @db.Decimal(10, 2)
-  deviceId String  @map("device_id")
-  device   Device  @relation(fields: [deviceId], references: [id])
+  deviceId Int     @map("device_id")
+  device   Device  @relation(fields: [deviceId], references: [pkId])
 }
 
 model PasswordReset {
-  id        String   @id @default(uuid())
-  email     String   @unique
-  token     String
+  pkId      Int      @id @default(autoincrement())
+  id        String   @default(uuid()) @db.Uuid
+  email     String   @unique @db.VarChar(255)
+  token     String   @db.VarChar(255)
   createdAt DateTime @default(now())
 }
