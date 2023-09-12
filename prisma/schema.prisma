@@ -26,9 +26,12 @@ model User {
   password         String            @db.VarChar(255)
   accountApiKey    String            @unique @map("account_api_key") @db.VarChar(128)
   googleId         String?           @unique @map("google_id") @db.VarChar(128)
-  affiliationLink  String            @map("affiliation_link") @db.VarChar(255)
+  affiliationCode  String            @map("affiliation_code") @db.VarChar(128)
+  emailOtpSecret   String?           @map("email_otp_secret") @db.VarChar(255)
+  refreshToken     String?           @unique @map("refresh_token") @db.VarChar(255)
   createdAt        DateTime          @default(now()) @map("created_at")
-  updatedAt        DateTime          @map("updated_at")
+  updatedAt        DateTime          @default(now()) @map("updated_at")
+  emailVerifiedAt  DateTime          @map("email_verfied_at")
   subscriptionId   Int               @map("subsription_id")
   privilegeId      Int               @map("privilege_id")
   subscription     Subscription      @relation(fields: [subscriptionId], references: [pkId])
@@ -41,16 +44,18 @@ model User {
 model CustomerService {
   pkId        Int       @id @default(autoincrement())
   id          String    @default(uuid()) @db.Uuid
-  username    String    @unique @db.VarChar(128)
-  phone       String    @unique @db.VarChar(20)
-  email       String    @unique @db.VarChar(255)
+  username    String    @db.VarChar(128)
+  phone       String    @db.VarChar(20)
+  email       String    @db.VarChar(255)
   password    String    @db.VarChar(255)
   createdAt   DateTime  @default(now()) @map("created_at")
-  updatedAt   DateTime  @map("updated_at")
+  updatedAt   DateTime  @default(now()) @map("updated_at")
   userId      Int
   privilegeId Int       @map("privilege_id")
   user        User      @relation(fields: [userId], references: [pkId])
   privilege   Privilege @relation(fields: [privilegeId], references: [pkId])
+
+  @@unique([email, username, phone])
 }
 
 model Privilege {
@@ -112,7 +117,7 @@ model Subscription {
   price        Decimal       @map("price") @db.Decimal(10, 2)
   isAvailable  Boolean       @default(true) @map("is_available")
   createdAt    DateTime      @default(now()) @map("created_at")
-  updatedAt    DateTime      @map("updated_at")
+  updatedAt    DateTime      @default(now()) @map("updated_at")
   users        User[]
   transactions Transaction[]
 }
@@ -123,7 +128,7 @@ model Transaction {
   name           String       @db.VarChar(128)
   price          Decimal      @map("price") @db.Decimal(10, 2)
   createdAt      DateTime     @default(now()) @map("created_at")
-  updatedAt      DateTime     @map("updated_at")
+  updatedAt      DateTime     @default(now()) @map("updated_at")
   userId         Int
   subscriptionId Int
   user           User         @relation(fields: [userId], references: [pkId])
@@ -139,7 +144,7 @@ model Device {
   serverId         Int
   status           DeviceStatus      @default(NOT_CONNECTED) @map("status")
   createdAt        DateTime          @default(now()) @map("created_at")
-  updatedAt        DateTime          @map("updated_at")
+  updatedAt        DateTime          @default(now()) @map("updated_at")
   businessHourId   Int?              @map("business_hour_id")
   userId           Int
   businessHour     BusinessHour?     @relation(fields: [businessHourId], references: [pkId])
@@ -154,11 +159,12 @@ model Device {
 }
 
 model Session {
-  pkId     Int    @id @default(autoincrement())
-  id       String @default(uuid()) @db.Uuid
-  data     String
-  deviceId Int
-  device   Device @relation(fields: [deviceId], references: [pkId])
+  pkId      Int    @id @default(autoincrement())
+  id        String @default(uuid()) @db.Uuid
+  sessionId String @map("session_id") @db.VarChar(128)
+  data      String
+  deviceId  Int
+  device    Device @relation(fields: [deviceId], references: [pkId])
 }
 
 model Contact {
@@ -168,7 +174,7 @@ model Contact {
   phone          String          @unique @db.VarChar(20)
   variablesData  String?         @map("variables_data")
   createdAt      DateTime        @default(now()) @map("created_at")
-  updatedAt      DateTime        @map("updated_at")
+  updatedAt      DateTime        @default(now()) @map("updated_at")
   contactGroups  ContactGroup[]
   contactDevices ContactDevice[]
 }
@@ -209,7 +215,7 @@ model OutgoingMessage {
   status    MessageStatus
   source    String        @db.VarChar(20)
   createdAt DateTime      @default(now()) @map("created_at")
-  updatedAt DateTime      @map("updated_at")
+  updatedAt DateTime      @default(now()) @map("updated_at")
   deviceId  Int
   device    Device        @relation(fields: [deviceId], references: [pkId])
 }
@@ -221,7 +227,7 @@ model IncomingMessage {
   message    String
   receivedAt DateTime
   createdAt  DateTime @default(now()) @map("created_at")
-  updatedAt  DateTime @map("updated_at")
+  updatedAt  DateTime @default(now()) @map("updated_at")
   deviceId   Int
   device     Device   @relation(fields: [deviceId], references: [pkId])
 }
@@ -235,7 +241,7 @@ model AutoReply {
   status    MessageStatus
   source    String
   createdAt DateTime      @default(now()) @map("created_at")
-  updatedAt DateTime      @map("updated_at")
+  updatedAt DateTime      @default(now()) @map("updated_at")
   deviceId  Int
   device    Device        @relation(fields: [deviceId], references: [pkId])
 }
@@ -300,9 +306,10 @@ model Order {
 }
 
 model PasswordReset {
-  pkId      Int      @id @default(autoincrement())
-  id        String   @default(uuid()) @db.Uuid
-  email     String   @unique @db.VarChar(255)
-  token     String   @db.VarChar(255)
-  createdAt DateTime @default(now())
+  pkId              Int      @id @default(autoincrement())
+  id                String   @default(uuid()) @db.Uuid
+  email             String   @unique @db.VarChar(255)
+  token             String   @db.VarChar(255)
+  resetTokenExpires DateTime @map("reset_token_expires")
+  createdAt         DateTime @default(now()) @map("created_at")
 }
