@@ -1,12 +1,9 @@
+import { User } from '@prisma/client';
+
 declare global {
     namespace Express {
         interface Request {
-            user?: User;
+            user: User;
         }
     }
-}
-
-export interface DecodedToken {
-    userId: number;
-    email: string;
 }
