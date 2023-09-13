@@ -44,7 +44,6 @@ export const register = async (req: Request, res: Response) => {
                     password: hashedPassword,
                     accountApiKey: generateApiKey(),
                     affiliationCode: username,
-                    emailVerifiedAt: new Date(),
                     subscription: { connect: { pkId: 1 } },
                     privilege: { connect: { pkId: 1 } },
                 },

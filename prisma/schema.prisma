@@ -32,7 +32,7 @@ model User {
   createdAt        DateTime          @default(now()) @map("created_at")
   updatedAt        DateTime          @default(now()) @map("updated_at")
   deletedAt        DateTime?         @map("deleted_at")
-  emailVerifiedAt  DateTime          @map("email_verfied_at")
+  emailVerifiedAt  DateTime?          @map("email_verfied_at")
   subscriptionId   Int               @map("subsription_id")
   privilegeId      Int               @map("privilege_id")
   subscription     Subscription      @relation(fields: [subscriptionId], references: [pkId])
