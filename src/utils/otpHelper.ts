@@ -25,22 +25,22 @@ export function verifyOTPToken(secret: string, token: string): boolean {
     return isValid;
 }
 
-export async function sendEmail(toEmail: string, otpToken: string) {
+export async function sendEmail(toEmail: string, otpToken: string, subject: string) {
     const mailgun = new Mailgun(formData);
     const mg = mailgun.client({ username: 'api', key: process.env.MAILGUN_API_KEY! });
     const data = {
         from: 'amrizing@gmail.com',
         // to: toEmail,
         to: 'amrimuvti@gmail.com',
-        subject: 'Email Verification',
+        subject: subject,
         text: `Here's your OTP: ${otpToken}`,
     };
 
     try {
         await mg.messages.create(process.env.MAILGUN_DOMAIN!, data);
-        console.log(`Verification email sent to ${toEmail}`);
+        console.log(`Email sent to ${toEmail}`);
     } catch (error) {
-        console.error('Error sending verification email:', error);
+        console.error('Error sending email:', error);
         throw error;
     }
 }

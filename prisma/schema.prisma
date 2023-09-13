@@ -31,6 +31,7 @@ model User {
   refreshToken     String?           @unique @map("refresh_token") @db.VarChar(255)
   createdAt        DateTime          @default(now()) @map("created_at")
   updatedAt        DateTime          @default(now()) @map("updated_at")
+  deletedAt        DateTime?         @map("deleted_at")
   emailVerifiedAt  DateTime          @map("email_verfied_at")
   subscriptionId   Int               @map("subsription_id")
   privilegeId      Int               @map("privilege_id")
@@ -139,16 +140,17 @@ model Device {
   pkId             Int               @id @default(autoincrement())
   id               String            @default(uuid()) @db.Uuid
   name             String            @db.VarChar(128)
-  phone            String            @unique @db.VarChar(20)
+  phone            String?           @unique @db.VarChar(20)
   apiKey           String            @map("api_key") @db.VarChar(255)
   serverId         Int
   status           DeviceStatus      @default(NOT_CONNECTED) @map("status")
+  labels           Json?
   createdAt        DateTime          @default(now()) @map("created_at")
   updatedAt        DateTime          @default(now()) @map("updated_at")
   businessHourId   Int?              @map("business_hour_id")
   userId           Int
   businessHour     BusinessHour?     @relation(fields: [businessHourId], references: [pkId])
-  user             User              @relation(fields: [userId], references: [pkId])
+  user             User              @relation(fields: [userId], references: [pkId], onDelete: Cascade)
   sessions         Session[]
   outgoingMessages OutgoingMessage[]
   incomingMessages IncomingMessage[]
