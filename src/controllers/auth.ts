@@ -1,17 +1,11 @@
 import { Request, Response } from 'express';
-import { PrismaClient } from '@prisma/client';
+import { PrismaClient, User } from '@prisma/client';
 import { generateApiKey } from '../utils/apiKeyGenerator';
-import {
-    decodeJwtToken,
-    extractUserIdAndEmailFromToken,
-    generateAccessToken,
-    generateRefreshToken,
-} from '../utils/jwtGenerator';
+import { generateAccessToken, generateRefreshToken } from '../utils/jwtGenerator';
 import { generateOTPSecret, generateOTPToken, sendEmail, verifyOTPToken } from '../utils/otpHelper';
 import bcrypt from 'bcrypt';
 import jwt from 'jsonwebtoken';
 import 'dotenv/config';
-import { DecodedToken } from '../types';
 
 const prisma = new PrismaClient();
 const jwtSecretKey = process.env.JWT_SECRET_KEY!;
@@ -19,32 +13,28 @@ const jwtSecretKey = process.env.JWT_SECRET_KEY!;
 export const register = async (req: Request, res: Response) => {
     try {
         const { username, phone, email, password, confirmPassword } = req.body;
+        const hashedPassword = await bcrypt.hash(password, 10);
+        if (password !== confirmPassword) {
+            return res.status(400).json({ message: 'Passwords do not match' });
+        }
+
         const existingUser = await prisma.user.findFirst({
             where: {
                 OR: [{ username }, { email }, { phone }],
             },
         });
-
-        if (password !== confirmPassword) {
-            return res.status(400).json({ message: 'Passwords do not match' });
-        }
-
         if (existingUser) {
             return res
                 .status(400)
                 .json({ message: 'User with this username, email, or phone already exists' });
         }
 
-        const hashedPassword = await bcrypt.hash(password, 10);
-
         const existingSubscription = await prisma.subscription.findUnique({
-            where: { pkId: 100 },
+            where: { pkId: 1 },
         });
-
         const existingPrivilege = await prisma.privilege.findUnique({
             where: { pkId: 1 },
         });
-
         if (existingSubscription && existingPrivilege) {
             const newUser = await prisma.user.create({
                 data: {
@@ -54,7 +44,6 @@ export const register = async (req: Request, res: Response) => {
                     password: hashedPassword,
                     accountApiKey: generateApiKey(),
                     affiliationCode: username,
-                    emailVerifiedAt: new Date(),
                     subscription: { connect: { pkId: 1 } },
                     privilege: { connect: { pkId: 1 } },
                 },
@@ -135,7 +124,6 @@ export const login = async (req: Request, res: Response): Promise<Response> => {
         }
 
         const passwordMatch = await bcrypt.compare(password, user.password);
-
         if (!passwordMatch) {
             return res.status(401).json({ message: 'Wrong password' });
         }
@@ -163,17 +151,14 @@ export const refreshToken = async (req: Request, res: Response): Promise<void> =
             if (err) {
                 return res.status(401).json({ message: 'Invalid refresh token' });
             }
-
             if (!decoded) {
                 return res.status(401).json({ message: 'Decoded token is missing' });
             }
 
-            const userId = (decoded as DecodedToken).userId;
-
+            const pkId = (decoded as User).pkId;
             const user = await prisma.user.findUnique({
-                where: { pkId: userId },
+                where: { pkId },
             });
-
             if (!user) {
                 return res.status(401).json({ message: 'User not found' });
             }
@@ -190,21 +175,8 @@ export const refreshToken = async (req: Request, res: Response): Promise<void> =
 
 export const sendVerificationEmail = async (req: Request, res: Response) => {
     try {
-        const token = req.headers.authorization?.split(' ')[1];
-
-        if (!token) {
-            return res.status(401).json({ message: 'Unauthorized: JWT token missing' });
-        }
-
-        const decodedToken = decodeJwtToken(token, jwtSecretKey);
-        const tokenData = extractUserIdAndEmailFromToken(token, jwtSecretKey);
-
-        if (!decodedToken || !tokenData) {
-            return res.status(401).json({ message: 'Unauthorized: Invalid or expired JWT token' });
-        }
-        const { userId, email } = tokenData;
-
-        const user = await prisma.user.findUnique({ where: { email } });
+        const user = req.user;
+        const email = req.user.email;
 
         if (!user) {
             return res
@@ -216,11 +188,11 @@ export const sendVerificationEmail = async (req: Request, res: Response) => {
         const otpToken = generateOTPToken(otpSecret);
 
         await prisma.user.update({
-            where: { pkId: userId },
+            where: { pkId: user.pkId },
             data: { emailOtpSecret: otpSecret, email },
         });
 
-        await sendEmail(email, otpToken);
+        await sendEmail(email, otpToken, 'Verify your email');
         res.status(200).json({ message: 'Verification email sent successfully', otpToken });
     } catch (error) {
         req.log.error('Error:', error);
@@ -230,25 +202,11 @@ export const sendVerificationEmail = async (req: Request, res: Response) => {
 
 export const verifyEmail = async (req: Request, res: Response) => {
     try {
-        const token = req.headers.authorization?.split(' ')[1];
-
-        if (!token) {
-            return res.status(401).json({ message: 'Unauthorized: JWT token missing' });
-        }
-
-        const decodedToken = decodeJwtToken(token, jwtSecretKey);
-        const tokenData = extractUserIdAndEmailFromToken(token, jwtSecretKey);
-
-        if (!decodedToken || !tokenData) {
-            return res.status(401).json({ message: 'Unauthorized: Invalid or expired JWT token' });
-        }
-
-        const { userId } = tokenData;
-
+        const pkId = req.user.pkId;
         const otpToken = String(req.body.otpToken);
 
         const user = await prisma.user.findUnique({
-            where: { pkId: userId },
+            where: { pkId: pkId },
             select: { emailOtpSecret: true },
         });
 
@@ -260,7 +218,7 @@ export const verifyEmail = async (req: Request, res: Response) => {
 
         if (isValid) {
             await prisma.user.update({
-                where: { pkId: userId },
+                where: { pkId: pkId },
                 data: { emailVerifiedAt: new Date() },
             });
             return res.status(200).json({ message: 'Email verification successful' });
@@ -275,21 +233,7 @@ export const verifyEmail = async (req: Request, res: Response) => {
 
 export const forgotPassword = async (req: Request, res: Response): Promise<Response | void> => {
     try {
-        const token = req.headers.authorization?.split(' ')[1];
-
-        if (!token) {
-            return res.status(401).json({ message: 'Unauthorized: JWT token missing' });
-        }
-
-        const decodedToken = decodeJwtToken(token, jwtSecretKey);
-        const tokenData = extractUserIdAndEmailFromToken(token, jwtSecretKey);
-
-        if (!decodedToken || !tokenData) {
-            return res.status(401).json({ message: 'Unauthorized: Invalid or expired JWT token' });
-        }
-
-        const { email } = tokenData;
-
+        const email = req.body.email;
         const user = await prisma.user.findUnique({ where: { email } });
 
         if (!user) {
@@ -298,24 +242,23 @@ export const forgotPassword = async (req: Request, res: Response): Promise<Respo
                 .json({ message: 'Email address does not exist in our database' });
         }
 
-        // back here
-        const resetToken = generateApiKey();
+        const resetTokenSecret = generateOTPSecret();
+        const resetToken = generateOTPToken(resetTokenSecret);
 
         await prisma.passwordReset.upsert({
             where: { email },
             create: {
                 email,
-                token: resetToken,
+                token: resetTokenSecret,
                 resetTokenExpires: new Date(Date.now() + 3600000), // Expires in 1 hour
             },
             update: {
-                token: resetToken,
+                token: resetTokenSecret,
                 resetTokenExpires: new Date(Date.now() + 3600000), // Expires in 1 hour
             },
         });
 
-        // back here: send token to user's email
-
+        await sendEmail(email, resetToken, 'Reset password');
         res.status(200).json({ message: 'Password reset email sent' });
     } catch (error) {
         req.log.error('Error:', error);
@@ -334,7 +277,7 @@ export const resetPassword = async (req: Request, res: Response): Promise<Respon
 
         if (
             !resetInfo ||
-            resetInfo.token !== resetToken ||
+            verifyOTPToken(resetInfo.token, resetToken) ||
             resetInfo.resetTokenExpires <= new Date()
         ) {
             return res.status(401).json({ message: 'Invalid or expired reset token' });
@@ -367,14 +310,19 @@ export const changePassword = async (
     res: Response,
 ): Promise<Response | undefined> => {
     try {
-        const { email, currentPassword, password } = req.body;
+        const { currentPassword, password, confirmPassword } = req.body;
 
+        const email = req.user.email;
         const user = await prisma.user.findUnique({
             where: { email },
         });
 
         if (!user) {
             return res.status(404).json({ message: 'User not found' });
+        }
+
+        if (password !== confirmPassword) {
+            return res.status(400).json({ message: 'Passwords do not match' });
         }
 
         const passwordMatch = await bcrypt.compare(currentPassword, user.password);

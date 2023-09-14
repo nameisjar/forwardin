@@ -82,7 +82,7 @@ describe('Login Validation', () => {
 });
 
 describe('Email Verification', () => {
-    let userId: number = 0;
+    let pkId: number = 0;
     let otpToken: string;
 
     before(async () => {
@@ -92,7 +92,7 @@ describe('Email Verification', () => {
             },
         });
         if (existingUser) {
-            userId = existingUser.pkId;
+            pkId = existingUser.pkId;
         } else {
             throw new Error('Existing user not found');
         }
@@ -101,7 +101,7 @@ describe('Email Verification', () => {
     it('should send a verification email', async () => {
         const response = await request(app)
             .post('/auth/send-verification-email')
-            .send({ userId, email: 'test@example.com' })
+            .send({ pkId, email: 'test@example.com' })
             .set('Content-Type', 'application/json')
             .set('Authorization', `Bearer ${accessToken}`)
             .expect(200);
@@ -113,7 +113,7 @@ describe('Email Verification', () => {
     it('should verify the email using a token', async () => {
         const response = await request(app)
             .post('/auth/verify-email')
-            .send({ userId, otpToken })
+            .send({ pkId, otpToken })
             .set('Authorization', `Bearer ${accessToken}`)
             .set('Content-Type', 'application/json')
             .expect(200);
