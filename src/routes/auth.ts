@@ -21,9 +21,7 @@ router.post('/reset-password', passwordRules, emailRules, validate, controller.r
 router.use(authenticateUser);
 router.post('/send-verification-email', controller.sendVerificationEmail);
 router.post('/verify-email', controller.verifyEmail);
-router.post('/check-identifier-availability', controller.checkIdentifierAvailability);
 router.put('/change-password', passwordRules, validate, controller.changePassword);
 // router.post('/logout', controller.logout);
-router.delete('/delete-account', controller.deleteAccount);
 
 export default router;
