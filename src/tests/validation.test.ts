@@ -2,9 +2,7 @@ import request from 'supertest';
 import { expect } from 'chai';
 
 import app from '../index';
-import { PrismaClient } from '@prisma/client';
-
-const prisma = new PrismaClient();
+import prisma from '../utils/db';
 
 describe('Registration Validation', () => {
     it('should return 400 with validation errors when invalid data is sent', async () => {

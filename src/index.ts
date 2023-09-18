@@ -3,7 +3,7 @@ import cors from 'cors';
 import routes from './routes';
 import logger from './config/logger';
 import pinoHttp from 'pino-http';
-import { PrismaClient } from '@prisma/client';
+import prisma from './utils/db';
 
 const app = express();
 app.use(pinoHttp({ logger }));
@@ -16,7 +16,6 @@ const host = process.env.HOST || '0.0.0.0';
 const port = Number(process.env.PORT || 3000);
 const listener = () => logger.info(`Server is listening on http://${host}:${port}`);
 
-const prisma = new PrismaClient();
 prisma
     .$connect()
     .then(() => {
