@@ -1,7 +1,8 @@
 import jwt from 'jsonwebtoken';
 import { User } from '@prisma/client';
+import 'dotenv/config';
 
-const jwtSecretKey = process.env.JWT_SECRET_KEY!;
+export const jwtSecretKey = process.env.JWT_SECRET_KEY!;
 
 export function generateAccessToken(user: User): string {
     const payload = {

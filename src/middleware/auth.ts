@@ -1,11 +1,10 @@
-import { PrismaClient, User } from '@prisma/client';
-import { Request, Response, NextFunction } from 'express';
+import { User } from '@prisma/client';
+import { RequestHandler } from 'express';
 import jwt from 'jsonwebtoken';
+import prisma from '../utils/db';
+import { jwtSecretKey } from '../utils/jwtGenerator';
 
-const jwtSecretKey = process.env.JWT_SECRET_KEY!;
-const prisma = new PrismaClient();
-
-export const authenticateUser = (req: Request, res: Response, next: NextFunction) => {
+export const authenticateUser: RequestHandler = (req, res, next) => {
     const authHeader = req.header('Authorization');
 
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
@@ -23,7 +22,7 @@ export const authenticateUser = (req: Request, res: Response, next: NextFunction
     });
 };
 
-export const apiKey = async (req: Request, res: Response, next: NextFunction) => {
+export const apiKey: RequestHandler = async (req, res, next) => {
     const token = req.header('x-forwardin-key');
 
     if (!token) {

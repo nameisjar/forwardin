@@ -1,10 +1,8 @@
-import { Request, Response } from 'express';
-import { PrismaClient } from '@prisma/client';
+import { RequestHandler } from 'express';
 import { generateApiKey } from '../utils/apiKeyGenerator';
+import prisma from '../utils/db';
 
-const prisma = new PrismaClient();
-
-export const getAllDevices = async (req: Request, res: Response) => {
+export const getAllDevices: RequestHandler = async (req, res) => {
     try {
         const devices = await prisma.device.findMany();
 
@@ -15,7 +13,7 @@ export const getAllDevices = async (req: Request, res: Response) => {
     }
 };
 
-export const createDevice = async (req: Request, res: Response) => {
+export const createDevice: RequestHandler = async (req, res) => {
     try {
         const { name } = req.body;
         const apiKey = generateApiKey();
@@ -37,6 +35,6 @@ export const createDevice = async (req: Request, res: Response) => {
     }
 };
 
-// export const deleteDevice = async (req: Request, res: Response) => {
+// export const deleteDevice: RequestHandler = async (req, res) => {
 
 // }

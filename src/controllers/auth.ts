@@ -1,16 +1,13 @@
-import { Request, Response } from 'express';
-import { PrismaClient, User } from '@prisma/client';
+import { RequestHandler } from 'express';
+import { User } from '@prisma/client';
 import { generateApiKey } from '../utils/apiKeyGenerator';
-import { generateAccessToken, generateRefreshToken } from '../utils/jwtGenerator';
+import { generateAccessToken, generateRefreshToken, jwtSecretKey } from '../utils/jwtGenerator';
 import { generateOTPSecret, generateOTPToken, sendEmail, verifyOTPToken } from '../utils/otpHelper';
 import bcrypt from 'bcrypt';
 import jwt from 'jsonwebtoken';
-import 'dotenv/config';
+import prisma from '../utils/db';
 
-const prisma = new PrismaClient();
-const jwtSecretKey = process.env.JWT_SECRET_KEY!;
-
-export const register = async (req: Request, res: Response) => {
+export const register: RequestHandler = async (req, res) => {
     try {
         const { username, phone, email, password, confirmPassword } = req.body;
         const hashedPassword = await bcrypt.hash(password, 10);
@@ -68,7 +65,7 @@ export const register = async (req: Request, res: Response) => {
     }
 };
 
-export const checkIdentifierAvailability = async (req: Request, res: Response) => {
+export const checkIdentifierAvailability: RequestHandler = async (req, res) => {
     try {
         const { username, email, phone } = req.body;
 
@@ -95,7 +92,7 @@ export const checkIdentifierAvailability = async (req: Request, res: Response) =
 
         res.status(200).json({ message: `${identifierType} is available` });
     } catch (error) {
-        console.error('Error:', error);
+        req.log.error('Error:', error);
         res.status(500).json({ message: 'Internal server error' });
     }
 };
@@ -109,7 +106,7 @@ const isIdentifierTaken = async (identifier: string) => {
     return !!existingUser;
 };
 
-export const login = async (req: Request, res: Response): Promise<Response> => {
+export const login: RequestHandler = async (req, res) => {
     try {
         const { identifier, password } = req.body;
 
@@ -143,7 +140,7 @@ export const login = async (req: Request, res: Response): Promise<Response> => {
     }
 };
 
-export const refreshToken = async (req: Request, res: Response): Promise<void> => {
+export const refreshToken: RequestHandler = async (req, res) => {
     try {
         const { refreshToken } = req.body;
 
@@ -173,7 +170,7 @@ export const refreshToken = async (req: Request, res: Response): Promise<void> =
     }
 };
 
-export const sendVerificationEmail = async (req: Request, res: Response) => {
+export const sendVerificationEmail: RequestHandler = async (req, res) => {
     try {
         const user = req.user;
         const email = req.user.email;
@@ -200,7 +197,7 @@ export const sendVerificationEmail = async (req: Request, res: Response) => {
     }
 };
 
-export const verifyEmail = async (req: Request, res: Response) => {
+export const verifyEmail: RequestHandler = async (req, res) => {
     try {
         const pkId = req.user.pkId;
         const otpToken = String(req.body.otpToken);
@@ -231,7 +228,7 @@ export const verifyEmail = async (req: Request, res: Response) => {
     }
 };
 
-export const forgotPassword = async (req: Request, res: Response): Promise<Response | void> => {
+export const forgotPassword: RequestHandler = async (req, res) => {
     try {
         const email = req.body.email;
         const user = await prisma.user.findUnique({ where: { email } });
@@ -266,7 +263,7 @@ export const forgotPassword = async (req: Request, res: Response): Promise<Respo
     }
 };
 
-export const resetPassword = async (req: Request, res: Response): Promise<Response | undefined> => {
+export const resetPassword: RequestHandler = async (req, res) => {
     try {
         const { email, resetToken, password } = req.body;
         const resetInfo = await prisma.passwordReset.findUnique({
@@ -305,10 +302,7 @@ export const resetPassword = async (req: Request, res: Response): Promise<Respon
     }
 };
 
-export const changePassword = async (
-    req: Request,
-    res: Response,
-): Promise<Response | undefined> => {
+export const changePassword: RequestHandler = async (req, res) => {
     try {
         const { currentPassword, password, confirmPassword } = req.body;
 

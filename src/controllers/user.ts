@@ -1,14 +1,22 @@
-import { PrismaClient } from '@prisma/client';
-import { Request, Response } from 'express';
+import { RequestHandler } from 'express';
+import prisma from '../utils/db';
 
-const prisma = new PrismaClient();
-
-export const deleteUser = async (req: Request, res: Response) => {
+export const deleteUser: RequestHandler = async (req, res) => {
     try {
         const userId = req.user?.pkId;
 
         if (!userId) {
             return res.status(401).json({ message: 'Unauthorized: User not authenticated' });
+        }
+
+        const user = await prisma.user.findUnique({
+            where: {
+                pkId: userId,
+            },
+        });
+
+        if (!user) {
+            return res.status(404).json({ message: 'User not found' });
         }
 
         await prisma.user.delete({
