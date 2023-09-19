@@ -32,7 +32,7 @@ model User {
   createdAt        DateTime          @default(now()) @map("created_at")
   updatedAt        DateTime          @default(now()) @map("updated_at")
   deletedAt        DateTime?         @map("deleted_at")
-  emailVerifiedAt  DateTime?          @map("email_verfied_at")
+  emailVerifiedAt  DateTime?         @map("email_verfied_at")
   subscriptionId   Int               @map("subsription_id")
   privilegeId      Int               @map("privilege_id")
   subscription     Subscription      @relation(fields: [subscriptionId], references: [pkId])
@@ -162,11 +162,14 @@ model Device {
 
 model Session {
   pkId      Int    @id @default(autoincrement())
-  id        String @default(uuid()) @db.Uuid
+  id        String
   sessionId String @map("session_id") @db.VarChar(128)
   data      String
   deviceId  Int
   device    Device @relation(fields: [deviceId], references: [pkId])
+
+  @@unique([sessionId, id], map: "unique_id_per_session_id_session")
+  @@index([sessionId])
 }
 
 model Contact {
