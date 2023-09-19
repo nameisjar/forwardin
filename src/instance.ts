@@ -27,6 +27,18 @@ const MAX_RECONNECT_RETRIES = Number(process.env.MAX_RECONNECT_RETRIES || 5);
 const SSE_MAX_QR_GENERATION = Number(process.env.SSE_MAX_QR_GENERATION || 5);
 const SESSION_CONFIG_ID = 'session-config';
 
+export async function init() {
+    const sessions = await prisma.session.findMany({
+        select: { sessionId: true, deviceId: true, data: true },
+        where: { id: { startsWith: SESSION_CONFIG_ID } },
+    });
+
+    for (const { sessionId, deviceId, data } of sessions) {
+        const { readIncomingMessages, ...socketConfig } = JSON.parse(data);
+        createSession({ sessionId, deviceId, readIncomingMessages, socketConfig });
+    }
+}
+
 function shouldReconnect(sessionId: string) {
     let attempts = retries.get(sessionId) ?? 0;
 
