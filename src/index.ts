@@ -4,6 +4,7 @@ import routes from './routes';
 import logger from './config/logger';
 import pinoHttp from 'pino-http';
 import prisma from './utils/db';
+import { init } from './instance';
 
 const app = express();
 app.use(pinoHttp({ logger }));
@@ -26,11 +27,9 @@ prisma
         process.exit(1);
     });
 
-app.listen(port, host, listener);
-
-// (async () => {
-//   await init();
-//   app.listen(port, host, listener);
-// })();
+(async () => {
+    await init();
+    app.listen(port, host, listener);
+})();
 
 export default app;
