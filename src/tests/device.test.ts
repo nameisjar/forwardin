@@ -33,7 +33,7 @@ describe('------Device API------', () => {
                 })
                 .set('Content-Type', 'application/json')
                 .set('Authorization', `Bearer ${authToken}`)
-                .set('x-forwardin-key', accountApiKey)
+                .set('X-Forwardin-Key', accountApiKey)
                 .expect(201);
             deviceId = response.body.data.id;
 
@@ -49,7 +49,7 @@ describe('------Device API------', () => {
                 })
                 .set('Content-Type', 'application/json')
                 .set('Authorization', `Bearer ${authToken}`)
-                .set('x-forwardin-key', accountApiKey)
+                .set('X-Forwardin-Key', accountApiKey)
                 .expect(500);
         });
     });
@@ -59,7 +59,7 @@ describe('------Device API------', () => {
             const response = await request(app)
                 .delete(`/devices/${deviceId}`)
                 .set('Authorization', `Bearer ${authToken}`)
-                .set('x-forwardin-key', accountApiKey)
+                .set('X-Forwardin-Key', accountApiKey)
                 .expect(200);
 
             expect(response.body).to.have.property('message', 'Device deleted successfully');
@@ -69,7 +69,7 @@ describe('------Device API------', () => {
             await request(app)
                 .delete('/devices/nonexistent-device-id')
                 .set('Authorization', `Bearer ${authToken}`)
-                .set('x-forwardin-key', accountApiKey)
+                .set('X-Forwardin-Key', accountApiKey)
                 .expect(400);
         });
     });
@@ -78,7 +78,7 @@ describe('------Device API------', () => {
         await request(app)
             .delete('/users/delete')
             .set('Authorization', `Bearer ${authToken}`)
-            .set('x-forwardin-key', accountApiKey)
+            .set('X-Forwardin-Key', accountApiKey)
             .expect(200);
     });
 });
