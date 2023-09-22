@@ -5,8 +5,8 @@ const router = Router();
 
 router.get('/', controller.getAllDevices);
 router.post('/create', controller.createDevice);
-// router.get('/:deviceId', deviceController.getDeviceById);
-// router.put('/:deviceId', deviceController.updateDevice);
-// router.delete('/:deviceId', controller.deleteDevice);
+router.get('/:deviceId', controller.getDeviceById);
+router.put('/:deviceId', controller.updateDevice);
+router.delete('/:deviceId', controller.deleteDevice);
 
 export default router;

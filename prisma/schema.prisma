@@ -138,13 +138,12 @@ model Transaction {
 
 model Device {
   pkId             Int               @id @default(autoincrement())
-  id               String            @default(uuid()) @db.Uuid
+  id               String            @unique @default(uuid()) @db.Uuid
   name             String            @db.VarChar(128)
   phone            String?           @unique @db.VarChar(20)
   apiKey           String            @map("api_key") @db.VarChar(255)
   serverId         Int
   status           DeviceStatus      @default(NOT_CONNECTED) @map("status")
-  labels           Json?
   createdAt        DateTime          @default(now()) @map("created_at")
   updatedAt        DateTime          @default(now()) @map("updated_at")
   businessHourId   Int?              @map("business_hour_id")
@@ -158,6 +157,7 @@ model Device {
   campaigns        Campaign[]
   orders           Order[]
   contactDevices   ContactDevice[]
+  DeviceLabel      DeviceLabel[]
 }
 
 model Session {
@@ -166,7 +166,7 @@ model Session {
   sessionId String @map("session_id") @db.VarChar(128)
   data      String
   deviceId  Int
-  device    Device @relation(fields: [deviceId], references: [pkId])
+  device    Device @relation(fields: [deviceId], references: [pkId], onDelete: Cascade)
 
   @@unique([sessionId, id], map: "unique_id_per_session_id_session")
   @@index([sessionId])
@@ -182,6 +182,35 @@ model Contact {
   updatedAt      DateTime        @default(now()) @map("updated_at")
   contactGroups  ContactGroup[]
   contactDevices ContactDevice[]
+  ContactLabel   ContactLabel[]
+}
+
+model Label {
+  pkId     Int            @id @unique @default(autoincrement())
+  name     String         @db.VarChar(128) 
+  slug     String         @db.VarChar(128) @unique
+  DeviceLabel  DeviceLabel[]
+  ContactLabel ContactLabel[]
+}
+
+model DeviceLabel {
+  pkId      Int      @id @unique @default(autoincrement())
+  deviceId  Int
+  labelId   Int
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+  device    Device  @relation(fields: [deviceId], references: [pkId], onDelete: Cascade)
+  label     Label    @relation(fields: [labelId], references: [pkId], onDelete: Cascade)
+}
+
+model ContactLabel {
+  id        Int      @id @unique @default(autoincrement())
+  contactId Int
+  labelId   Int
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+  contact   Contact  @relation(fields: [contactId], references: [pkId])
+  label     Label    @relation(fields: [labelId], references: [pkId])
 }
 
 model ContactGroup {

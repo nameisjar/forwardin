@@ -48,12 +48,13 @@ export const register: RequestHandler = async (req, res) => {
 
             const accessToken = generateAccessToken(newUser);
             const refreshToken = generateRefreshToken(newUser);
+            const accountApiKey = newUser.accountApiKey;
 
             await prisma.user.update({
                 where: { pkId: newUser.pkId },
                 data: { refreshToken: refreshToken },
             });
-            res.status(201).json({ accessToken, refreshToken });
+            res.status(201).json({ accessToken, refreshToken, accountApiKey });
         } else {
             return res.status(404).json({
                 error: 'Subscription or privilege not found',
