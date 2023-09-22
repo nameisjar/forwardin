@@ -4,7 +4,17 @@ import jwt from 'jsonwebtoken';
 import prisma from '../utils/db';
 import { jwtSecretKey } from '../utils/jwtGenerator';
 
-export const authenticateUser: RequestHandler = (req, res, next) => {
+export const authMiddleware: RequestHandler = (req, res, next) => {
+    const clientType = req.header('X-Client-Type')?.toLowerCase();
+
+    if (clientType === 'forwardin') {
+        accessToken(req, res, next);
+    } else {
+        apiKey(req, res, next);
+    }
+};
+
+export const accessToken: RequestHandler = (req, res, next) => {
     const authHeader = req.header('Authorization');
 
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
@@ -23,21 +33,24 @@ export const authenticateUser: RequestHandler = (req, res, next) => {
 };
 
 export const apiKey: RequestHandler = async (req, res, next) => {
-    const token = req.header('x-forwardin-key');
+    const apiKey = req.header('X-Forwardin-Key');
 
-    if (!token) {
+    if (!apiKey) {
         return res.status(401).json({ message: 'Authentication failed: Missing API key' });
     }
     const user = await prisma.user.findFirst({
         where: {
-            accountApiKey: token,
+            accountApiKey: apiKey,
         },
     });
 
-    if (token !== user?.accountApiKey) {
-        return res.status(401).json({ message: 'Access denied: Invalid API key' });
+    if (!user) {
+        return res.status(403).json({ message: 'Access denied: Invalid API key' });
     }
 
-    req.apiKey = token;
+    req.user = user;
+    req.apiKey = apiKey;
     next();
 };
+
+export default authMiddleware;

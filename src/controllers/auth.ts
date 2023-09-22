@@ -127,14 +127,8 @@ export const login: RequestHandler = async (req, res) => {
         }
 
         const accessToken = generateAccessToken(user);
-        const refreshToken = generateRefreshToken(user);
 
-        await prisma.user.update({
-            where: { pkId: user.pkId },
-            data: { refreshToken },
-        });
-
-        return res.status(200).json({ accessToken, refreshToken });
+        return res.status(200).json({ accessToken });
     } catch (error) {
         req.log.error('Error:', error);
         return res.status(500).json({ message: 'Internal server error' });

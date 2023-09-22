@@ -3,12 +3,12 @@ import authRoutes from './auth';
 import deviceRoutes from './devices';
 import userRoutes from './users';
 import sessionRoutes from './sessions';
-import { apiKey, authenticateUser } from '../middleware/auth';
+import authMiddleware from '../middleware/auth';
 
 const router = Router();
 router.use('/auth', authRoutes);
-router.use('/sessions', authenticateUser, apiKey, sessionRoutes);
-router.use('/devices', authenticateUser, apiKey, deviceRoutes);
-router.use('/users', authenticateUser, apiKey, userRoutes);
+router.use('/sessions', authMiddleware, sessionRoutes);
+router.use('/devices', authMiddleware, deviceRoutes);
+router.use('/users', authMiddleware, userRoutes);
 
 export default router;

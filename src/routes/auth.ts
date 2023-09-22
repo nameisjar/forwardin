@@ -6,7 +6,7 @@ import {
     registerValidationRules,
     validate,
 } from '../middleware/requestValidator';
-import { authenticateUser } from '../middleware/auth';
+import { accessToken } from '../middleware/auth';
 
 const router = Router();
 router.post('/register', registerValidationRules, validate, controller.register);
@@ -18,7 +18,7 @@ router.post('/reset-password', passwordRules, emailRules, validate, controller.r
 // router.get('/auth/google', controller.googleAuth);
 // router.get('/auth/facebook', controller.facebookAuth);
 
-router.use(authenticateUser);
+router.use(accessToken);
 router.post('/send-verification-email', controller.sendVerificationEmail);
 router.post('/verify-email', controller.verifyEmail);
 router.put('/change-password', passwordRules, validate, controller.changePassword);
