@@ -38,7 +38,6 @@ export async function sendEmail(toEmail: string, otpToken: string, subject: stri
 
     try {
         await mg.messages.create(process.env.MAILGUN_DOMAIN!, data);
-        console.log(`Email sent to ${toEmail}`);
     } catch (error) {
         console.error('Error sending email:', error);
         throw error;

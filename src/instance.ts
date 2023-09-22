@@ -196,3 +196,7 @@ export async function createSession(options: createSessionOptions) {
         where: { sessionId_id: { id: configID, sessionId } },
     });
 }
+
+export async function deleteSession(sessionId: string) {
+    sessions.get(sessionId)?.destroy();
+}
