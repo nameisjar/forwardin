@@ -5,12 +5,10 @@ import prisma from '../utils/db';
 import { jwtSecretKey } from '../utils/jwtGenerator';
 
 export const authMiddleware: RequestHandler = (req, res, next) => {
-    const clientType = req.header('X-Client-Type')?.toLowerCase();
-
-    if (clientType === 'forwardin') {
-        accessToken(req, res, next);
-    } else {
+    if (!req.header('Authorization')) {
         apiKey(req, res, next);
+    } else {
+        accessToken(req, res, next);
     }
 };
 
