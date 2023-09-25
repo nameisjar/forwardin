@@ -49,12 +49,13 @@ export const register: RequestHandler = async (req, res) => {
             const accessToken = generateAccessToken(newUser);
             const refreshToken = generateRefreshToken(newUser);
             const accountApiKey = newUser.accountApiKey;
+            const id = newUser.id;
 
             await prisma.user.update({
                 where: { pkId: newUser.pkId },
                 data: { refreshToken: refreshToken },
             });
-            res.status(201).json({ accessToken, refreshToken, accountApiKey });
+            res.status(201).json({ accessToken, refreshToken, accountApiKey, id });
         } else {
             return res.status(404).json({
                 error: 'Subscription or privilege not found',
@@ -127,8 +128,9 @@ export const login: RequestHandler = async (req, res) => {
         }
 
         const accessToken = generateAccessToken(user);
+        const id = user.id;
 
-        return res.status(200).json({ accessToken });
+        return res.status(200).json({ accessToken, id });
     } catch (error) {
         req.log.error('Error:', error);
         return res.status(500).json({ message: 'Internal server error' });
@@ -156,8 +158,9 @@ export const refreshToken: RequestHandler = async (req, res) => {
             }
 
             const accessToken = generateAccessToken(user);
+            const id = user.id;
 
-            res.status(200).json({ accessToken });
+            res.status(200).json({ accessToken, id });
         });
     } catch (error) {
         req.log.error('Error:', error);
