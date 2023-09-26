@@ -19,7 +19,7 @@ enum MessageStatus {
 
 model User {
   pkId             Int               @id @default(autoincrement())
-  id               String            @default(uuid()) @db.Uuid
+  id               String            @unique @default(uuid()) @db.Uuid
   username         String            @unique @db.VarChar(128)
   phone            String            @unique @db.VarChar(20)
   email            String            @unique @db.VarChar(255)
@@ -40,11 +40,12 @@ model User {
   customerServices CustomerService[]
   transactions     Transaction[]
   devices          Device[]
+  Group            Group[]
 }
 
 model CustomerService {
   pkId        Int       @id @default(autoincrement())
-  id          String    @default(uuid()) @db.Uuid
+  id          String    @unique @default(uuid()) @db.Uuid
   username    String    @db.VarChar(128)
   phone       String    @db.VarChar(20)
   email       String    @db.VarChar(255)
@@ -61,7 +62,7 @@ model CustomerService {
 
 model Privilege {
   pkId             Int               @id @default(autoincrement())
-  id               String            @default(uuid()) @db.Uuid
+  id               String            @unique @default(uuid()) @db.Uuid
   name             String            @db.VarChar(128)
   isSuperadmin     Boolean           @default(false) @map("is_superadmin")
   users            User[]
@@ -72,7 +73,7 @@ model Privilege {
 
 model PrivilegeRole {
   pkId        Int       @id @default(autoincrement())
-  id          String    @default(uuid()) @db.Uuid
+  id          String    @unique @default(uuid()) @db.Uuid
   isVisible   Boolean
   isCreate    Boolean
   isDelete    Boolean
@@ -86,7 +87,7 @@ model PrivilegeRole {
 
 model Menu {
   pkId           Int             @id @default(autoincrement())
-  id             String          @default(uuid()) @db.Uuid
+  id             String          @unique @default(uuid()) @db.Uuid
   name           String          @db.VarChar(128)
   type           String          @db.VarChar(128)
   path           String          @db.VarChar(255)
@@ -96,7 +97,7 @@ model Menu {
 
 model MenuPrivilege {
   pkId        Int       @id @default(autoincrement())
-  id          String    @default(uuid()) @db.Uuid
+  id          String    @unique @default(uuid()) @db.Uuid
   menu        Menu      @relation(fields: [menuId], references: [pkId])
   menuId      Int       @map("menu_id")
   privilege   Privilege @relation(fields: [privilegeId], references: [pkId])
@@ -105,7 +106,7 @@ model MenuPrivilege {
 
 model Modul {
   pkId           Int             @id @default(autoincrement())
-  id             String          @default(uuid()) @db.Uuid
+  id             String          @unique @default(uuid()) @db.Uuid
   name           String          @db.VarChar(128)
   controller     String          @db.VarChar(255)
   privilegeRoles PrivilegeRole[]
@@ -113,7 +114,7 @@ model Modul {
 
 model Subscription {
   pkId         Int           @id @default(autoincrement())
-  id           String        @default(uuid()) @db.Uuid
+  id           String        @unique @default(uuid()) @db.Uuid
   name         String        @db.VarChar(128)
   price        Decimal       @map("price") @db.Decimal(10, 2)
   isAvailable  Boolean       @default(true) @map("is_available")
@@ -125,7 +126,7 @@ model Subscription {
 
 model Transaction {
   pkId           Int          @id @default(autoincrement())
-  id             String       @default(uuid()) @db.Uuid
+  id             String       @unique @default(uuid()) @db.Uuid
   name           String       @db.VarChar(128)
   price          Decimal      @map("price") @db.Decimal(10, 2)
   createdAt      DateTime     @default(now()) @map("created_at")
@@ -174,13 +175,14 @@ model Session {
 
 model Contact {
   pkId           Int             @id @default(autoincrement())
-  id             String          @default(uuid()) @db.Uuid @unique
+  id             String          @unique @default(uuid()) @db.Uuid
   firstName      String          @db.VarChar(128)
   lastName       String?         @db.VarChar(128)
   phone          String          @unique @db.VarChar(20)
   email          String          @unique @db.VarChar(255)
   gender         String          @db.VarChar(10)
   dob            DateTime        @db.Date
+  colorCode      String?         @db.VarChar(6)
   createdAt      DateTime        @default(now()) @map("created_at")
   updatedAt      DateTime        @default(now()) @map("updated_at")
   contactGroups  ContactGroup[]
@@ -212,22 +214,24 @@ model ContactLabel {
   labelId   Int
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
-  contact   Contact  @relation(fields: [contactId], references: [pkId])
-  label     Label    @relation(fields: [labelId], references: [pkId])
+  contact   Contact  @relation(fields: [contactId], references: [pkId], onDelete: Cascade)
+  label     Label    @relation(fields: [labelId], references: [pkId], onDelete: Cascade)
 }
 
 model ContactGroup {
   pkId      Int     @id @default(autoincrement())
-  id        String  @default(uuid()) @db.Uuid
+  id        String  @unique @default(uuid()) @db.Uuid
   contactId Int
   groupId   Int
   contact   Contact @relation(fields: [contactId], references: [pkId])
   group     Group   @relation(fields: [groupId], references: [pkId])
+
+  @@unique([contactId, groupId])
 }
 
 model ContactDevice {
   pkId      Int     @id @default(autoincrement())
-  id        String  @default(uuid()) @db.Uuid
+  id        String  @unique @default(uuid()) @db.Uuid
   contactId Int
   deviceId  Int
   contact   Contact @relation(fields: [contactId], references: [pkId])
@@ -236,16 +240,18 @@ model ContactDevice {
 
 model Group {
   pkId          Int            @id @default(autoincrement())
-  id            String         @default(uuid()) @db.Uuid
+  id            String         @unique @default(uuid()) @db.Uuid
   name          String         @db.VarChar(128)
   isCampaign    Boolean        @default(false) @map("is_campaign")
+  userId        Int
+  user          User           @relation(fields: [userId], references: [pkId], onDelete: Cascade)
   contactGroups ContactGroup[]
   campaigns     Campaign[]
 }
 
 model OutgoingMessage {
   pkId      Int           @id @default(autoincrement())
-  id        String        @default(uuid()) @db.Uuid
+  id        String        @unique @default(uuid()) @db.Uuid
   to        String        @db.VarChar(20)
   message   String
   schedule  DateTime
@@ -259,7 +265,7 @@ model OutgoingMessage {
 
 model IncomingMessage {
   pkId       Int      @id @default(autoincrement())
-  id         String   @default(uuid()) @db.Uuid
+  id         String   @unique @default(uuid()) @db.Uuid
   from       String   @db.VarChar(20)
   message    String
   receivedAt DateTime
@@ -271,7 +277,7 @@ model IncomingMessage {
 
 model AutoReply {
   pkId      Int           @id @default(autoincrement())
-  id        String        @default(uuid()) @db.Uuid
+  id        String        @unique @default(uuid()) @db.Uuid
   request   String        @db.VarChar(255)
   response  String        @db.VarChar(255)
   schedule  DateTime
@@ -285,7 +291,7 @@ model AutoReply {
 
 model Campaign {
   pkId                Int             @id @default(autoincrement())
-  id                  String          @default(uuid()) @db.Uuid
+  id                  String          @unique @default(uuid()) @db.Uuid
   name                String          @db.VarChar(128)
   syntaxRegistration  String          @map("syntax_registration") @db.VarChar(255)
   registrationMessage String          @map("registration_message")
@@ -301,7 +307,7 @@ model Campaign {
 
 model CampaignMessage {
   pkId      Int        @id @default(autoincrement())
-  id        String     @default(uuid()) @db.Uuid
+  id        String     @unique @default(uuid()) @db.Uuid
   day       String     @db.VarChar(128)
   message   String
   sechedule DateTime   @map("sechedule")
@@ -311,7 +317,7 @@ model CampaignMessage {
 
 model BusinessHour {
   pkId     Int      @id @default(autoincrement())
-  id       String   @default(uuid()) @db.Uuid
+  id       String   @unique @default(uuid()) @db.Uuid
   message  String
   monStart DateTime @map("mon_start")
   monEnd   DateTime @map("mon_end")
@@ -332,7 +338,7 @@ model BusinessHour {
 
 model Order {
   pkId     Int     @id @default(autoincrement())
-  id       String  @default(uuid()) @db.Uuid
+  id       String  @unique @default(uuid()) @db.Uuid
   name     String  @db.VarChar(128)
   address  String  @db.VarChar(255)
   phone    Int
@@ -344,7 +350,7 @@ model Order {
 
 model PasswordReset {
   pkId              Int      @id @default(autoincrement())
-  id                String   @default(uuid()) @db.Uuid
+  id                String   @unique @default(uuid()) @db.Uuid
   email             String   @unique @db.VarChar(255)
   token             String   @db.VarChar(255)
   resetTokenExpires DateTime @map("reset_token_expires")

@@ -4,11 +4,17 @@ async function seedPrivileges(prisma: PrismaClient) {
     try {
         await prisma.$connect();
 
-        await prisma.privilege.create({
-            data: {
-                name: 'Super Admin',
-                isSuperadmin: true,
-            },
+        await prisma.privilege.createMany({
+            data: [
+                {
+                    name: 'Super Admin',
+                    isSuperadmin: true,
+                },
+                {
+                    name: 'Admin',
+                    isSuperadmin: false,
+                },
+            ],
         });
 
         console.log('Privilege seeder executed successfully.');

@@ -55,4 +55,14 @@ export const apiKey: RequestHandler = async (req, res, next) => {
     next();
 };
 
+export const isSuperAdmin: RequestHandler = async (req, res, next) => {
+    const user = req.user;
+
+    if (user && user.privilegeId === 1) {
+        next();
+    } else {
+        res.status(403).json({ message: 'Access denied: Not a super admin' });
+    }
+};
+
 export default authMiddleware;

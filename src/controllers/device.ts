@@ -10,6 +10,15 @@ export const getDevices: RequestHandler = async (req, res) => {
     try {
         const devices = await prisma.device.findMany({
             where: { userId: pkId },
+            include: {
+                DeviceLabel: {
+                    select: {
+                        label: {
+                            select: { name: true },
+                        },
+                    },
+                },
+            },
         });
 
         res.status(200).json(devices);
@@ -84,9 +93,7 @@ export const getDevice: RequestHandler = async (req, res) => {
             where: {
                 id: deviceId,
             },
-            select: {
-                name: true,
-                apiKey: true,
+            include: {
                 sessions: true,
                 DeviceLabel: {
                     select: {
