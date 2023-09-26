@@ -37,6 +37,8 @@ export const registerValidationRules = [
     passwordRules,
 ];
 
+export const dateRules = body('dob').isDate().withMessage('Invalid date format');
+
 export const validate: RequestHandler = (req, res, next) => {
     const errors = validationResult(req);
     if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });

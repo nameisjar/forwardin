@@ -174,10 +174,13 @@ model Session {
 
 model Contact {
   pkId           Int             @id @default(autoincrement())
-  id             String          @default(uuid()) @db.Uuid
-  name           String          @db.VarChar(128)
+  id             String          @default(uuid()) @db.Uuid @unique
+  firstName      String          @db.VarChar(128)
+  lastName       String?         @db.VarChar(128)
   phone          String          @unique @db.VarChar(20)
-  variablesData  String?         @map("variables_data")
+  email          String          @unique @db.VarChar(255)
+  gender         String          @db.VarChar(10)
+  dob            DateTime        @db.Date
   createdAt      DateTime        @default(now()) @map("created_at")
   updatedAt      DateTime        @default(now()) @map("updated_at")
   contactGroups  ContactGroup[]
@@ -186,9 +189,9 @@ model Contact {
 }
 
 model Label {
-  pkId     Int            @id @unique @default(autoincrement())
-  name     String         @db.VarChar(128) 
-  slug     String         @db.VarChar(128) @unique
+  pkId         Int            @id @unique @default(autoincrement())
+  name         String         @db.VarChar(128)
+  slug         String         @unique @db.VarChar(128)
   DeviceLabel  DeviceLabel[]
   ContactLabel ContactLabel[]
 }
@@ -199,7 +202,7 @@ model DeviceLabel {
   labelId   Int
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
-  device    Device  @relation(fields: [deviceId], references: [pkId], onDelete: Cascade)
+  device    Device   @relation(fields: [deviceId], references: [pkId], onDelete: Cascade)
   label     Label    @relation(fields: [labelId], references: [pkId], onDelete: Cascade)
 }
 

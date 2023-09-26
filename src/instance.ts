@@ -35,7 +35,7 @@ export async function init() {
 
     for (const { sessionId, deviceId, data } of sessions) {
         const { readIncomingMessages, ...socketConfig } = JSON.parse(data);
-        createSession({ sessionId, deviceId, readIncomingMessages, socketConfig });
+        createInstance({ sessionId, deviceId, readIncomingMessages, socketConfig });
     }
 }
 
@@ -50,7 +50,7 @@ function shouldReconnect(sessionId: string) {
     return false;
 }
 
-type createSessionOptions = {
+type createInstanceOptions = {
     sessionId: string;
     deviceId: number;
     res?: Response;
@@ -59,7 +59,7 @@ type createSessionOptions = {
     socketConfig?: SocketConfig;
 };
 
-export async function createSession(options: createSessionOptions) {
+export async function createInstance(options: createInstanceOptions) {
     const {
         sessionId,
         deviceId,
@@ -107,7 +107,7 @@ export async function createSession(options: createSessionOptions) {
         if (!restartRequired) {
             logger.info({ attempts: retries.get(sessionId) ?? 1, sessionId }, 'Reconnecting...');
         }
-        setTimeout(() => createSession(options), restartRequired ? 0 : RECONNECT_INTERVAL);
+        setTimeout(() => createInstance(options), restartRequired ? 0 : RECONNECT_INTERVAL);
     };
 
     const handleNormalConnectionUpdate = async () => {

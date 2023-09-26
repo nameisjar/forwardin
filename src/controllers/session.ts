@@ -1,8 +1,8 @@
 import { RequestHandler } from 'express';
-import { createSession } from '../instance';
+import { createInstance } from '../instance';
 import prisma from '../utils/db';
 
-export const create: RequestHandler = async (req, res) => {
+export const createSession: RequestHandler = async (req, res) => {
     try {
         const { sessionId, deviceId } = req.body;
 
@@ -22,7 +22,7 @@ export const create: RequestHandler = async (req, res) => {
             return res.status(404).json({ message: 'Session already exist' });
         }
 
-        createSession({ sessionId, deviceId, res });
+        createInstance({ sessionId, deviceId, res });
     } catch (error) {
         console.error('Error:', error);
         res.status(500).json({ message: 'Internal server error' });

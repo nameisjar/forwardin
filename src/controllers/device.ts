@@ -4,7 +4,7 @@ import prisma from '../utils/db';
 import logger from '../config/logger';
 import { generateSlug } from '../utils/slug';
 
-export const getAllDevices: RequestHandler = async (req, res) => {
+export const getDevices: RequestHandler = async (req, res) => {
     const pkId = req.user.pkId;
 
     try {
@@ -75,7 +75,7 @@ export const createDevice: RequestHandler = async (req, res) => {
     }
 };
 
-export const getDeviceById: RequestHandler = async (req, res) => {
+export const getDevice: RequestHandler = async (req, res) => {
     try {
         const deviceId = req.params.deviceId;
 

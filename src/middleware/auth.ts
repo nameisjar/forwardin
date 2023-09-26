@@ -21,6 +21,10 @@ export const accessToken: RequestHandler = (req, res, next) => {
 
     const token = authHeader.substring('Bearer '.length);
 
+    if (!token) {
+        return res.status(401).json({ error: 'Authentication failed: Invalid token' });
+    }
+
     jwt.verify(token, jwtSecretKey, (err, user) => {
         if (err) {
             return res.status(403).json({ message: 'Access denied: Invalid token' });
@@ -36,14 +40,14 @@ export const apiKey: RequestHandler = async (req, res, next) => {
     if (!apiKey) {
         return res.status(401).json({ message: 'Authentication failed: Missing API key' });
     }
-    const user = await prisma.user.findFirst({
+    const user = await prisma.user.findUnique({
         where: {
             accountApiKey: apiKey,
         },
     });
 
     if (!user) {
-        return res.status(403).json({ message: 'Access denied: Invalid API key' });
+        return res.status(401).json({ message: 'Access denied: Invalid API key' });
     }
 
     req.user = user;
