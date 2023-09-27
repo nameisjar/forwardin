@@ -66,3 +66,13 @@ export const isSuperAdmin: RequestHandler = async (req, res, next) => {
 };
 
 export default authMiddleware;
+
+export const isEmailVerified: RequestHandler = async (req, res, next) => {
+    const user = req.user;
+
+    if (user && user.emailVerifiedAt) {
+        next();
+    } else {
+        res.status(403).json({ message: 'Email not verified yet' });
+    }
+};
