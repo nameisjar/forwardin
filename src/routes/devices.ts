@@ -7,6 +7,6 @@ router.get('/', controller.getDevices);
 router.post('/create', controller.createDevice);
 router.get('/:deviceId', controller.getDevice);
 router.put('/:deviceId', controller.updateDevice);
-router.delete('/:deviceId', controller.deleteDevice);
+router.delete('/', controller.deleteDevices);
 
 export default router;

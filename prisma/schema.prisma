@@ -164,7 +164,7 @@ model Device {
 model Session {
   pkId      Int    @id @default(autoincrement())
   id        String
-  sessionId String @map("session_id") @db.VarChar(128)
+  sessionId String @map("session_id") @db.VarChar(128) @unique
   data      String
   deviceId  Int
   device    Device @relation(fields: [deviceId], references: [pkId], onDelete: Cascade)
@@ -224,7 +224,7 @@ model ContactGroup {
   contactId Int
   groupId   Int
   contact   Contact @relation(fields: [contactId], references: [pkId])
-  group     Group   @relation(fields: [groupId], references: [pkId])
+  group     Group   @relation(fields: [groupId], references: [pkId], onDelete: Cascade)
 
   @@unique([contactId, groupId])
 }
@@ -234,8 +234,8 @@ model ContactDevice {
   id        String  @unique @default(uuid()) @db.Uuid
   contactId Int
   deviceId  Int
-  contact   Contact @relation(fields: [contactId], references: [pkId])
-  device    Device  @relation(fields: [deviceId], references: [pkId])
+  contact   Contact @relation(fields: [contactId], references: [pkId], onDelete: Cascade)
+  device    Device  @relation(fields: [deviceId], references: [pkId], onDelete: Cascade)
 }
 
 model Group {

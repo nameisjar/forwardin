@@ -4,10 +4,10 @@ import prisma from '../utils/db';
 export const getGroups: RequestHandler = async (req, res) => {
     const userId = req.user.pkId;
     try {
-        const contacts = await prisma.group.findMany({
+        const groups = await prisma.group.findMany({
             where: { userId },
         });
-        res.status(200).json(contacts);
+        res.status(200).json(groups);
     } catch (error) {
         res.status(500).json({ message: 'Internal server error' });
     }
@@ -36,36 +36,66 @@ export const addMemberToGroup: RequestHandler = async (req, res) => {
         const { groupId, contactIds } = req.body;
 
         const group = await prisma.group.findUnique({
-            where: { pkId: groupId },
+            where: { id: groupId },
         });
 
         if (!group) {
             return res.status(404).json({ message: 'Group not found' });
         }
 
-        const groupPromises = contactIds.map(async (contactId: number) => {
-            await prisma.contactGroup.upsert({
-                where: {
-                    contactId_groupId: {
-                        contactId: contactId,
-                        groupId: groupId,
-                    },
-                },
-                create: {
-                    groupId,
-                    contactId,
-                },
-                update: {
-                    groupId,
-                    contactId,
-                },
+        const addedContactIds: string[] = [];
+        const failedContactIds: string[] = [];
+
+        // Use `Promise.all` to parallelize contact operations and track results
+        await Promise.all(
+            contactIds.map(async (contactId: string) => {
+                try {
+                    const contact = await prisma.contact.findUnique({
+                        where: { id: contactId },
+                    });
+
+                    if (!contact) {
+                        failedContactIds.push(contactId);
+                    } else {
+                        await prisma.contactGroup.upsert({
+                            where: {
+                                contactId_groupId: {
+                                    contactId: contact.pkId,
+                                    groupId: group.pkId,
+                                },
+                            },
+                            create: {
+                                contactId: contact.pkId,
+                                groupId: group.pkId,
+                            },
+                            update: {
+                                contactId: contact.pkId,
+                                groupId: group.pkId,
+                            },
+                        });
+
+                        addedContactIds.push(contactId);
+                    }
+                } catch (error) {
+                    console.error(`Error adding contact ${contactId} to group:`, error);
+                    failedContactIds.push(contactId);
+                }
+            }),
+        );
+
+        if (addedContactIds.length > 0) {
+            res.status(200).json({
+                message: 'Contact(s) added to group successfully',
+                addedContactIds,
             });
-        });
-
-        await Promise.all(groupPromises);
-
-        res.status(200).json({ message: 'Contact(s) added to group successfully' });
+        } else {
+            res.status(404).json({
+                message: 'No contacts were added to the group',
+                failedContactIds,
+            });
+        }
     } catch (error) {
+        console.error('Error adding contacts to group:', error);
         res.status(500).json({ message: 'Internal server error' });
     }
 };
@@ -74,11 +104,27 @@ export const removeMemberFromGroup: RequestHandler = async (req, res) => {
     try {
         const { groupId, contactId } = req.body;
 
+        const group = await prisma.group.findUnique({
+            where: { id: groupId },
+        });
+
+        if (!group) {
+            return res.status(404).json({ message: 'Group not found' });
+        }
+
+        const contact = await prisma.contact.findUnique({
+            where: { id: contactId },
+        });
+
+        if (!contact) {
+            return res.status(404).json({ message: 'Group not found' });
+        }
+
         const groupContact = await prisma.contactGroup.findUnique({
             where: {
                 contactId_groupId: {
-                    contactId: contactId,
-                    groupId: groupId,
+                    contactId: contact.pkId,
+                    groupId: group.pkId,
                 },
             },
         });
@@ -138,7 +184,7 @@ export const updatedGroup: RequestHandler = async (req, res) => {
         }
 
         const updatedGroup = await prisma.group.update({
-            where: { id: groupId },
+            where: { pkId: existingGroup.pkId },
             data: {
                 name,
                 isCampaign,
@@ -146,6 +192,25 @@ export const updatedGroup: RequestHandler = async (req, res) => {
         });
 
         res.status(200).json({ message: 'Group updated successfully', data: updatedGroup });
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};
+
+export const deleteGroups: RequestHandler = async (req, res) => {
+    try {
+        const groupIds = req.body.groupIds;
+
+        const groupPromises = groupIds.map(async (groupId: string) => {
+            await prisma.group.delete({
+                where: { id: groupId },
+            });
+        });
+
+        await Promise.all(groupPromises);
+
+        res.status(200).json({ message: 'Group(s) deleted successfully' });
     } catch (error) {
         console.error(error);
         res.status(500).json({ message: 'Internal server error' });

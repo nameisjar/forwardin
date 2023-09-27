@@ -8,7 +8,7 @@ router.post('/create', dateRules, validate, controller.createContact);
 router.get('/', controller.getContacts);
 router.get('/:contactId', controller.getContact);
 router.put('/:contactId', dateRules, validate, controller.updateContact);
-router.delete('/:contactId', controller.deleteContact);
+router.delete('/', controller.deleteContacts);
 router.post('/add', controller.addContactToGroup);
 
 export default router;

@@ -10,7 +10,7 @@ export const createSession: RequestHandler = async (req, res) => {
             where: { pkId: deviceId },
         });
 
-        const existingSession = await prisma.session.findFirst({
+        const existingSession = await prisma.session.findUnique({
             where: { sessionId },
         });
 

@@ -140,6 +140,7 @@ export const updateDevice: RequestHandler = async (req, res) => {
             });
 
             // update labels
+            // back here: deviceId_labelId
             if (labels && labels.length === 0) {
                 await transaction.label.deleteMany({
                     where: {
@@ -211,33 +212,37 @@ export const updateDevice: RequestHandler = async (req, res) => {
     }
 };
 
-export const deleteDevice: RequestHandler = async (req, res) => {
+// back here: delete devices
+export const deleteDevices: RequestHandler = async (req, res) => {
     try {
-        const deviceId = req.params.deviceId;
+        const deviceIds = req.body.deviceIds;
 
-        if (!isValidUUID(deviceId)) {
-            return res.status(400).json({ message: 'Invalid deviceId format' });
-        }
+        const devicePromises = deviceIds.map(async (deviceId: string) => {
+            if (!isValidUUID(deviceId)) {
+                return res.status(400).json({ message: 'Invalid deviceId format' });
+            }
+            const deletedDevice = await prisma.device.delete({
+                where: {
+                    id: deviceId,
+                },
+            });
 
-        const deletedDevice = await prisma.device.delete({
-            where: {
-                id: deviceId,
-            },
-        });
-
-        await prisma.label.deleteMany({
-            where: {
-                NOT: {
-                    DeviceLabel: {
-                        some: {
-                            deviceId: { not: deletedDevice.pkId },
+            await prisma.label.deleteMany({
+                where: {
+                    NOT: {
+                        DeviceLabel: {
+                            some: {
+                                deviceId: { not: deletedDevice.pkId },
+                            },
                         },
                     },
                 },
-            },
+            });
         });
 
-        res.status(200).json({ message: 'Device deleted successfully' });
+        await Promise.all(devicePromises);
+
+        res.status(200).json({ message: 'Device(s) deleted successfully' });
     } catch (error) {
         logger.error(error);
         res.status(500).json({ message: 'Internal server error' });

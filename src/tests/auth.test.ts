@@ -99,7 +99,7 @@ describe('------Auth API------', () => {
         let otpToken: string;
 
         before(async () => {
-            const existingUser = await prisma.user.findFirst({
+            const existingUser = await prisma.user.findUnique({
                 where: {
                     email: 'test@example.com',
                 },

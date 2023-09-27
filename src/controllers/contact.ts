@@ -63,10 +63,20 @@ export const createContact: RequestHandler = async (req, res) => {
                 });
             }
 
+            const existingDevice = await prisma.device.findUnique({
+                where: {
+                    id: deviceId,
+                },
+            });
+
+            if (!existingDevice) {
+                return res.status(404).json({ message: 'Device nout found' });
+            }
+
             await transaction.contactDevice.create({
                 data: {
                     contactId: createdContact.pkId,
-                    deviceId,
+                    deviceId: existingDevice.pkId,
                 },
             });
         });
@@ -160,7 +170,7 @@ export const updateContact: RequestHandler = async (req, res) => {
 
         await prisma.contact.update({
             where: {
-                id: existingContact.id,
+                pkId: existingContact.pkId,
             },
             data: {
                 firstName,
@@ -178,27 +188,44 @@ export const updateContact: RequestHandler = async (req, res) => {
     }
 };
 
-export const deleteContact: RequestHandler = async (req, res) => {
+// back here: delete batch
+export const deleteContacts: RequestHandler = async (req, res) => {
     try {
-        const contactId = req.params.contactId;
+        const contactIds = req.body.contactIds;
 
-        const existingContact = await prisma.contact.findUnique({
-            where: {
-                id: contactId,
-            },
+        const contactPromises = contactIds.map(async (contactId: string) => {
+            const existingContact = await prisma.contact.findUnique({
+                where: {
+                    id: contactId,
+                },
+            });
+
+            if (!existingContact) {
+                return res.status(404).json({ message: 'Contact not found' });
+            }
+
+            await prisma.contact.delete({
+                where: {
+                    pkId: existingContact.pkId,
+                },
+            });
+
+            await prisma.label.deleteMany({
+                where: {
+                    NOT: {
+                        ContactLabel: {
+                            some: {
+                                contactId: { not: existingContact.pkId },
+                            },
+                        },
+                    },
+                },
+            });
         });
 
-        if (!existingContact) {
-            return res.status(404).json({ message: 'Contact not found' });
-        }
+        await Promise.all(contactPromises);
 
-        await prisma.contact.delete({
-            where: {
-                id: contactId,
-            },
-        });
-
-        res.status(200).json({ message: 'Contact deleted successfully' });
+        res.status(200).json({ message: 'Device(s) deleted successfully' });
     } catch (error) {
         console.error(error);
         res.status(500).json({ message: 'Internal server error' });
@@ -217,7 +244,7 @@ export const addContactToGroup: RequestHandler = async (req, res) => {
 
         const contact = await prisma.contact.findUnique({
             where: {
-                pkId: contactId,
+                id: contactId,
             },
         });
 
@@ -225,11 +252,21 @@ export const addContactToGroup: RequestHandler = async (req, res) => {
             return res.status(404).json({ message: 'Contact not found' });
         }
 
-        const groupPromises = groupIds.map((groupId: number) => {
+        const groupPromises = groupIds.map(async (groupId: string) => {
+            const group = await prisma.group.findUnique({
+                where: {
+                    id: groupId,
+                },
+            });
+
+            if (!group) {
+                return res.status(404).json({ message: 'Group not found' });
+            }
+
             return prisma.contactGroup.create({
                 data: {
-                    groupId,
-                    contactId,
+                    groupId: group.pkId,
+                    contactId: contact.pkId,
                 },
             });
         });
