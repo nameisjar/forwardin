@@ -7,6 +7,7 @@ import bcrypt from 'bcrypt';
 import jwt from 'jsonwebtoken';
 import prisma from '../utils/db';
 
+// back here: set default privilege
 export const register: RequestHandler = async (req, res) => {
     try {
         const { username, phone, email, password, confirmPassword } = req.body;
@@ -30,7 +31,7 @@ export const register: RequestHandler = async (req, res) => {
             where: { pkId: 1 },
         });
         const existingPrivilege = await prisma.privilege.findUnique({
-            where: { pkId: 1 },
+            where: { pkId: 2 },
         });
         if (existingSubscription && existingPrivilege) {
             const newUser = await prisma.user.create({
@@ -42,7 +43,7 @@ export const register: RequestHandler = async (req, res) => {
                     accountApiKey: generateApiKey(),
                     affiliationCode: username,
                     subscription: { connect: { pkId: 1 } },
-                    privilege: { connect: { pkId: 1 } },
+                    privilege: { connect: { pkId: 2 } },
                 },
             });
 
@@ -128,9 +129,10 @@ export const login: RequestHandler = async (req, res) => {
         }
 
         const accessToken = generateAccessToken(user);
+        const refreshToken = user.refreshToken;
         const id = user.id;
 
-        return res.status(200).json({ accessToken, id });
+        return res.status(200).json({ accessToken, refreshToken, id });
     } catch (error) {
         req.log.error('Error:', error);
         return res.status(500).json({ message: 'Internal server error' });
@@ -272,7 +274,7 @@ export const resetPassword: RequestHandler = async (req, res) => {
 
         if (
             !resetInfo ||
-            verifyOTPToken(resetInfo.token, resetToken) ||
+            !verifyOTPToken(resetInfo.token, resetToken) ||
             resetInfo.resetTokenExpires <= new Date()
         ) {
             return res.status(401).json({ message: 'Invalid or expired reset token' });

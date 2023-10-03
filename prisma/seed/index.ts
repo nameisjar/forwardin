@@ -2,6 +2,7 @@ import { PrismaClient } from '@prisma/client';
 import { seedSubscriptions } from './subscription';
 import { seedPrivileges } from './privilege';
 
+// back here: clean up first
 async function seedDatabase() {
     const prisma = new PrismaClient();
 

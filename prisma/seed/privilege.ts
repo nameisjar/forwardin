@@ -14,6 +14,10 @@ async function seedPrivileges(prisma: PrismaClient) {
                     name: 'Admin',
                     isSuperadmin: false,
                 },
+                {
+                    name: 'CS',
+                    isSuperadmin: false,
+                },
             ],
         });
 
