@@ -8,20 +8,24 @@ import { PrismaClientKnownRequestError } from '@prisma/client/runtime/library';
 
 const fixId = (id: string) => id.replace(/\//g, '__').replace(/:/g, '-');
 
+// back here: review where id
+// back here: creds issue -> failed to decrypt msg
 export async function useSession(sessionId: string, deviceId: number) {
     const model = prisma.session;
 
     const write = async (data: any, id: string) => {
+        data = JSON.stringify(data, BufferJSON.replacer);
+        id = fixId(id);
         try {
-            data = JSON.stringify(data, BufferJSON.replacer);
-            id = fixId(id);
             await model.upsert({
                 select: { pkId: true },
                 create: { data, id, sessionId, deviceId },
                 update: { data },
                 where: { sessionId_id: { id, sessionId } },
+                // where: { sessionId },
             });
         } catch (e: any) {
+            logger.info(id);
             logger.error('An error occurred during session write');
         }
     };
@@ -31,6 +35,7 @@ export async function useSession(sessionId: string, deviceId: number) {
             const { data } = await model.findUniqueOrThrow({
                 select: { data: true },
                 where: { sessionId_id: { id: fixId(id), sessionId } },
+                // where: { sessionId },
             });
             return JSON.parse(data, BufferJSON.reviver);
         } catch (e) {
@@ -48,6 +53,7 @@ export async function useSession(sessionId: string, deviceId: number) {
             await model.delete({
                 select: { pkId: true },
                 where: { sessionId_id: { id: fixId(id), sessionId } },
+                // where: { sessionId },
             });
         } catch (e) {
             logger.error(e, 'An error occured during session delete');

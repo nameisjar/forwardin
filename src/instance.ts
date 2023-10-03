@@ -5,17 +5,23 @@ import makeWASocket, {
     SocketConfig,
     WASocket,
     makeCacheableSignalKeyStore,
+    proto,
 } from '@whiskeysockets/baileys';
 import prisma from './utils/db';
 import { toDataURL } from 'qrcode';
 import logger from './config/logger';
+import { WebSocket } from 'ws';
 import type { Response } from 'express';
 import { Boom } from '@hapi/boom';
 import { delay } from './utils/delay';
 import { useSession } from './utils/useSession';
+// import { writeFile } from 'fs/promises';
+// import { join } from 'path';
+import { Store } from './store';
 
 type Session = WASocket & {
     destroy: () => Promise<void>;
+    store: Store;
 };
 
 const sessions = new Map<string, Session>();
@@ -65,7 +71,7 @@ export async function createInstance(options: createInstanceOptions) {
         deviceId,
         res,
         SSE = false,
-        readIncomingMessages = false,
+        readIncomingMessages = true,
         socketConfig,
     } = options;
     const configID = `${SESSION_CONFIG_ID}-${sessionId}`;
@@ -77,7 +83,7 @@ export async function createInstance(options: createInstanceOptions) {
                 logout && sock.logout(),
                 // prisma.chat.deleteMany({ where: { sessionId } }),
                 // prisma.contact.deleteMany({ where: { sessionId } }),
-                // prisma.message.deleteMany({ where: { sessionId } }),
+                prisma.message.deleteMany({ where: { sessionId } }),
                 // prisma.groupMetadata.deleteMany({ where: { sessionId } }),
                 prisma.session.deleteMany({ where: { sessionId } }),
             ]);
@@ -160,7 +166,18 @@ export async function createInstance(options: createInstanceOptions) {
             keys: makeCacheableSignalKeyStore(state.keys, logger),
         },
         logger,
+
+        // back here: get messages
+        getMessage: async (key) => {
+            const data = await prisma.message.findFirst({
+                where: { remoteJid: key.remoteJid!, id: key.id!, sessionId },
+            });
+            return (data?.message || undefined) as proto.IMessage | undefined;
+        },
     });
+
+    const store = new Store(sessionId, sock.ev);
+    sessions.set(sessionId, { ...sock, destroy, store });
 
     sock.ev.on('creds.update', saveCreds);
     sock.ev.on('connection.update', (update) => {
@@ -185,6 +202,12 @@ export async function createInstance(options: createInstanceOptions) {
         });
     }
 
+    // Debug events
+    // sock.ev.on('messaging-history.set', (data) => dump('messaging-history.set', data));
+    // sock.ev.on('chats.upsert', (data) => dump('chats.upsert', data));
+    // sock.ev.on('contacts.update', (data) => dump('contacts.update', data));
+    // sock.ev.on('groups.upsert', (data) => dump('groups.upsert', data));
+
     await prisma.session.upsert({
         create: {
             id: configID,
@@ -197,6 +220,45 @@ export async function createInstance(options: createInstanceOptions) {
     });
 }
 
-export async function deleteSession(sessionId: string) {
+export function getInstance(sessionId: string) {
+    return sessions.get(sessionId);
+}
+// back here: fix ws
+export function getInstanceStatus(session: Session) {
+    const state = ['CONNECTING', 'CONNECTED', 'DISCONNECTING', 'DISCONNECTED'];
+    let status = 'DISCONNECTED';
+
+    if (session.ws instanceof WebSocket) {
+        status = state[session.ws.readyState];
+    }
+
+    status = session.user ? 'AUTHENTICATED' : status;
+    return status;
+}
+
+export async function deleteInstance(sessionId: string) {
     sessions.get(sessionId)?.destroy();
 }
+
+export async function jidExists(
+    session: Session,
+    jid: string,
+    type: 'group' | 'number' = 'number',
+) {
+    try {
+        if (type === 'number') {
+            const [result] = await session.onWhatsApp(jid);
+            return !!result?.exists;
+        }
+
+        const groupMeta = await session.groupMetadata(jid);
+        return !!groupMeta.id;
+    } catch (e) {
+        return Promise.reject(e);
+    }
+}
+
+// export async function dump(fileName: string, data: any) {
+//     const path = join(__dirname, '..', 'debug', `${fileName}.json`);
+//     await writeFile(path, JSON.stringify(data, null, 2));
+// }

@@ -5,6 +5,7 @@ import userRoutes from './users';
 import sessionRoutes from './sessions';
 import contactRoutes from './contacts';
 import groupRoutes from './groups';
+import messageRoutes from './messages';
 import authMiddleware from '../middleware/auth';
 
 const router = Router();
@@ -19,5 +20,6 @@ router.use('/devices', authMiddleware, deviceRoutes);
 router.use('/users', authMiddleware, userRoutes);
 router.use('/contacts', authMiddleware, contactRoutes);
 router.use('/groups', authMiddleware, groupRoutes);
+router.use('/messages', authMiddleware, messageRoutes);
 
 export default router;

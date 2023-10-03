@@ -138,34 +138,32 @@ model Transaction {
 }
 
 model Device {
-  pkId             Int               @id @default(autoincrement())
-  id               String            @unique @default(uuid()) @db.Uuid
-  name             String            @db.VarChar(128)
-  phone            String?           @unique @db.VarChar(20)
-  apiKey           String            @map("api_key") @db.VarChar(255)
-  serverId         Int
-  status           DeviceStatus      @default(NOT_CONNECTED) @map("status")
-  createdAt        DateTime          @default(now()) @map("created_at")
-  updatedAt        DateTime          @default(now()) @map("updated_at")
-  businessHourId   Int?              @map("business_hour_id")
-  userId           Int
-  businessHour     BusinessHour?     @relation(fields: [businessHourId], references: [pkId])
-  user             User              @relation(fields: [userId], references: [pkId], onDelete: Cascade)
-  sessions         Session[]
-  outgoingMessages OutgoingMessage[]
-  incomingMessages IncomingMessage[]
-  autoReplies      AutoReply[]
-  campaigns        Campaign[]
-  orders           Order[]
-  contactDevices   ContactDevice[]
-  DeviceLabel      DeviceLabel[]
+  pkId           Int             @id @default(autoincrement())
+  id             String          @unique @default(uuid()) @db.Uuid
+  name           String          @db.VarChar(128)
+  phone          String?         @unique @db.VarChar(20)
+  apiKey         String          @map("api_key") @db.VarChar(255)
+  serverId       Int
+  status         DeviceStatus    @default(NOT_CONNECTED) @map("status")
+  createdAt      DateTime        @default(now()) @map("created_at")
+  updatedAt      DateTime        @default(now()) @map("updated_at")
+  businessHourId Int?            @map("business_hour_id")
+  userId         Int
+  businessHour   BusinessHour?   @relation(fields: [businessHourId], references: [pkId])
+  user           User            @relation(fields: [userId], references: [pkId], onDelete: Cascade)
+  sessions       Session[]
+  autoReplies    AutoReply[]
+  campaigns      Campaign[]
+  orders         Order[]
+  contactDevices ContactDevice[]
+  DeviceLabel    DeviceLabel[]
 }
 
 model Session {
   pkId      Int    @id @default(autoincrement())
   id        String
-  sessionId String @map("session_id") @db.VarChar(128) @unique
-  data      String
+  sessionId String
+  data      String @db.Text
   deviceId  Int
   device    Device @relation(fields: [deviceId], references: [pkId], onDelete: Cascade)
 
@@ -259,8 +257,7 @@ model OutgoingMessage {
   source    String        @db.VarChar(20)
   createdAt DateTime      @default(now()) @map("created_at")
   updatedAt DateTime      @default(now()) @map("updated_at")
-  deviceId  Int
-  device    Device        @relation(fields: [deviceId], references: [pkId])
+  sessionId String
 }
 
 model IncomingMessage {
@@ -271,8 +268,7 @@ model IncomingMessage {
   receivedAt DateTime
   createdAt  DateTime @default(now()) @map("created_at")
   updatedAt  DateTime @default(now()) @map("updated_at")
-  deviceId   Int
-  device     Device   @relation(fields: [deviceId], references: [pkId])
+  sessionId  String
 }
 
 model AutoReply {
@@ -355,4 +351,57 @@ model PasswordReset {
   token             String   @db.VarChar(255)
   resetTokenExpires DateTime @map("reset_token_expires")
   createdAt         DateTime @default(now()) @map("created_at")
+}
+
+model Message {
+  pkId                            BigInt   @id @default(autoincrement())
+  sessionId                       String
+  remoteJid                       String
+  id                              String
+  agentId                         String?
+  bizPrivacyStatus                Int?
+  broadcast                       Boolean?
+  clearMedia                      Boolean?
+  duration                        Int?
+  ephemeralDuration               Int?
+  ephemeralOffToOn                Boolean?
+  ephemeralOutOfSync              Boolean?
+  ephemeralStartTimestamp         BigInt?
+  finalLiveLocation               Json?
+  futureproofData                 Bytes?
+  ignore                          Boolean?
+  keepInChat                      Json?
+  key                             Json
+  labels                          Json?
+  mediaCiphertextSha256           Bytes?
+  mediaData                       Json?
+  message                         Json?
+  messageC2STimestamp             BigInt?
+  messageSecret                   Bytes?
+  messageStubParameters           Json?
+  messageStubType                 Int?
+  messageTimestamp                BigInt?
+  multicast                       Boolean?
+  originalSelfAuthorUserJidString String?
+  participant                     String?
+  paymentInfo                     Json?
+  photoChange                     Json?
+  pollAdditionalMetadata          Json?
+  pollUpdates                     Json?
+  pushName                        String?
+  quotedPaymentInfo               Json?
+  quotedStickerData               Json?
+  reactions                       Json?
+  revokeMessageTimestamp          BigInt?
+  starred                         Boolean?
+  status                          Int?
+  statusAlreadyViewed             Boolean?
+  statusPsa                       Json?
+  urlNumber                       Boolean?
+  urlText                         Boolean?
+  userReceipt                     Json?
+  verifiedBizName                 String?
+
+  @@unique([sessionId, remoteJid, id], map: "unique_message_key_per_session_id")
+  @@index([sessionId])
 }
