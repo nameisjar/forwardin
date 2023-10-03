@@ -1,9 +1,10 @@
 import { RequestHandler } from 'express';
-import { getInstance, jidExists } from '../instance';
+import { getInstance, jidExists, sendMediaFile } from '../instance';
 import logger from '../config/logger';
 import prisma, { serializePrisma } from '../utils/db';
 import { delay as delayMs } from '../utils/delay';
 import { proto } from '@whiskeysockets/baileys';
+import upload from '../config/multer';
 
 export const send: RequestHandler = async (req, res) => {
     try {
@@ -15,6 +16,38 @@ export const send: RequestHandler = async (req, res) => {
 
         const result = await session.sendMessage(jid, message, options);
         res.status(200).json(result);
+    } catch (e) {
+        const message = 'An error occured during message send';
+        logger.error(e, message);
+        res.status(500).json({ error: message });
+    }
+};
+
+export const sendImage: RequestHandler = async (req, res) => {
+    try {
+        const session = getInstance(req.params.sessionId)!;
+
+        upload.single('image')(req, res, async (err) => {
+            if (err) {
+                const message = 'An error occurred during file upload';
+                logger.error(err, message);
+                return res.status(500).json({ error: message });
+            }
+
+            const data = await sendMediaFile(
+                session,
+                req.body.id,
+                {
+                    mimetype: req.file?.mimetype,
+                    buffer: req.file?.buffer,
+                    originalname: req.file?.originalname,
+                },
+                'image',
+                req.body?.caption,
+                req.file?.originalname,
+            );
+            return res.status(201).json({ error: false, data: data });
+        });
     } catch (e) {
         const message = 'An error occured during message send';
         logger.error(e, message);

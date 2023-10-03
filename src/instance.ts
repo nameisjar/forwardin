@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import makeWASocket, {
     Browsers,
     ConnectionState,
@@ -228,11 +229,11 @@ export function getInstanceStatus(session: Session) {
     const state = ['CONNECTING', 'CONNECTED', 'DISCONNECTING', 'DISCONNECTED'];
     let status = 'DISCONNECTED';
 
-    if (session.ws instanceof WebSocket) {
+    if (session && session.ws instanceof WebSocket) {
         status = state[session.ws.readyState];
     }
 
-    status = session.user ? 'AUTHENTICATED' : status;
+    status = session && session.user ? 'AUTHENTICATED' : status;
     return status;
 }
 
@@ -258,6 +259,53 @@ export async function jidExists(
     }
 }
 
+function getJid(jid: string) {
+    if (jid.includes('@g.us') || jid.includes('@s.whatsapp.net')) {
+        return jid;
+    }
+    return jid.includes('-') ? `${jid}@g.us` : `${jid}@s.whatsapp.net`;
+}
+
+async function verifyJid(session: Session, jid: string) {
+    if (jid.includes('@g.us')) return true;
+    const [result] = await session.onWhatsApp(jid);
+    if (result?.exists) return true;
+    throw new Error('No account exists');
+}
+
+export async function sendMediaFile(
+    session: Session,
+    to: string,
+    file: { mimetype: any; buffer: unknown; originalname: string | undefined },
+    type: string,
+    caption = '',
+    filename: string | undefined,
+) {
+    await verifyJid(session, getJid(to));
+
+    let mediaMessage: any;
+
+    if (type === 'video') {
+        mediaMessage = {
+            video: file.buffer,
+            caption: caption,
+            fileName: filename,
+        };
+    } else {
+        mediaMessage = {
+            mimetype: file.mimetype,
+            [type]: file.buffer,
+            caption: caption,
+        };
+
+        if (filename) {
+            mediaMessage['fileName'] = filename;
+        }
+    }
+
+    const data = await session.sendMessage(getJid(to), mediaMessage);
+    return data;
+}
 // export async function dump(fileName: string, data: any) {
 //     const path = join(__dirname, '..', 'debug', `${fileName}.json`);
 //     await writeFile(path, JSON.stringify(data, null, 2));
