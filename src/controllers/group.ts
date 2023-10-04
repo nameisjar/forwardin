@@ -46,7 +46,7 @@ export const addMemberToGroup: RequestHandler = async (req, res) => {
         const addedContactIds: string[] = [];
         const failedContactIds: string[] = [];
 
-        // Use `Promise.all` to parallelize contact operations and track results
+        // use `Promise.all` to parallelize contact operations and track results
         await Promise.all(
             contactIds.map(async (contactId: string) => {
                 try {

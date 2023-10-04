@@ -1,6 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import makeWASocket, {
-    Browsers,
     ConnectionState,
     DisconnectReason,
     SocketConfig,
@@ -19,13 +18,14 @@ import { useSession } from './utils/useSession';
 // import { writeFile } from 'fs/promises';
 // import { join } from 'path';
 import { Store } from './store';
+import { processButton } from './utils/processBtn';
 
-type Session = WASocket & {
+type Instance = WASocket & {
     destroy: () => Promise<void>;
     store: Store;
 };
 
-const sessions = new Map<string, Session>();
+const instances = new Map<string, Instance>();
 const retries = new Map<string, number>();
 const SSEQRGenerations = new Map<string, number>();
 
@@ -91,7 +91,7 @@ export async function createInstance(options: createInstanceOptions) {
         } catch (e) {
             logger.error(e, 'An error occured during session destroy');
         } finally {
-            sessions.delete(sessionId);
+            instances.delete(sessionId);
         }
     };
 
@@ -160,7 +160,7 @@ export async function createInstance(options: createInstanceOptions) {
     const { state, saveCreds } = await useSession(sessionId, deviceId);
     const sock = makeWASocket({
         printQRInTerminal: true,
-        browser: Browsers.ubuntu('Chrome'),
+        browser: ['Forwardin', 'Chrome', '10.0'],
         ...socketConfig,
         auth: {
             creds: state.creds,
@@ -178,7 +178,7 @@ export async function createInstance(options: createInstanceOptions) {
     });
 
     const store = new Store(sessionId, sock.ev);
-    sessions.set(sessionId, { ...sock, destroy, store });
+    instances.set(sessionId, { ...sock, destroy, store });
 
     sock.ev.on('creds.update', saveCreds);
     sock.ev.on('connection.update', (update) => {
@@ -222,10 +222,10 @@ export async function createInstance(options: createInstanceOptions) {
 }
 
 export function getInstance(sessionId: string) {
-    return sessions.get(sessionId);
+    return instances.get(sessionId);
 }
 // back here: fix ws
-export function getInstanceStatus(session: Session) {
+export function getInstanceStatus(session: Instance) {
     const state = ['CONNECTING', 'CONNECTED', 'DISCONNECTING', 'DISCONNECTED'];
     let status = 'DISCONNECTED';
 
@@ -238,15 +238,15 @@ export function getInstanceStatus(session: Session) {
 }
 
 export async function deleteInstance(sessionId: string) {
-    sessions.get(sessionId)?.destroy();
+    instances.get(sessionId)?.destroy();
 }
 
 export function instanceExist(sessionId: string) {
-    return sessions.has(sessionId);
+    return instances.has(sessionId);
 }
 
 export async function jidExists(
-    session: Session,
+    session: Instance,
     jid: string,
     type: 'group' | 'number' = 'number',
 ) {
@@ -270,7 +270,7 @@ function getJid(jid: string) {
     return jid.includes('-') ? `${jid}@g.us` : `${jid}@s.whatsapp.net`;
 }
 
-async function verifyJid(session: Session, jid: string) {
+async function verifyJid(session: Instance, jid: string) {
     if (jid.includes('@g.us')) return true;
     const [result] = await session.onWhatsApp(jid);
     if (result?.exists) return true;
@@ -278,7 +278,7 @@ async function verifyJid(session: Session, jid: string) {
 }
 
 export async function sendMediaFile(
-    session: Session,
+    session: Instance,
     to: string,
     file: { mimetype: any; buffer: unknown; originalname: string | undefined },
     type: string,
@@ -310,6 +310,76 @@ export async function sendMediaFile(
     const data = await session.sendMessage(getJid(to), mediaMessage);
     return data;
 }
+
+export async function sendMediaFileToMultiple(
+    session: Instance,
+    recipients: string[],
+    file: { mimetype: any; buffer: unknown; originalname: string | undefined },
+    type: string,
+    caption = '',
+    filename: string | undefined,
+) {
+    const sendPromises = recipients.map(async (recipient) => {
+        try {
+            await verifyJid(session, getJid(recipient));
+
+            let mediaMessage: any;
+
+            if (type === 'video') {
+                mediaMessage = {
+                    video: file.buffer,
+                    caption: caption,
+                    fileName: filename,
+                };
+            } else {
+                mediaMessage = {
+                    mimetype: file.mimetype,
+                    [type]: file.buffer,
+                    caption: caption,
+                };
+
+                if (filename) {
+                    mediaMessage['fileName'] = filename;
+                }
+            }
+
+            return await session.sendMessage(getJid(recipient), mediaMessage);
+        } catch (error: any) {
+            logger.error(`Error sending media to ${recipient}: ${error.message}`);
+            return null;
+        }
+    });
+
+    const results = await Promise.all(sendPromises);
+
+    return results;
+}
+
+// back here: only show on wa web [deprecated: https://github.com/WhiskeySockets/Baileys/issues/56]
+export async function sendButtonMessage(
+    session: Instance,
+    to: string,
+    data: { buttons: any[]; text: any; footerText: any },
+) {
+    try {
+        const recipientJid = getJid(to);
+
+        await verifyJid(session, recipientJid);
+
+        const result = await session.sendMessage(recipientJid, {
+            templateButtons: processButton(data.buttons),
+            text: data.text || '',
+            footer: data.footerText || '',
+            viewOnce: true,
+        });
+
+        return result;
+    } catch (error) {
+        console.error('Error sending button message:', error);
+        throw error;
+    }
+}
+
 // export async function dump(fileName: string, data: any) {
 //     const path = join(__dirname, '..', 'debug', `${fileName}.json`);
 //     await writeFile(path, JSON.stringify(data, null, 2));

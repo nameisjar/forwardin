@@ -5,11 +5,17 @@ import logger from './config/logger';
 import pinoHttp from 'pino-http';
 import prisma from './utils/db';
 import { init } from './instance';
+import bodyParser from 'body-parser';
 
 const app = express();
 app.use(pinoHttp({ logger }));
 app.use(cors());
 app.use(express.json());
+
+// back here: adjust limit
+app.use(bodyParser.json({ limit: '500mb' }));
+app.use(bodyParser.urlencoded({ extended: true, limit: '500mb' }));
+
 app.use('/', routes);
 app.all('*', (req, res) => res.status(404).json({ error: 'URL not found' }));
 

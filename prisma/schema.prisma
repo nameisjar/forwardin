@@ -250,11 +250,11 @@ model Group {
 model OutgoingMessage {
   pkId      Int           @id @default(autoincrement())
   id        String        @unique @default(uuid()) @db.Uuid
-  to        String        @db.VarChar(20)
+  to        String        
   message   String
   schedule  DateTime
   status    MessageStatus
-  source    String        @db.VarChar(20)
+  source    String       
   createdAt DateTime      @default(now()) @map("created_at")
   updatedAt DateTime      @default(now()) @map("updated_at")
   sessionId String

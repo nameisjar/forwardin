@@ -7,5 +7,7 @@ router.post('/create', controller.createSession);
 router.post('/create-sse', controller.createSSE);
 router.delete('/:sessionId/delete', controller.deleteSession);
 router.get('/:sessionId/status', controller.getSessionStatus);
+router.get('/:deviceId/', controller.getSession);
+router.get('/', controller.getSessions);
 
 export default router;

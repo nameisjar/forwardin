@@ -70,7 +70,7 @@ export const createContact: RequestHandler = async (req, res) => {
             });
 
             if (!existingDevice) {
-                return res.status(404).json({ message: 'Device nout found' });
+                return res.status(404).json({ message: 'Device not found' });
             }
 
             await transaction.contactDevice.create({

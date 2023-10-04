@@ -58,6 +58,19 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                             },
                         });
 
+                        if (message.key.fromMe) {
+                            await prisma.outgoingMessage.createMany({
+                                data: {
+                                    to: jidNormalizedUser(message.key.remoteJid!),
+                                    message: '',
+                                    schedule: new Date(),
+                                    status: 'SENT',
+                                    source: '',
+                                    sessionId,
+                                },
+                            });
+                        }
+
                         //   const chatExists = (await prisma.chat.count({ where: { id: jid, sessionId } })) > 0;
                         //   if (type === 'notify' && !chatExists) {
                         //     event.emit('chats.upsert', [
