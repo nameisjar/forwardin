@@ -1,6 +1,6 @@
 import { RequestHandler } from 'express';
 import { User } from '@prisma/client';
-import { generateApiKey } from '../utils/apiKeyGenerator';
+import { generateUuid } from '../utils/keyGenerator';
 import { generateAccessToken, generateRefreshToken, jwtSecretKey } from '../utils/jwtGenerator';
 import { generateOTPSecret, generateOTPToken, sendEmail, verifyOTPToken } from '../utils/otpHelper';
 import bcrypt from 'bcrypt';
@@ -40,7 +40,7 @@ export const register: RequestHandler = async (req, res) => {
                     phone,
                     email,
                     password: hashedPassword,
-                    accountApiKey: generateApiKey(),
+                    accountApiKey: generateUuid(),
                     affiliationCode: username,
                     subscription: { connect: { pkId: 1 } },
                     privilege: { connect: { pkId: 2 } },

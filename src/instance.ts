@@ -122,7 +122,7 @@ export async function createInstance(options: createInstanceOptions) {
             if (res && !res.headersSent) {
                 try {
                     const qr = await toDataURL(connectionState.qr);
-                    res.status(200).json({ qr });
+                    res.status(200).json({ qr, sessionId });
                     return;
                 } catch (e) {
                     logger.error(e, 'An error occured during QR generation');
@@ -239,6 +239,10 @@ export function getInstanceStatus(session: Session) {
 
 export async function deleteInstance(sessionId: string) {
     sessions.get(sessionId)?.destroy();
+}
+
+export function instanceExist(sessionId: string) {
+    return sessions.has(sessionId);
 }
 
 export async function jidExists(

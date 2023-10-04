@@ -1,5 +1,5 @@
 import { RequestHandler } from 'express';
-import { generateApiKey } from '../utils/apiKeyGenerator';
+import { generateUuid } from '../utils/keyGenerator';
 import prisma from '../utils/db';
 import logger from '../config/logger';
 import { generateSlug } from '../utils/slug';
@@ -30,7 +30,7 @@ export const getDevices: RequestHandler = async (req, res) => {
 
 export const createDevice: RequestHandler = async (req, res) => {
     const { name, labels } = req.body;
-    const apiKey = generateApiKey();
+    const apiKey = generateUuid();
     const pkId = req.user.pkId;
 
     // back here: what's severId?
