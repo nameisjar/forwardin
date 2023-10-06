@@ -10,6 +10,7 @@ import prisma from '../utils/db';
 import { generateUuid } from '../utils/keyGenerator';
 import logger from '../config/logger';
 
+// back here: update device status
 export const createSession: RequestHandler = async (req, res) => {
     try {
         const { deviceId } = req.body;

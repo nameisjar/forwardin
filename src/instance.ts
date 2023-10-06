@@ -229,7 +229,6 @@ export function getInstance(sessionId: string) {
     const session = instances.get(sessionId);
     if (!verifyInstance(sessionId)) {
         throw new Error(`Session with sessionId ${sessionId} not found.`);
-        return null;
     }
     return session;
 }

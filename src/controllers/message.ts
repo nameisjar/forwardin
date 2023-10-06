@@ -7,88 +7,102 @@ import { proto } from '@whiskeysockets/baileys';
 import upload from '../config/multer';
 
 export const sendMessages: RequestHandler = async (req, res) => {
-    const session = getInstance(req.params.sessionId)!;
+    try {
+        const session = getInstance(req.params.sessionId)!;
 
-    const results: { index: number; result?: proto.WebMessageInfo }[] = [];
-    const errors: { index: number; error: string }[] = [];
+        const results: { index: number; result?: proto.WebMessageInfo }[] = [];
+        const errors: { index: number; error: string }[] = [];
 
-    for (const [
-        index,
-        { recipient, type = 'number', delay = 5000, message, options },
-    ] of req.body.entries()) {
-        try {
-            const jid = getJid(recipient);
-            await verifyJid(session, jid, type);
+        for (const [
+            index,
+            { recipient, type = 'number', delay = 5000, message, options },
+        ] of req.body.entries()) {
+            try {
+                const jid = getJid(recipient);
+                await verifyJid(session, jid, type);
 
-            const startTime = new Date().getTime();
-            if (index > 0) await delayMs(delay);
-            const endTime = new Date().getTime();
-            const delayElapsed = endTime - startTime;
-            logger.info(`Delay of ${delay} milliseconds elapsed: ${delayElapsed} milliseconds`);
+                const startTime = new Date().getTime();
+                if (index > 0) await delayMs(delay);
+                const endTime = new Date().getTime();
+                const delayElapsed = endTime - startTime;
+                logger.info(`Delay of ${delay} milliseconds elapsed: ${delayElapsed} milliseconds`);
 
-            const result = await session.sendMessage(jid, message, options);
-            results.push({ index, result });
-        } catch (e) {
-            const message =
-                e instanceof Error ? e.message : 'An error occurred during message send';
-            logger.error(e, message);
-            errors.push({ index, error: message });
+                const result = await session.sendMessage(jid, message, options);
+                results.push({ index, result });
+            } catch (e) {
+                const message =
+                    e instanceof Error ? e.message : 'An error occurred during message send';
+                logger.error(e, message);
+                errors.push({ index, error: message });
+            }
         }
-    }
-
-    res.status(errors.length > 0 ? 500 : 200).json({
-        results,
-        errors,
-    });
-};
-
-export const sendImageMessages: RequestHandler = async (req, res) => {
-    const session = getInstance(req.params.sessionId)!;
-
-    upload.single('image')(req, res, async (err) => {
-        if (err) {
-            const message = 'An error occurred during file upload';
-            logger.error(err, message);
-            return res.status(500).json({ error: message });
-        }
-
-        const recipients: string[] = req.body.recipients || [];
-
-        if (!recipients.length) {
-            return res.status(400).json({ error: 'Recipient JIDs are required' });
-        }
-
-        const fileData = {
-            mimetype: req.file?.mimetype,
-            buffer: req.file?.buffer,
-            originalname: req.file?.originalname,
-        };
-
-        const fileType = 'image';
-        const caption = req.body.caption || '';
-        const fileName = req.file?.originalname || '';
-        const delay = req.body.delay || 1000;
-
-        const startTime = new Date().getTime();
-        if (recipients.length > 0) await delayMs(delay);
-        const endTime = new Date().getTime();
-        const delayElapsed = endTime - startTime;
-        logger.info(`Delay of ${delay} milliseconds elapsed: ${delayElapsed} milliseconds`);
-
-        const { results, errors } = await sendMediaFile(
-            session,
-            recipients,
-            fileData,
-            fileType,
-            caption,
-            fileName,
-        );
 
         res.status(errors.length > 0 ? 500 : 200).json({
             results,
             errors,
         });
-    });
+    } catch (error) {
+        const message =
+            error instanceof Error ? error.message : 'An error occurred during message send';
+        logger.error(error, message);
+        res.status(500).json({ error: message });
+    }
+};
+
+export const sendImageMessages: RequestHandler = async (req, res) => {
+    try {
+        const session = getInstance(req.params.sessionId)!;
+
+        upload.single('image')(req, res, async (err) => {
+            if (err) {
+                const message = 'An error occurred during file upload';
+                logger.error(err, message);
+                return res.status(500).json({ error: message });
+            }
+
+            const recipients: string[] = req.body.recipients || [];
+
+            if (!recipients.length) {
+                return res.status(400).json({ error: 'Recipient JIDs are required' });
+            }
+
+            const fileData = {
+                mimetype: req.file?.mimetype,
+                buffer: req.file?.buffer,
+                originalname: req.file?.originalname,
+            };
+
+            const fileType = 'image';
+            const caption = req.body.caption || '';
+            const fileName = req.file?.originalname || '';
+            const delay = req.body.delay || 1000;
+
+            const startTime = new Date().getTime();
+            if (recipients.length > 0) await delayMs(delay);
+            const endTime = new Date().getTime();
+            const delayElapsed = endTime - startTime;
+            logger.info(`Delay of ${delay} milliseconds elapsed: ${delayElapsed} milliseconds`);
+
+            const { results, errors } = await sendMediaFile(
+                session,
+                recipients,
+                fileData,
+                fileType,
+                caption,
+                fileName,
+            );
+
+            res.status(errors.length > 0 ? 500 : 200).json({
+                results,
+                errors,
+            });
+        });
+    } catch (error) {
+        const message =
+            error instanceof Error ? error.message : 'An error occurred during message send';
+        logger.error(error, message);
+        res.status(500).json({ error: message });
+    }
 };
 
 export const sendButton: RequestHandler = async (req, res) => {
