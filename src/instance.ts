@@ -221,8 +221,17 @@ export async function createInstance(options: createInstanceOptions) {
     });
 }
 
+export function verifyInstance(sessionId: string) {
+    return instances.has(sessionId);
+}
+
 export function getInstance(sessionId: string) {
-    return instances.get(sessionId);
+    const session = instances.get(sessionId);
+    if (!verifyInstance(sessionId)) {
+        throw new Error(`Session with sessionId ${sessionId} not found.`);
+        return null;
+    }
+    return session;
 }
 // back here: fix ws
 export function getInstanceStatus(session: Instance) {
@@ -241,77 +250,33 @@ export async function deleteInstance(sessionId: string) {
     instances.get(sessionId)?.destroy();
 }
 
-export function instanceExist(sessionId: string) {
-    return instances.has(sessionId);
-}
-
-export async function jidExists(
-    session: Instance,
-    jid: string,
-    type: 'group' | 'number' = 'number',
-) {
-    try {
-        if (type === 'number') {
-            const [result] = await session.onWhatsApp(jid);
-            return !!result?.exists;
-        }
-
+export async function verifyJid(session: Instance, jid: string, type: string = 'number') {
+    if (type === 'image') {
+        if (jid.includes('@g.us')) return true;
+        const [imageResult] = await session.onWhatsApp(jid);
+        if (imageResult && imageResult.exists) return true;
+        throw new Error(`No account exists for jid: ${jid}`);
+    } else if (type === 'number') {
+        const [numberResult] = await session.onWhatsApp(jid);
+        if (numberResult && numberResult.exists) return true;
+        throw new Error(`No account exists for jid: ${jid}`);
+    } else if (type === 'group') {
         const groupMeta = await session.groupMetadata(jid);
-        return !!groupMeta.id;
-    } catch (e) {
-        return Promise.reject(e);
+        if (groupMeta && groupMeta.id) return true;
+        throw new Error('Error fetching group metadata');
+    } else {
+        throw new Error('Invalid type specified');
     }
 }
 
-function getJid(jid: string) {
+export function getJid(jid: string) {
     if (jid.includes('@g.us') || jid.includes('@s.whatsapp.net')) {
         return jid;
     }
     return jid.includes('-') ? `${jid}@g.us` : `${jid}@s.whatsapp.net`;
 }
 
-async function verifyJid(session: Instance, jid: string) {
-    if (jid.includes('@g.us')) return true;
-    const [result] = await session.onWhatsApp(jid);
-    if (result?.exists) return true;
-    throw new Error('No account exists');
-}
-
 export async function sendMediaFile(
-    session: Instance,
-    to: string,
-    file: { mimetype: any; buffer: unknown; originalname: string | undefined },
-    type: string,
-    caption = '',
-    filename: string | undefined,
-) {
-    await verifyJid(session, getJid(to));
-
-    let mediaMessage: any;
-
-    if (type === 'video') {
-        mediaMessage = {
-            video: file.buffer,
-            caption: caption,
-            fileName: filename,
-        };
-    } else {
-        mediaMessage = {
-            mimetype: file.mimetype,
-            [type]: file.buffer,
-            caption: caption,
-        };
-
-        if (filename) {
-            mediaMessage['fileName'] = filename;
-        }
-    }
-
-    const data = await session.sendMessage(getJid(to), mediaMessage);
-    return data;
-}
-
-export async function sendMediaFileToMultiple(
     session: Instance,
     recipients: string[],
     file: { mimetype: any; buffer: unknown; originalname: string | undefined },
@@ -319,40 +284,45 @@ export async function sendMediaFileToMultiple(
     caption = '',
     filename: string | undefined,
 ) {
-    const sendPromises = recipients.map(async (recipient) => {
-        try {
-            await verifyJid(session, getJid(recipient));
+    const results: { index: number; result?: proto.WebMessageInfo }[] = [];
+    const errors: { index: number; error: string }[] = [];
 
-            let mediaMessage: any;
+    for (let index = 0; index < recipients.length; index++) {
+        const recipient = recipients[index];
+        try {
+            await verifyJid(session, getJid(recipient), type);
+
+            let messsage: any;
 
             if (type === 'video') {
-                mediaMessage = {
+                messsage = {
                     video: file.buffer,
                     caption: caption,
                     fileName: filename,
                 };
             } else {
-                mediaMessage = {
+                messsage = {
                     mimetype: file.mimetype,
                     [type]: file.buffer,
                     caption: caption,
                 };
 
                 if (filename) {
-                    mediaMessage['fileName'] = filename;
+                    messsage['fileName'] = filename;
                 }
             }
 
-            return await session.sendMessage(getJid(recipient), mediaMessage);
+            const result = await session.sendMessage(getJid(recipient), messsage);
+            results.push({ index, result });
         } catch (error: any) {
-            logger.error(`Error sending media to ${recipient}: ${error.message}`);
-            return null;
+            const message =
+                error instanceof Error ? error.message : 'An error occurred during media send';
+            logger.error(error, message);
+            errors.push({ index, error: message });
         }
-    });
+    }
 
-    const results = await Promise.all(sendPromises);
-
-    return results;
+    return { results, errors };
 }
 
 // back here: only show on wa web [deprecated: https://github.com/WhiskeySockets/Baileys/issues/56]
@@ -363,7 +333,6 @@ export async function sendButtonMessage(
 ) {
     try {
         const recipientJid = getJid(to);
-
         await verifyJid(session, recipientJid);
 
         const result = await session.sendMessage(recipientJid, {

@@ -4,7 +4,7 @@ import {
     deleteInstance,
     getInstance,
     getInstanceStatus,
-    instanceExist,
+    verifyInstance,
 } from '../instance';
 import prisma from '../utils/db';
 import { generateUuid } from '../utils/keyGenerator';
@@ -56,7 +56,7 @@ export const createSSE: RequestHandler = async (req, res) => {
         return res.status(404).json({ message: 'Device not found' });
     }
 
-    if (instanceExist(sessionId)) {
+    if (verifyInstance(sessionId)) {
         res.write(`data: ${JSON.stringify({ error: 'Session already exists' })}\n\n`);
         res.end();
         return;
