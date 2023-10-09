@@ -34,7 +34,6 @@ export const createDevice: RequestHandler = async (req, res) => {
     const pkId = req.user.pkId;
 
     // back here: what's severId?
-    // back here: get phone from session!
     try {
         await prisma.$transaction(async (transaction) => {
             const createdDevice = await transaction.device.create({

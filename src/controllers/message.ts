@@ -121,7 +121,7 @@ export const sendButton: RequestHandler = async (req, res) => {
     }
 };
 
-// back here: separate incoming and outgoing
+// !back here: separate incoming and outgoing
 export const getMessages: RequestHandler = async (req, res) => {
     try {
         const { sessionId } = req.params;

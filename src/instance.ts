@@ -72,7 +72,7 @@ export async function createInstance(options: createInstanceOptions) {
         deviceId,
         res,
         SSE = false,
-        readIncomingMessages = true,
+        readIncomingMessages = false,
         socketConfig,
     } = options;
     const configID = `${SESSION_CONFIG_ID}-${sessionId}`;
@@ -177,6 +177,7 @@ export async function createInstance(options: createInstanceOptions) {
         },
     });
 
+    // !back here: update device status & phone
     const store = new Store(sessionId, sock.ev);
     instances.set(sessionId, { ...sock, destroy, store });
 
