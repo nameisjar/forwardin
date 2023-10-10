@@ -26,7 +26,7 @@ export function verifyOTPToken(secret: string, token: string): boolean {
     return isValid;
 }
 
-export async function sendEmail(toEmail: string, otpToken: string, subject: string) {
+export async function sendEmail(toEmail: string, body: string, subject: string) {
     // const mailgun = new Mailgun(formData);
     // const mg = mailgun.client({ username: 'api', key: process.env.MAILGUN_API_KEY! });
     // const data = {
@@ -51,7 +51,7 @@ export async function sendEmail(toEmail: string, otpToken: string, subject: stri
             from: process.env.NODEMAILER_EMAIL,
             to: toEmail,
             subject: subject,
-            text: `Here's your OTP: ${otpToken}`,
+            html: body,
         });
 
         // await mg.messages.create(process.env.MAILGUN_DOMAIN!, data);
