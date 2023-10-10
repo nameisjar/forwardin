@@ -116,7 +116,8 @@ model Subscription {
   pkId         Int           @id @default(autoincrement())
   id           String        @unique @default(uuid()) @db.Uuid
   name         String        @db.VarChar(128)
-  price        Decimal       @map("price") @db.Decimal(10, 2)
+  monthlyPrice Decimal       @map("monthly_price") @db.Decimal(10, 2)
+  yearlyPrice  Decimal       @map("yearly_price") @db.Decimal(10, 2)
   isAvailable  Boolean       @default(true) @map("is_available")
   createdAt    DateTime      @default(now()) @map("created_at")
   updatedAt    DateTime      @default(now()) @map("updated_at")
@@ -128,7 +129,7 @@ model Transaction {
   pkId           Int          @id @default(autoincrement())
   id             String       @unique @default(uuid()) @db.Uuid
   name           String       @db.VarChar(128)
-  price          Decimal      @map("price") @db.Decimal(10, 2)
+  paidPrice      Decimal      @map("paid_price") @db.Decimal(10, 2)
   createdAt      DateTime     @default(now()) @map("created_at")
   updatedAt      DateTime     @default(now()) @map("updated_at")
   userId         Int
@@ -250,11 +251,11 @@ model Group {
 model OutgoingMessage {
   pkId      Int           @id @default(autoincrement())
   id        String        @unique @default(uuid()) @db.Uuid
-  to        String        
+  to        String
   message   String
   schedule  DateTime
   status    MessageStatus
-  source    String       
+  source    String
   createdAt DateTime      @default(now()) @map("created_at")
   updatedAt DateTime      @default(now()) @map("updated_at")
   sessionId String
