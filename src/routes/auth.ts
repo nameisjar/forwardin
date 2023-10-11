@@ -1,11 +1,6 @@
 import { Router } from 'express';
 import * as controller from '../controllers/auth';
-import {
-    emailRules,
-    passwordRules,
-    registerValidationRules,
-    validate,
-} from '../middleware/requestValidator';
+import { passwordRules, registerValidationRules, validate } from '../middleware/requestValidator';
 import { accessToken } from '../middleware/auth';
 
 const router = Router();
