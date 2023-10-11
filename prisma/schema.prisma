@@ -349,7 +349,7 @@ model PasswordReset {
   pkId              Int      @id @default(autoincrement())
   id                String   @unique @default(uuid()) @db.Uuid
   email             String   @unique @db.VarChar(255)
-  token             String   @db.VarChar(255)
+  token             String   @unique @db.VarChar(255)
   resetTokenExpires DateTime @map("reset_token_expires")
   createdAt         DateTime @default(now()) @map("created_at")
 }

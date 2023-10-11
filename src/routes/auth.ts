@@ -14,7 +14,7 @@ router.post('/check-identifier-availability', controller.checkIdentifierAvailabi
 router.post('/login', controller.login);
 router.post('/refresh-token', controller.refreshToken);
 router.post('/forgot-password', controller.forgotPassword);
-router.post('/reset-password', passwordRules, emailRules, validate, controller.resetPassword);
+router.post('/reset-password', passwordRules, validate, controller.resetPassword);
 // router.get('/auth/google', controller.googleAuth);
 // router.get('/auth/facebook', controller.facebookAuth);
 

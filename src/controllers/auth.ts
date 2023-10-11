@@ -199,7 +199,7 @@ export const sendVerificationEmail: RequestHandler = async (req, res) => {
                 </p>
                 <h1 style="font-size: 36px; font-weight: bold; color: #007BFF;">${otpToken}</h1>
                 <p>
-                    This verification code will expire in 24 hours. If you didn't sign up for our service, you can safely ignore this email.
+                    This verification code will expire in 30 seconds. If you didn't sign up for our service, you can safely ignore this email.
                 </p>
                 <p>Best regards,</p>
                 <p>Forwardin</p>
@@ -325,10 +325,10 @@ export const forgotPassword: RequestHandler = async (req, res) => {
 
 export const resetPassword: RequestHandler = async (req, res) => {
     try {
-        const { email, resetToken, password } = req.body;
+        const { resetToken, password } = req.body;
         const resetInfo = await prisma.passwordReset.findUnique({
             where: {
-                email,
+                token: resetToken,
             },
         });
 
@@ -340,6 +340,7 @@ export const resetPassword: RequestHandler = async (req, res) => {
             return res.status(401).json({ message: 'Invalid or expired reset token' });
         }
 
+        const email = resetInfo.email;
         const hashedPassword = await bcrypt.hash(password, 10);
 
         await prisma.passwordReset.delete({
