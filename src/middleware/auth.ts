@@ -29,7 +29,7 @@ export const accessToken: RequestHandler = (req, res, next) => {
         if (err) {
             return res.status(403).json({ message: 'Access denied: Invalid token' });
         }
-        req.user = user as User;
+        req.prismaUser = user as User;
         next();
     });
 };
@@ -50,13 +50,13 @@ export const apiKey: RequestHandler = async (req, res, next) => {
         return res.status(401).json({ message: 'Access denied: Invalid API key' });
     }
 
-    req.user = user;
+    req.prismaUser = user;
     req.apiKey = apiKey;
     next();
 };
 
 export const isSuperAdmin: RequestHandler = async (req, res, next) => {
-    const user = req.user;
+    const user = req.prismaUser;
 
     if (user && user.privilegeId === 1) {
         next();
@@ -68,7 +68,7 @@ export const isSuperAdmin: RequestHandler = async (req, res, next) => {
 export default authMiddleware;
 
 export const isEmailVerified: RequestHandler = async (req, res, next) => {
-    const user = req.user;
+    const user = req.prismaUser;
 
     if (user && user.emailVerifiedAt) {
         next();

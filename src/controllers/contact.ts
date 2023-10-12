@@ -88,7 +88,7 @@ export const createContact: RequestHandler = async (req, res) => {
 };
 
 export const getContacts: RequestHandler = async (req, res) => {
-    const pkId = req.user.pkId;
+    const pkId = req.prismaUser.pkId;
 
     try {
         const contacts = await prisma.contact.findMany({

@@ -1,5 +1,9 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { RequestHandler } from 'express';
 import { User } from '@prisma/client';
+import passport from 'passport';
+import { Strategy as GoogleStrategy, Profile } from 'passport-google-oauth20';
+import { google } from 'googleapis';
 import { generateUuid } from '../utils/keyGenerator';
 import { generateAccessToken, generateRefreshToken, jwtSecretKey } from '../utils/jwtGenerator';
 import { generateOTPSecret, generateOTPToken, sendEmail, verifyOTPToken } from '../utils/otpHelper';
@@ -172,8 +176,8 @@ export const refreshToken: RequestHandler = async (req, res) => {
 
 export const sendVerificationEmail: RequestHandler = async (req, res) => {
     try {
-        const user = req.user;
-        const email = req.user.email;
+        const user = req.prismaUser;
+        const email = req.prismaUser.email;
 
         if (!user) {
             return res
@@ -223,7 +227,7 @@ export const sendVerificationEmail: RequestHandler = async (req, res) => {
 
 export const verifyEmail: RequestHandler = async (req, res) => {
     try {
-        const pkId = req.user.pkId;
+        const pkId = req.prismaUser.pkId;
         const otpToken = String(req.body.otpToken);
 
         const user = await prisma.user.findUnique({
@@ -367,7 +371,7 @@ export const changePassword: RequestHandler = async (req, res) => {
     try {
         const { currentPassword, password, confirmPassword } = req.body;
 
-        const email = req.user.email;
+        const email = req.prismaUser.email;
         const user = await prisma.user.findUnique({
             where: { email },
         });
@@ -401,3 +405,112 @@ export const changePassword: RequestHandler = async (req, res) => {
         res.status(500).json({ message: 'Internal server error' });
     }
 };
+
+export const googleAuth = passport.authenticate('google', {
+    scope: ['profile', 'email', 'https://www.googleapis.com/auth/user.phonenumbers.read'],
+});
+
+export const googleAuthCallback: RequestHandler = (req, res, next) => {
+    passport.authenticate('google', { session: false }, async (err, user) => {
+        if (err) {
+            return res.status(500).json({ message: err.message });
+        }
+
+        if (!user) {
+            return res.status(401).json({ message: 'Authentication failed' });
+        }
+
+        try {
+            const accessToken = generateAccessToken(user);
+
+            res.status(200).json({
+                accessToken,
+                refreshToken: user.refreshToken,
+                accountApiKey: user.accountApiKey,
+                id: user.id,
+            });
+        } catch (error) {
+            return res.status(500).json({ message: 'Internal server error' });
+        }
+    })(req, res, next);
+};
+
+passport.use(
+    new GoogleStrategy(
+        {
+            clientID: process.env.GOOGLE_CLIENT_ID!,
+            clientSecret: process.env.GOOGLE_CLIENT_SECRET!,
+            callbackURL: `http://${process.env.HOST}:${process.env.PORT}/auth/google/callback`,
+        },
+        async (accessToken: any, refreshToken: any, profile: Profile, done: any) => {
+            try {
+                const user = await prisma.user.findUnique({ where: { googleId: profile.id } });
+                if (user) {
+                    return done(null, user);
+                } else {
+                    const existingSubscription = await prisma.subscription.findUnique({
+                        where: { pkId: 1 },
+                    });
+                    const existingPrivilege = await prisma.privilege.findUnique({
+                        where: { pkId: 2 },
+                    });
+                    if (existingSubscription && existingPrivilege) {
+                        // extract username from email address
+                        const username = profile.emails![0].value.split('@')[0];
+                        if (await isIdentifierTaken(username)) {
+                            throw new Error(`${username} is already taken`);
+                        }
+
+                        // retrieve phone number via google people api
+                        const oauth2Client = new google.auth.OAuth2(
+                            process.env.GOOGLE_CLIENT_ID,
+                            process.env.GOOGLE_CLIENT_SECRET,
+                            `http://${process.env.HOST}:${process.env.PORT}/auth/google/callback`,
+                        );
+                        oauth2Client.setCredentials({
+                            access_token: accessToken,
+                            refresh_token: refreshToken,
+                        });
+                        const people = google.people({ version: 'v1', auth: oauth2Client });
+                        const contactInfo = await people.people.get({
+                            resourceName: 'people/me',
+                            personFields: 'phoneNumbers',
+                        });
+                        const phoneNumbers = contactInfo.data.phoneNumbers || [];
+                        const phoneNumber =
+                            phoneNumbers.length > 0
+                                ? phoneNumbers[0].canonicalForm?.replace(/\+/g, '')
+                                : null;
+
+                        // save user info into db
+                        const createdUser = await prisma.user.create({
+                            data: {
+                                googleId: profile.id,
+                                username,
+                                accountApiKey: generateUuid(),
+                                phone: phoneNumber,
+                                affiliationCode: username,
+                                subscription: { connect: { pkId: 1 } },
+                                privilege: { connect: { pkId: 2 } },
+                                email: profile.emails![0].value,
+                                password: '',
+                            },
+                        });
+                        const newRefreshToken = generateRefreshToken(createdUser);
+
+                        const updatedUser = await prisma.user.update({
+                            where: { pkId: createdUser.pkId },
+                            data: { refreshToken: newRefreshToken },
+                        });
+
+                        return done(null, updatedUser);
+                    } else {
+                        throw new Error('Subscription or privilege not found');
+                    }
+                }
+            } catch (error: any) {
+                return done(error, false);
+            }
+        },
+    ),
+);

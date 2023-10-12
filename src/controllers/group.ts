@@ -2,7 +2,7 @@ import { RequestHandler } from 'express';
 import prisma from '../utils/db';
 
 export const getGroups: RequestHandler = async (req, res) => {
-    const userId = req.user.pkId;
+    const userId = req.prismaUser.pkId;
     try {
         const groups = await prisma.group.findMany({
             where: { userId },
@@ -15,7 +15,7 @@ export const getGroups: RequestHandler = async (req, res) => {
 
 export const createGroup: RequestHandler = async (req, res) => {
     const { name } = req.body;
-    const userId = req.user.pkId;
+    const userId = req.prismaUser.pkId;
 
     try {
         await prisma.group.create({

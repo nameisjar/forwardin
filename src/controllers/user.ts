@@ -1,9 +1,11 @@
 import { RequestHandler } from 'express';
 import prisma from '../utils/db';
+import logger from '../config/logger';
 
 export const getUserProfile: RequestHandler = async (req, res) => {
     try {
-        const userId = req.user?.pkId;
+        const userId = req.prismaUser.pkId;
+        logger.warn(userId);
 
         const user = await prisma.user.findUnique({
             where: {
@@ -30,7 +32,7 @@ export const getUserProfile: RequestHandler = async (req, res) => {
 
 export const deleteUser: RequestHandler = async (req, res) => {
     try {
-        const userId = req.user?.pkId;
+        const userId = req.prismaUser.pkId;
 
         if (!userId) {
             return res.status(401).json({ message: 'Unauthorized: User not authenticated' });

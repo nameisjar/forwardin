@@ -78,7 +78,7 @@ export const getSessionStatus: RequestHandler = async (req, res) => {
 
 export const getSessions: RequestHandler = async (req, res) => {
     try {
-        const pkId = req.user.pkId;
+        const pkId = req.prismaUser.pkId;
 
         const sessions = await prisma.session.findMany({
             where: {

@@ -1,10 +1,10 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { User } from '@prisma/client';
+import { User as PrismaUser } from '@prisma/client';
 
 declare global {
     namespace Express {
         interface Request {
-            user: User;
+            prismaUser: PrismaUser;
             apiKey: string;
         }
     }

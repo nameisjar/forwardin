@@ -16,7 +16,7 @@ model User {
   pkId             Int               @id @default(autoincrement())
   id               String            @unique @default(uuid()) @db.Uuid
   username         String            @unique @db.VarChar(128)
-  phone            String            @unique @db.VarChar(20)
+  phone            String?            @unique @db.VarChar(20)
   email            String            @unique @db.VarChar(255)
   password         String            @db.VarChar(255)
   accountApiKey    String            @unique @map("account_api_key") @db.VarChar(128)

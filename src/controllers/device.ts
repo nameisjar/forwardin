@@ -5,7 +5,7 @@ import logger from '../config/logger';
 import { generateSlug } from '../utils/slug';
 
 export const getDevices: RequestHandler = async (req, res) => {
-    const pkId = req.user.pkId;
+    const pkId = req.prismaUser.pkId;
 
     try {
         const devices = await prisma.device.findMany({
@@ -31,7 +31,7 @@ export const getDevices: RequestHandler = async (req, res) => {
 export const createDevice: RequestHandler = async (req, res) => {
     const { name, labels } = req.body;
     const apiKey = generateUuid();
-    const pkId = req.user.pkId;
+    const pkId = req.prismaUser.pkId;
 
     // back here: what's severId?
     try {
