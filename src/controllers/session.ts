@@ -66,8 +66,13 @@ export const createSSE: RequestHandler = async (req, res) => {
 };
 
 export const getSessionStatus: RequestHandler = async (req, res) => {
-    const session = getInstance(req.params.sessionId)!;
-    res.status(200).json({ status: getInstanceStatus(session), session });
+    try {
+        const session = getInstance(req.params.sessionId)!;
+        res.status(200).json({ status: getInstanceStatus(session), session });
+    } catch (error) {
+        logger.error(error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
 };
 
 export const getSessions: RequestHandler = async (req, res) => {

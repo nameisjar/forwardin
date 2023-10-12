@@ -248,6 +248,7 @@ export function getInstanceStatus(session: Instance) {
 
     if (session && session.ws instanceof WebSocket) {
         status = state[session.ws.readyState];
+        logger.warn(session.ws.readyState);
     }
 
     status = session && session.user ? 'AUTHENTICATED' : status;
