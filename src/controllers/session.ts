@@ -92,13 +92,13 @@ export const getSessions: RequestHandler = async (req, res) => {
     }
 };
 
-export const getSessionsByDeviceId: RequestHandler = async (req, res) => {
+export const getSessionsByDeviceApiKey: RequestHandler = async (req, res) => {
     try {
-        const deviceId = req.params.deviceId;
+        const deviceApiKey = req.params.deviceApiKey;
 
         const existingDevice = await prisma.device.findUnique({
             where: {
-                id: deviceId,
+                apiKey: deviceApiKey,
             },
         });
 

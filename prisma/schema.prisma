@@ -138,7 +138,7 @@ model Device {
   id             String          @unique @default(uuid()) @db.Uuid
   name           String          @db.VarChar(128)
   phone          String?         @unique @db.VarChar(20)
-  apiKey         String          @map("api_key") @db.VarChar(255)
+  apiKey         String          @unique @map("api_key") @db.VarChar(255)
   serverId       Int
   status         String          @default("DISCONNECTED") @map("status") @db.VarChar(20)
   createdAt      DateTime        @default(now()) @map("created_at")
