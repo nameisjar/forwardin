@@ -10,7 +10,6 @@ import prisma from '../utils/db';
 import { generateUuid } from '../utils/keyGenerator';
 import logger from '../config/logger';
 
-// back here: api key == session id
 export const createSession: RequestHandler = async (req, res) => {
     try {
         const { deviceId } = req.body;
@@ -20,16 +19,16 @@ export const createSession: RequestHandler = async (req, res) => {
             where: { id: deviceId },
         });
 
-        const existingSession = await prisma.session.findFirst({
-            where: { sessionId },
-        });
-
         if (!existingDevice) {
             return res.status(404).json({ message: 'Device not found' });
         }
 
+        const existingSession = await prisma.session.findFirst({
+            where: { deviceId: existingDevice.pkId, device: { status: 'open' } },
+        });
+
         if (existingSession) {
-            return res.status(404).json({ message: 'Session already exist' });
+            return res.status(404).json({ message: 'This device is already linked.' });
         }
 
         createInstance({ sessionId, deviceId: existingDevice.pkId, res });
@@ -70,8 +69,10 @@ export const getSessionStatus: RequestHandler = async (req, res) => {
         const session = getInstance(req.params.sessionId)!;
         res.status(200).json({ status: getInstanceStatus(session), session });
     } catch (error) {
-        logger.error(error);
-        res.status(500).json({ message: 'Internal server error' });
+        const message =
+            error instanceof Error ? error.message : 'An error occurred during get session status';
+        logger.error(error, message);
+        res.status(500).json({ error: message });
     }
 };
 
@@ -111,7 +112,6 @@ export const getSessionsByDeviceApiKey: RequestHandler = async (req, res) => {
             return res.status(404).json({ message: 'Device not found' });
         }
 
-        // back here: get session logs
         const sessions = await prisma.session.findMany({
             where: {
                 deviceId: existingDevice.pkId,
@@ -133,6 +133,8 @@ export const getSessionsByDeviceApiKey: RequestHandler = async (req, res) => {
         res.status(500).json({ message: 'Internal server error' });
     }
 };
+
+// back here: get session logs
 
 export const deleteSession: RequestHandler = async (req, res) => {
     await deleteInstance(req.params.sessionId);

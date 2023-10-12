@@ -181,7 +181,7 @@ export async function createInstance(options: createInstanceOptions) {
     instances.set(sessionId, { ...sock, destroy, store });
 
     sock.ev.on('creds.update', saveCreds);
-    sock.ev.on('connection.update', (update) => {
+    sock.ev.on('connection.update', async (update) => {
         logger.warn(update);
         connectionState = update;
         const { connection } = update;
@@ -192,14 +192,11 @@ export async function createInstance(options: createInstanceOptions) {
         }
         if (connection === 'close') handleConnectionClose();
         handleConnectionUpdate();
-    });
 
-    // !!!back here: update device status, session api key, & phone after successfully connected
-    // back here: change device status when disconnect
-    const status = getInstanceStatus(getInstance(sessionId)!);
-    await prisma.device.update({
-        where: { pkId: deviceId },
-        data: { status: status },
+        await prisma.device.update({
+            where: { pkId: deviceId },
+            data: { status: connection, phone: sock.user?.id.split(':')[0] },
+        });
     });
 
     if (readIncomingMessages) {
@@ -241,14 +238,14 @@ export function getInstance(sessionId: string) {
     }
     return session;
 }
-// back here: fix ws
+
 export function getInstanceStatus(session: Instance) {
     const state = ['CONNECTING', 'CONNECTED', 'DISCONNECTING', 'DISCONNECTED'];
     let status = 'DISCONNECTED';
 
+    // back here: fix ws
     if (session && session.ws instanceof WebSocket) {
         status = state[session.ws.readyState];
-        logger.warn(session.ws.readyState);
     }
 
     status = session && session.user ? 'AUTHENTICATED' : status;
