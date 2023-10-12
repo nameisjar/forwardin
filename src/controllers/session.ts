@@ -10,6 +10,7 @@ import prisma from '../utils/db';
 import { generateUuid } from '../utils/keyGenerator';
 import logger from '../config/logger';
 
+// back here: api key == session id
 export const createSession: RequestHandler = async (req, res) => {
     try {
         const { deviceId } = req.body;
@@ -73,9 +74,10 @@ export const getSessions: RequestHandler = async (req, res) => {
     try {
         const pkId = req.user.pkId;
 
-        const sessions = await prisma.session.findFirst({
+        const sessions = await prisma.session.findMany({
             where: {
                 device: { user: { pkId } },
+                id: { contains: 'config' },
             },
             select: {
                 sessionId: true,
@@ -90,7 +92,7 @@ export const getSessions: RequestHandler = async (req, res) => {
     }
 };
 
-export const getSession: RequestHandler = async (req, res) => {
+export const getSessionsByDeviceId: RequestHandler = async (req, res) => {
     try {
         const deviceId = req.params.deviceId;
 
@@ -105,10 +107,14 @@ export const getSession: RequestHandler = async (req, res) => {
         }
 
         // back here: get session logs
-        const sessions = await prisma.session.findFirst({
+        const sessions = await prisma.session.findMany({
             where: {
                 deviceId: existingDevice.pkId,
                 id: { contains: 'config' },
+            },
+            select: {
+                sessionId: true,
+                data: true,
             },
         });
 

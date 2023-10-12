@@ -177,12 +177,12 @@ export async function createInstance(options: createInstanceOptions) {
         },
     });
 
-    // !back here: update device status & phone
     const store = new Store(sessionId, sock.ev);
     instances.set(sessionId, { ...sock, destroy, store });
 
     sock.ev.on('creds.update', saveCreds);
     sock.ev.on('connection.update', (update) => {
+        logger.warn(update);
         connectionState = update;
         const { connection } = update;
 
@@ -192,6 +192,14 @@ export async function createInstance(options: createInstanceOptions) {
         }
         if (connection === 'close') handleConnectionClose();
         handleConnectionUpdate();
+    });
+
+    // !!!back here: update device status, session api key, & phone after successfully connected
+    // back here: change device status when disconnect
+    const status = getInstanceStatus(getInstance(sessionId)!);
+    await prisma.device.update({
+        where: { pkId: deviceId },
+        data: { status: status },
     });
 
     if (readIncomingMessages) {

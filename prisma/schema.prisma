@@ -7,11 +7,6 @@ generator client {
   provider = "prisma-client-js"
 }
 
-enum DeviceStatus {
-  CONNECTED
-  NOT_CONNECTED
-}
-
 enum MessageStatus {
   SENT
   FAILED
@@ -145,7 +140,7 @@ model Device {
   phone          String?         @unique @db.VarChar(20)
   apiKey         String          @map("api_key") @db.VarChar(255)
   serverId       Int
-  status         DeviceStatus    @default(NOT_CONNECTED) @map("status")
+  status         String          @default("DISCONNECTED") @map("status") @db.VarChar(20)
   createdAt      DateTime        @default(now()) @map("created_at")
   updatedAt      DateTime        @default(now()) @map("updated_at")
   businessHourId Int?            @map("business_hour_id")
