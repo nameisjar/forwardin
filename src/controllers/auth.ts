@@ -14,7 +14,7 @@ import prisma from '../utils/db';
 // back here: set default privilege
 export const register: RequestHandler = async (req, res) => {
     try {
-        const { username, phone, email, password, confirmPassword } = req.body;
+        const { firstName, lastName, username, phone, email, password, confirmPassword } = req.body;
         const hashedPassword = await bcrypt.hash(password, 10);
         if (password !== confirmPassword) {
             return res.status(400).json({ message: 'Passwords do not match' });
@@ -41,6 +41,8 @@ export const register: RequestHandler = async (req, res) => {
             const newUser = await prisma.user.create({
                 data: {
                     username,
+                    firstName,
+                    lastName,
                     phone,
                     email,
                     password: hashedPassword,
@@ -66,8 +68,8 @@ export const register: RequestHandler = async (req, res) => {
                 error: 'Subscription or privilege not found',
             });
         }
-    } catch (error) {
-        req.log.error('Error:', error);
+    } catch (error: any) {
+        req.log.error('Error:', error.message);
         res.status(500).json({ message: 'Internal server error' });
     }
 };
@@ -197,7 +199,7 @@ export const sendVerificationEmail: RequestHandler = async (req, res) => {
         <body>
             <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
                 <h2>Email Verification</h2>
-                <p>Hello, ${user.username}!</p>
+                <p>Hello, ${user.firstName}!</p>
                 <p>
                     Thank you for signing up! To complete your registration, please use the following 6-digit verification code:
                 </p>
@@ -286,7 +288,7 @@ export const forgotPassword: RequestHandler = async (req, res) => {
             </tr>
             <tr>
                 <td style="padding: 20px;">
-                    <p>Hello, ${user.username}!</p>
+                    <p>Hello, ${user.firstName}!</p>
                     <p>We received a request to reset your password. To reset your password, click the link below:</p>
                     <p>
                         <a href="https://forwardin.adslink.id/auth/reset-password?token=${resetTokenSecret}" style="background-color: #0073e6; color: #ffffff; padding: 10px 20px; text-decoration: none; border-radius: 5px;">Reset Password</a>
@@ -482,11 +484,18 @@ passport.use(
                                 ? phoneNumbers[0].canonicalForm?.replace(/\+/g, '')
                                 : null;
 
+                        // split display name
+                        const nameParts = profile.displayName.split(' ');
+                        const lastName = nameParts.pop();
+                        const firstName = nameParts.join(' ');
+
                         // save user info into db
                         const createdUser = await prisma.user.create({
                             data: {
                                 googleId: profile.id,
                                 username,
+                                firstName,
+                                lastName,
                                 accountApiKey: generateUuid(),
                                 phone: phoneNumber,
                                 affiliationCode: username,

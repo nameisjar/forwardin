@@ -12,6 +12,8 @@ export const getUserProfile: RequestHandler = async (req, res) => {
                 pkId: userId,
             },
             select: {
+                firstName: true,
+                lastName: true,
                 username: true,
                 phone: true,
                 email: true,
