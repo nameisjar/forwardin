@@ -37,6 +37,7 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
         }
     };
 
+    // back here: check the type: campaign? broadcast? dm?
     const upsert: BaileysEventHandler<'messages.upsert'> = async ({ messages, type }) => {
         switch (type) {
             case 'append':
@@ -45,6 +46,7 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                     try {
                         const jid = jidNormalizedUser(message.key.remoteJid!);
                         const data = transformPrisma(message);
+                        logger.warn(data);
                         await prisma.message.upsert({
                             select: { pkId: true },
                             create: { ...data, remoteJid: jid, id: message.key.id!, sessionId },
@@ -58,19 +60,30 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                             },
                         });
 
-                        if (message.key.fromMe) {
-                            await prisma.outgoingMessage.createMany({
-                                data: {
-                                    to: jidNormalizedUser(message.key.remoteJid!),
-                                    message: '',
-                                    schedule: new Date(),
-                                    status: 'SENT',
-                                    source: '',
-                                    sessionId,
-                                },
-                            });
+                        // !back here: separate incoming and outgoing
+                        if (data.message.conversation) {
+                            if (message.key.fromMe) {
+                                await prisma.outgoingMessage.createMany({
+                                    data: {
+                                        to: jidNormalizedUser(message.key.remoteJid!),
+                                        message: data.message.conversation || '',
+                                        schedule: new Date(),
+                                        status: data.status.toString(),
+                                        source: '',
+                                        sessionId,
+                                    },
+                                });
+                            } else {
+                                await prisma.incomingMessage.createMany({
+                                    data: {
+                                        from: jidNormalizedUser(message.key.remoteJid!),
+                                        message: data.message.conversation,
+                                        receivedAt: new Date(data.messageTimestamp * 1000),
+                                        sessionId,
+                                    },
+                                });
+                            }
                         }
-
                         //   const chatExists = (await prisma.chat.count({ where: { id: jid, sessionId } })) > 0;
                         //   if (type === 'notify' && !chatExists) {
                         //     event.emit('chats.upsert', [
@@ -89,6 +102,7 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
         }
     };
 
+    // back here: update status if delivered, read and the timestamp
     const update: BaileysEventHandler<'messages.update'> = async (updates) => {
         for (const { update, key } of updates) {
             try {

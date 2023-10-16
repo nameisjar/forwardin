@@ -7,16 +7,11 @@ generator client {
   provider = "prisma-client-js"
 }
 
-enum MessageStatus {
-  SENT
-  FAILED
-}
-
 model User {
   pkId             Int               @id @default(autoincrement())
   id               String            @unique @default(uuid()) @db.Uuid
   firstName        String            @map("first_name") @db.VarChar(128)
-  lastName         String?            @map("last_name") @db.VarChar(128)
+  lastName         String?           @map("last_name") @db.VarChar(128)
   username         String            @unique @db.VarChar(128)
   phone            String?           @unique @db.VarChar(20)
   email            String            @unique @db.VarChar(255)
@@ -246,41 +241,41 @@ model Group {
 }
 
 model OutgoingMessage {
-  pkId      Int           @id @default(autoincrement())
-  id        String        @unique @default(uuid()) @db.Uuid
+  pkId      Int      @id @default(autoincrement())
+  id        String   @unique @default(uuid()) @db.Uuid
   to        String
   message   String
   schedule  DateTime
-  status    MessageStatus
+  status    String   @db.VarChar(20)
   source    String
-  createdAt DateTime      @default(now()) @map("created_at")
-  updatedAt DateTime      @default(now()) @map("updated_at")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @default(now()) @map("updated_at")
   sessionId String
 }
 
 model IncomingMessage {
   pkId       Int      @id @default(autoincrement())
   id         String   @unique @default(uuid()) @db.Uuid
-  from       String   @db.VarChar(20)
+  from       String
   message    String
-  receivedAt DateTime
+  receivedAt DateTime @map("received_at")
   createdAt  DateTime @default(now()) @map("created_at")
   updatedAt  DateTime @default(now()) @map("updated_at")
   sessionId  String
 }
 
 model AutoReply {
-  pkId      Int           @id @default(autoincrement())
-  id        String        @unique @default(uuid()) @db.Uuid
-  request   String        @db.VarChar(255)
-  response  String        @db.VarChar(255)
+  pkId      Int      @id @default(autoincrement())
+  id        String   @unique @default(uuid()) @db.Uuid
+  request   String   @db.VarChar(255)
+  response  String   @db.VarChar(255)
   schedule  DateTime
-  status    MessageStatus
+  status    String   @db.VarChar(20)
   source    String
-  createdAt DateTime      @default(now()) @map("created_at")
-  updatedAt DateTime      @default(now()) @map("updated_at")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @default(now()) @map("updated_at")
   deviceId  Int
-  device    Device        @relation(fields: [deviceId], references: [pkId])
+  device    Device   @relation(fields: [deviceId], references: [pkId])
 }
 
 model Campaign {

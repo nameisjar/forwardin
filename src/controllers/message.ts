@@ -121,13 +121,67 @@ export const sendButton: RequestHandler = async (req, res) => {
     }
 };
 
-// !back here: separate incoming and outgoing
 export const getMessages: RequestHandler = async (req, res) => {
     try {
         const { sessionId } = req.params;
         const { cursor = undefined, limit = 25 } = req.query;
         const messages = (
             await prisma.message.findMany({
+                cursor: cursor ? { pkId: Number(cursor) } : undefined,
+                take: Number(limit),
+                skip: cursor ? 1 : 0,
+                where: { sessionId },
+            })
+        ).map((m) => serializePrisma(m));
+
+        res.status(200).json({
+            data: messages,
+            cursor:
+                messages.length !== 0 && messages.length === Number(limit)
+                    ? messages[messages.length - 1].pkId
+                    : null,
+        });
+    } catch (e) {
+        const message = 'An error occured during message list';
+        logger.error(e, message);
+        res.status(500).json({ error: message });
+    }
+};
+
+// back here: show the name of the contact
+export const getIncomingMessages: RequestHandler = async (req, res) => {
+    try {
+        const { sessionId } = req.params;
+        const { cursor = undefined, limit = 25 } = req.query;
+        const messages = (
+            await prisma.incomingMessage.findMany({
+                cursor: cursor ? { pkId: Number(cursor) } : undefined,
+                take: Number(limit),
+                skip: cursor ? 1 : 0,
+                where: { sessionId },
+            })
+        ).map((m) => serializePrisma(m));
+
+        res.status(200).json({
+            data: messages,
+            cursor:
+                messages.length !== 0 && messages.length === Number(limit)
+                    ? messages[messages.length - 1].pkId
+                    : null,
+        });
+    } catch (e) {
+        const message = 'An error occured during message list';
+        logger.error(e, message);
+        res.status(500).json({ error: message });
+    }
+};
+
+export const getOutgoingMessages: RequestHandler = async (req, res) => {
+    try {
+        const { sessionId } = req.params;
+        const { cursor = undefined, limit = 25 } = req.query;
+        const messages = (
+            await prisma.outgoingMessage.findMany({
                 cursor: cursor ? { pkId: Number(cursor) } : undefined,
                 take: Number(limit),
                 skip: cursor ? 1 : 0,

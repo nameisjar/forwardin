@@ -86,6 +86,8 @@ export async function createInstance(options: createInstanceOptions) {
                 // prisma.contact.deleteMany({ where: { sessionId } }),
                 prisma.message.deleteMany({ where: { sessionId } }),
                 // prisma.groupMetadata.deleteMany({ where: { sessionId } }),
+                prisma.incomingMessage.deleteMany({ where: { sessionId } }),
+                prisma.outgoingMessage.deleteMany({ where: { sessionId } }),
                 prisma.session.deleteMany({ where: { sessionId } }),
             ]);
         } catch (e) {
