@@ -6,6 +6,7 @@ import sessionRoutes from './sessions';
 import contactRoutes from './contacts';
 import groupRoutes from './groups';
 import messageRoutes from './messages';
+import paymentRoutes from './payments';
 import authMiddleware from '../middleware/auth';
 
 const router = Router();
@@ -21,5 +22,6 @@ router.use('/users', authMiddleware, userRoutes);
 router.use('/contacts', authMiddleware, contactRoutes);
 router.use('/groups', authMiddleware, groupRoutes);
 router.use('/messages', authMiddleware, messageRoutes);
+router.use('/payment', paymentRoutes);
 
 export default router;
