@@ -4,12 +4,12 @@ import logger from '../config/logger';
 
 export const handleNotification: RequestHandler = async (req, res) => {
     try {
-        const { order_id, transaction_id, transaction_time, gross_amount, user_id } = req.body;
+        const { order_id, transaction_id, transaction_time, gross_amount, metadata } = req.body;
 
         const transaction_time_iso = new Date(transaction_time).toISOString();
 
         const user = await prisma.user.findUnique({
-            where: { id: user_id },
+            where: { id: metadata.extra_info.user_id },
         });
 
         if (!user) {
