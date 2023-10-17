@@ -4,9 +4,25 @@ import prisma from '../utils/db';
 export const getGroups: RequestHandler = async (req, res) => {
     const userId = req.prismaUser.pkId;
     try {
-        const groups = await prisma.group.findMany({
+        const rawGroups = await prisma.group.findMany({
             where: { userId },
+            include: { contactGroups: true },
         });
+
+        const groups = [];
+
+        for (const group of rawGroups) {
+            const numberOfContacts = group.contactGroups.length;
+            const groupCount = {
+                id: group.id,
+                name: group.name,
+                isCampaign: group.isCampaign,
+                membersCount: numberOfContacts,
+            };
+
+            groups.push(groupCount);
+        }
+
         res.status(200).json(groups);
     } catch (error) {
         res.status(500).json({ message: 'Internal server error' });

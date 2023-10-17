@@ -9,6 +9,9 @@ export function generateAccessToken(user: User): string {
         pkId: user.pkId,
         username: user.username,
         email: user.email,
+        phone: user.phone,
+        firstName: user.firstName,
+        lastName: user.lastName,
     };
 
     return jwt.sign(payload, jwtSecretKey, { expiresIn: '15m' });
