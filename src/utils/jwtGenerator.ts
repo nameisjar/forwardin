@@ -7,6 +7,7 @@ export const jwtSecretKey = process.env.JWT_SECRET_KEY!;
 export function generateAccessToken(user: User): string {
     const payload = {
         pkId: user.pkId,
+        id: user.id,
         username: user.username,
         email: user.email,
         phone: user.phone,

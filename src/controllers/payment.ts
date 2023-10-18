@@ -17,14 +17,24 @@ export const pay: RequestHandler = async (req, res) => {
             where: { id: subscriptionId },
         });
 
+        if (!subscription) {
+            return res.status(404).json({ error: 'Subscription not found' });
+        }
+
         const paidPrice =
             subscriptionType == 'monthly' ? subscription?.monthlyPrice : subscription?.yearlyPrice;
+
+        if (paidPrice === null || paidPrice === undefined) {
+            return res.status(400).json({ error: 'Invalid subscriptionType' });
+        }
+
+        const order_id = `ORDER-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
 
         const start_time = moment().tz('Asia/Jakarta').format('YYYY-MM-DD HH:mm:ss ZZ');
 
         const requestBody = {
             transaction_details: {
-                order_id: `ORDER-${subscription?.name}-${start_time}`,
+                order_id,
                 gross_amount: paidPrice,
             },
             item_details: [
@@ -44,20 +54,20 @@ export const pay: RequestHandler = async (req, res) => {
                 email: user.email,
                 phone: user.phone,
                 billing_address: {
-                    first_name: 'John',
-                    last_name: 'Watson',
-                    email: 'amrizing@example.com',
-                    phone: '081 2233 44-55',
+                    first_name: user.firstName,
+                    last_name: user.lastName,
+                    email: user.email,
+                    phone: user.phone,
                     address: 'Sudirman',
                     city: 'Jakarta',
                     postal_code: '12190',
                     country_code: 'IDN',
                 },
                 shipping_address: {
-                    first_name: 'John',
-                    last_name: 'Watson',
-                    email: 'amrizing@example.com',
-                    phone: '0 8128-75 7-9338',
+                    first_name: user.firstName,
+                    last_name: user.lastName,
+                    email: user.email,
+                    phone: user.phone,
                     address: 'Sudirman',
                     city: 'Jakarta',
                     postal_code: '12190',
@@ -132,6 +142,7 @@ export const pay: RequestHandler = async (req, res) => {
                 duration: 10,
             },
             user_id: user.id,
+            subscription_id: subscription?.pkId,
         };
 
         logger.warn(requestBody);
@@ -145,14 +156,18 @@ export const pay: RequestHandler = async (req, res) => {
         const response = await axios.post(url, requestBody, config);
         res.status(200).json(response.data);
     } catch (error: any) {
+        logger.error('Payment failed:', error);
         res.status(500).json({ error: 'Payment failed', details: error.message });
     }
 };
 
-// back here: get subscription from metadata, adjust by ui design
 export const handleNotification: RequestHandler = async (req, res) => {
     try {
         const { order_id, transaction_id, transaction_time, gross_amount, metadata } = req.body;
+
+        if (!order_id || !transaction_id || !transaction_time || !gross_amount || !metadata) {
+            return res.status(400).json({ error: 'Invalid notification data' });
+        }
 
         const transaction_time_iso = new Date(transaction_time).toISOString();
 
@@ -160,9 +175,7 @@ export const handleNotification: RequestHandler = async (req, res) => {
             where: { id: metadata.extra_info.user_id },
         });
 
-        if (!user) {
-            res.status(404).json({ message: 'User not found' });
-        } else {
+        if (user) {
             await prisma.transaction.upsert({
                 where: { id: transaction_id },
                 create: {
@@ -170,15 +183,16 @@ export const handleNotification: RequestHandler = async (req, res) => {
                     id: transaction_id,
                     paidPrice: gross_amount,
                     userId: user.pkId,
-                    subscriptionId: 1,
+                    subscriptionId: metadata.extra_info.subscription_id,
                     createdAt: transaction_time_iso,
                 },
                 update: {
                     updatedAt: transaction_time_iso,
                 },
             });
-
-            res.status(200).json({ message: 'Transacation created successfully' });
+            return res.status(200).json({ message: 'Transaction created successfully' });
+        } else {
+            return res.status(500).json({ error: 'Failed to create or update transaction' });
         }
     } catch (error) {
         const message = 'An error occured during payment notification handling';
