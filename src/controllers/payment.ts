@@ -141,8 +141,8 @@ export const pay: RequestHandler = async (req, res) => {
                 unit: 'minutes',
                 duration: 10,
             },
-            user_id: user.id,
-            subscription_id: subscription?.pkId,
+            custom_field1: user.id,
+            custom_field2: subscriptionId,
         };
 
         logger.warn(requestBody);
@@ -163,17 +163,39 @@ export const pay: RequestHandler = async (req, res) => {
 
 export const handleNotification: RequestHandler = async (req, res) => {
     try {
-        const { order_id, transaction_id, transaction_time, gross_amount, metadata } = req.body;
+        const {
+            order_id,
+            transaction_id,
+            transaction_time,
+            gross_amount,
+            custom_field1,
+            custom_field2,
+        } = req.body;
 
-        if (!order_id || !transaction_id || !transaction_time || !gross_amount || !metadata) {
+        if (
+            !order_id ||
+            !transaction_id ||
+            !transaction_time ||
+            !gross_amount ||
+            !custom_field1 ||
+            !custom_field2
+        ) {
             return res.status(400).json({ error: 'Invalid notification data' });
         }
 
         const transaction_time_iso = new Date(transaction_time).toISOString();
 
         const user = await prisma.user.findUnique({
-            where: { id: metadata.extra_info.user_id },
+            where: { id: custom_field1 },
         });
+
+        const subscription = await prisma.subscription.findUnique({
+            where: { id: custom_field2 },
+        });
+
+        if (!subscription) {
+            return res.status(404).json({ error: 'Subscription not found' });
+        }
 
         if (user) {
             await prisma.transaction.upsert({
@@ -183,7 +205,7 @@ export const handleNotification: RequestHandler = async (req, res) => {
                     id: transaction_id,
                     paidPrice: gross_amount,
                     userId: user.pkId,
-                    subscriptionId: metadata.extra_info.subscription_id,
+                    subscriptionId: subscription.pkId,
                     createdAt: transaction_time_iso,
                 },
                 update: {
