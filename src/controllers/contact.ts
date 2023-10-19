@@ -63,14 +63,14 @@ export const createContact: RequestHandler = async (req, res) => {
                 });
             }
 
-            const existingDevice = await prisma.device.findUnique({
+            const existingDevice = await transaction.device.findUnique({
                 where: {
                     id: deviceId,
                 },
             });
 
             if (!existingDevice) {
-                return res.status(404).json({ message: 'Device not found' });
+                throw new Error('Device not found');
             }
 
             await transaction.contactDevice.create({
@@ -82,8 +82,9 @@ export const createContact: RequestHandler = async (req, res) => {
         });
 
         res.status(200).json({ message: 'Contact created successfully' });
-    } catch (error) {
-        res.status(500).json({ message: 'Internal server error' });
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } catch (error: any) {
+        res.status(500).json({ message: error.message });
     }
 };
 
@@ -104,6 +105,30 @@ export const getContacts: RequestHandler = async (req, res) => {
             },
         });
         res.status(200).json(contacts);
+    } catch (error) {
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};
+
+export const getContactLabels: RequestHandler = async (req, res) => {
+    const pkId = req.prismaUser.pkId;
+
+    try {
+        const labels = await prisma.contact.findMany({
+            where: { contactDevices: { some: { device: { userId: pkId } } } },
+            select: {
+                ContactLabel: {
+                    select: {
+                        label: {
+                            select: { name: true },
+                        },
+                    },
+                },
+            },
+        });
+
+        const newLabels = labels.flatMap((item) => item.ContactLabel.map((obj) => obj.label.name));
+        res.status(200).json(newLabels);
     } catch (error) {
         res.status(500).json({ message: 'Internal server error' });
     }

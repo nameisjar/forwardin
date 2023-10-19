@@ -28,6 +28,31 @@ export const getDevices: RequestHandler = async (req, res) => {
     }
 };
 
+export const getDeviceLabels: RequestHandler = async (req, res) => {
+    const pkId = req.prismaUser.pkId;
+
+    try {
+        const labels = await prisma.device.findMany({
+            where: { userId: pkId },
+            select: {
+                DeviceLabel: {
+                    select: {
+                        label: {
+                            select: { name: true },
+                        },
+                    },
+                },
+            },
+        });
+
+        const newLabels = labels.flatMap((item) => item.DeviceLabel.map((obj) => obj.label.name));
+        res.status(200).json(newLabels);
+    } catch (error) {
+        logger.error('Error:', error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};
+
 export const createDevice: RequestHandler = async (req, res) => {
     const { name, labels } = req.body;
     const apiKey = generateUuid();
