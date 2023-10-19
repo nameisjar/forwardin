@@ -126,8 +126,8 @@ model Transaction {
   updatedAt      DateTime     @default(now()) @map("updated_at")
   userId         Int
   subscriptionId Int
-  user           User         @relation(fields: [userId], references: [pkId])
-  subscription   Subscription @relation(fields: [subscriptionId], references: [pkId])
+  user           User         @relation(fields: [userId], references: [pkId], onDelete: Cascade)
+  subscription   Subscription @relation(fields: [subscriptionId], references: [pkId], onDelete: Cascade)
 }
 
 model Device {

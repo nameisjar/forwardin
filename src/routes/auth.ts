@@ -10,6 +10,7 @@ router.post('/login', controller.login);
 router.post('/refresh-token', controller.refreshToken);
 router.post('/forgot-password', controller.forgotPassword);
 router.post('/reset-password', passwordRules, validate, controller.resetPassword);
+router.post('/google', controller.loginRegisterByGoogle);
 router.get('/google', controller.googleAuth);
 router.get('/google/callback', controller.googleAuthCallback);
 // router.get('/auth/facebook', controller.facebookAuth);
