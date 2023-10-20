@@ -462,6 +462,7 @@ export const loginRegisterByGoogle: RequestHandler = async (req, res) => {
 
         if (response.status === 200) {
             const profileData = response.data;
+
             const existingSubscription = await prisma.subscription.findUnique({
                 where: { pkId: 1 },
             });
@@ -478,9 +479,10 @@ export const loginRegisterByGoogle: RequestHandler = async (req, res) => {
                 const phones = profileData.phoneNumbers || [];
                 const phone =
                     phones.length > 0 ? phones[0].canonicalForm?.replace(/\+/g, '') : null;
+
                 const nameParts = profileData.names[0].displayNameLastFirst.split(',');
-                const lastName = nameParts[0].trim();
-                const firstName = nameParts[1].trim();
+                const lastName = nameParts.length > 1 ? nameParts[0].trim() : null;
+                const firstName = lastName ? nameParts[1].trim() : nameParts[0].trim();
 
                 const existingUser = await prisma.user.findUnique({ where: { googleId } });
                 if (existingUser) {
