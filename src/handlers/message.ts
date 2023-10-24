@@ -60,7 +60,15 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                             },
                         });
 
-                        // !back here: separate incoming and outgoing
+                        const contact = await prisma.contact.findFirst({
+                            where: {
+                                phone: jidNormalizedUser(message.key.remoteJid!).split('@')[0],
+                                contactDevices: {
+                                    some: { device: { sessions: { some: { sessionId } } } },
+                                },
+                            },
+                        });
+
                         if (data.message.conversation) {
                             if (message.key.fromMe) {
                                 await prisma.outgoingMessage.createMany({
@@ -71,6 +79,7 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                                         status: data.status.toString(),
                                         source: '',
                                         sessionId,
+                                        contactId: contact?.pkId || null,
                                     },
                                 });
                             } else {
@@ -80,6 +89,7 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                                         message: data.message.conversation,
                                         receivedAt: new Date(data.messageTimestamp * 1000),
                                         sessionId,
+                                        contactId: contact?.pkId || null,
                                     },
                                 });
                             }

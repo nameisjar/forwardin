@@ -162,6 +162,11 @@ export const getIncomingMessages: RequestHandler = async (req, res) => {
                     sessionId,
                     from: phoneNumber ? phoneNumber.toString() + '@s.whatsapp.net' : undefined,
                 },
+                include: {
+                    contact: {
+                        select: { firstName: true, lastName: true, colorCode: true },
+                    },
+                },
             })
         ).map((m) => serializePrisma(m));
 
@@ -196,6 +201,11 @@ export const getOutgoingMessages: RequestHandler = async (req, res) => {
                 where: {
                     sessionId,
                     to: phoneNumber ? phoneNumber.toString() + '@s.whatsapp.net' : undefined,
+                },
+                include: {
+                    contact: {
+                        select: { firstName: true, lastName: true, colorCode: true },
+                    },
                 },
             })
         ).map((m) => serializePrisma(m));

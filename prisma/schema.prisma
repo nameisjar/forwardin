@@ -221,20 +221,22 @@ model Session {
 }
 
 model Contact {
-  pkId           Int             @id @default(autoincrement())
-  id             String          @unique @default(uuid()) @db.Uuid
-  firstName      String          @db.VarChar(128)
-  lastName       String?         @db.VarChar(128)
-  phone          String          @db.VarChar(20)
-  email          String          @db.VarChar(255)
-  gender         String          @db.VarChar(10)
-  dob            DateTime        @db.Date
-  colorCode      String?         @db.VarChar(6)
-  createdAt      DateTime        @default(now()) @map("created_at")
-  updatedAt      DateTime        @default(now()) @map("updated_at")
-  contactGroups  ContactGroup[]
-  contactDevices ContactDevice[]
-  ContactLabel   ContactLabel[]
+  pkId            Int               @id @default(autoincrement())
+  id              String            @unique @default(uuid()) @db.Uuid
+  firstName       String            @db.VarChar(128)
+  lastName        String?           @db.VarChar(128)
+  phone           String            @db.VarChar(20)
+  email           String            @db.VarChar(255)
+  gender          String            @db.VarChar(10)
+  dob             DateTime          @db.Date
+  colorCode       String?           @db.VarChar(6)
+  createdAt       DateTime          @default(now()) @map("created_at")
+  updatedAt       DateTime          @default(now()) @map("updated_at")
+  contactGroups   ContactGroup[]
+  contactDevices  ContactDevice[]
+  ContactLabel    ContactLabel[]
+  OutgoingMessage OutgoingMessage[]
+  IncomingMessage IncomingMessage[]
 }
 
 model Label {
@@ -313,6 +315,8 @@ model OutgoingMessage {
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @default(now()) @map("updated_at")
   sessionId String
+  contactId Int?
+  contact   Contact?  @relation(fields: [contactId], references: [pkId], onDelete: Cascade)
 }
 
 model IncomingMessage {
@@ -324,6 +328,8 @@ model IncomingMessage {
   createdAt  DateTime @default(now()) @map("created_at")
   updatedAt  DateTime @default(now()) @map("updated_at")
   sessionId  String
+  contactId  Int?
+  contact    Contact?  @relation(fields: [contactId], references: [pkId], onDelete: Cascade)
 }
 
 model AutoReply {
