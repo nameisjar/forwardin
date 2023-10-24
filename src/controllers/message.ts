@@ -152,13 +152,16 @@ export const getMessages: RequestHandler = async (req, res) => {
 export const getIncomingMessages: RequestHandler = async (req, res) => {
     try {
         const { sessionId } = req.params;
-        const { cursor = undefined, limit = 25 } = req.query;
+        const { cursor = undefined, limit = 25, phoneNumber } = req.query;
         const messages = (
             await prisma.incomingMessage.findMany({
                 cursor: cursor ? { pkId: Number(cursor) } : undefined,
                 take: Number(limit),
                 skip: cursor ? 1 : 0,
-                where: { sessionId },
+                where: {
+                    sessionId,
+                    from: phoneNumber ? phoneNumber.toString() + '@s.whatsapp.net' : undefined,
+                },
             })
         ).map((m) => serializePrisma(m));
 
@@ -184,13 +187,16 @@ export const getIncomingMessages: RequestHandler = async (req, res) => {
 export const getOutgoingMessages: RequestHandler = async (req, res) => {
     try {
         const { sessionId } = req.params;
-        const { cursor = undefined, limit = 25 } = req.query;
+        const { cursor = undefined, limit = 25, phoneNumber } = req.query;
         const messages = (
             await prisma.outgoingMessage.findMany({
                 cursor: cursor ? { pkId: Number(cursor) } : undefined,
                 take: Number(limit),
                 skip: cursor ? 1 : 0,
-                where: { sessionId },
+                where: {
+                    sessionId,
+                    to: phoneNumber ? phoneNumber.toString() + '@s.whatsapp.net' : undefined,
+                },
             })
         ).map((m) => serializePrisma(m));
 
