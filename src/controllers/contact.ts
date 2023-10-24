@@ -164,7 +164,7 @@ export const getContact: RequestHandler = async (req, res) => {
                 contactGroups: {
                     select: {
                         group: {
-                            select: { name: true },
+                            select: { name: true, id: true },
                         },
                     },
                 },
