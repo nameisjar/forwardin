@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { RequestHandler } from 'express';
 import prisma from '../utils/db';
 import logger from '../config/logger';
@@ -70,5 +71,26 @@ export const deleteUser: RequestHandler = async (req, res) => {
     } catch (error) {
         console.error('Error deleting user:', error);
         return res.status(500).json({ message: 'Internal server error' });
+    }
+};
+
+export const getUserSubscriptionQuota: RequestHandler = async (req, res) => {
+    try {
+        const { userId } = req.params;
+
+        const user = await prisma.user.findUnique({
+            where: { id: userId },
+            select: {
+                AutoReplyQuota: { select: { max: true, used: true } },
+                BroadcastQuota: { select: { max: true, used: true } },
+                ContactQuota: { select: { max: true, used: true } },
+                DeviceQuota: { select: { max: true, used: true } },
+            },
+        });
+
+        res.status(200).json(user);
+    } catch (error: any) {
+        logger.error(error.message);
+        res.status(500).json({ message: 'Internal server error' });
     }
 };

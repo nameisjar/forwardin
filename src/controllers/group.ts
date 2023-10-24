@@ -1,5 +1,6 @@
 import { RequestHandler } from 'express';
 import prisma from '../utils/db';
+import logger from '../config/logger';
 
 export const getGroups: RequestHandler = async (req, res) => {
     const userId = req.prismaUser.pkId;
@@ -116,9 +117,10 @@ export const addMemberToGroup: RequestHandler = async (req, res) => {
     }
 };
 
-export const removeMemberFromGroup: RequestHandler = async (req, res) => {
+// back here: remove multiple members
+export const removeMembersFromGroup: RequestHandler = async (req, res) => {
     try {
-        const { groupId, contactId } = req.body;
+        const { groupId, contactIds } = req.body;
 
         const group = await prisma.group.findUnique({
             where: { id: groupId },
@@ -128,35 +130,45 @@ export const removeMemberFromGroup: RequestHandler = async (req, res) => {
             return res.status(404).json({ message: 'Group not found' });
         }
 
-        const contact = await prisma.contact.findUnique({
-            where: { id: contactId },
-        });
+        await Promise.all(
+            contactIds.map(async (contactId: string) => {
+                const contact = await prisma.contact.findUnique({
+                    where: { id: contactId },
+                });
 
-        if (!contact) {
-            return res.status(404).json({ message: 'Group not found' });
-        }
+                if (!contact) {
+                    return res
+                        .status(404)
+                        .json({ message: `Contact with ID ${contactId} not found` });
+                }
 
-        const groupContact = await prisma.contactGroup.findUnique({
-            where: {
-                contactId_groupId: {
-                    contactId: contact.pkId,
-                    groupId: group.pkId,
-                },
-            },
-        });
+                const groupContact = await prisma.contactGroup.findUnique({
+                    where: {
+                        contactId_groupId: {
+                            contactId: contact.pkId,
+                            groupId: group.pkId,
+                        },
+                    },
+                });
 
-        if (!groupContact) {
-            return res.status(404).json({ message: 'Member not found in the group' });
-        }
+                if (!groupContact) {
+                    return res
+                        .status(404)
+                        .json({ message: `Member with ID ${contactId} not found in the group` });
+                }
 
-        await prisma.contactGroup.delete({
-            where: {
-                pkId: groupContact.pkId,
-            },
-        });
+                await prisma.contactGroup.delete({
+                    where: {
+                        pkId: groupContact.pkId,
+                    },
+                });
+            }),
+        );
 
-        res.status(200).json({ message: 'Member removed from group successfully' });
-    } catch (error) {
+        res.status(200).json({ message: 'Members removed from the group successfully' });
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } catch (error: any) {
+        logger.error(error.message);
         res.status(500).json({ message: 'Internal server error' });
     }
 };

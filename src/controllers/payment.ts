@@ -143,6 +143,7 @@ export const pay: RequestHandler = async (req, res) => {
             },
             custom_field1: user.id,
             custom_field2: subscriptionId,
+            custom_field3: subscriptionType,
         };
 
         logger.warn(requestBody);
@@ -161,7 +162,7 @@ export const pay: RequestHandler = async (req, res) => {
     }
 };
 
-// back here: update subscriptionId in user table
+// back here: add to subscription quota & userSubscription
 export const handleNotification: RequestHandler = async (req, res) => {
     try {
         const {
@@ -172,6 +173,7 @@ export const handleNotification: RequestHandler = async (req, res) => {
             gross_amount,
             custom_field1,
             custom_field2,
+            custom_field3,
         } = req.body;
 
         if (
@@ -181,12 +183,21 @@ export const handleNotification: RequestHandler = async (req, res) => {
             !transaction_time ||
             !gross_amount ||
             !custom_field1 ||
-            !custom_field2
+            !custom_field2 ||
+            !custom_field3
         ) {
             return res.status(400).json({ error: 'Invalid notification data' });
         }
 
         const transaction_time_iso = new Date(transaction_time).toISOString();
+        const oneMonthLater = new Date(
+            new Date(transaction_time).setMonth(new Date(transaction_time).getMonth() + 1),
+        );
+        const oneMonthLaterISO = oneMonthLater.toISOString();
+        const oneYearLater = new Date(
+            new Date(transaction_time).setFullYear(new Date(transaction_time).getFullYear() + 1),
+        );
+        const oneYearLaterISO = oneYearLater.toISOString();
 
         const user = await prisma.user.findUnique({
             where: { id: custom_field1 },
@@ -221,6 +232,39 @@ export const handleNotification: RequestHandler = async (req, res) => {
                     where: { id: user.id },
                     data: {
                         subscriptionId: subscription.pkId,
+                    },
+                });
+                await transaction.userSubscription.create({
+                    data: {
+                        startDate: transaction_time_iso,
+                        endDate: custom_field3 == 'yearly' ? oneYearLaterISO : oneMonthLaterISO,
+                        userId: user.pkId,
+                        subscriptionId: subscription.pkId,
+                    },
+                });
+
+                await transaction.autoReplyQuota.create({
+                    data: {
+                        max: subscription.autoReplyQuota,
+                        userId: user.pkId,
+                    },
+                });
+                await transaction.broadcastQuota.create({
+                    data: {
+                        max: subscription.broadcastQuota,
+                        userId: user.pkId,
+                    },
+                });
+                await transaction.contactQuota.create({
+                    data: {
+                        max: subscription.contactQuota,
+                        userId: user.pkId,
+                    },
+                });
+                await transaction.deviceQuota.create({
+                    data: {
+                        max: subscription.deviceQuota,
+                        userId: user.pkId,
                     },
                 });
             });

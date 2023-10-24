@@ -143,7 +143,7 @@ model UserSubscription {
 model AutoReplyQuota {
   id     Int  @id @default(autoincrement())
   used   Int  @default(0)
-  max    Int
+  max    Int?
   user   User @relation(fields: [userId], references: [pkId])
   userId Int
 }
@@ -151,7 +151,7 @@ model AutoReplyQuota {
 model BroadcastQuota {
   id     Int  @id @default(autoincrement())
   used   Int  @default(0)
-  max    Int
+  max    Int?
   user   User @relation(fields: [userId], references: [pkId])
   userId Int
 }
@@ -159,7 +159,7 @@ model BroadcastQuota {
 model ContactQuota {
   id     Int  @id @default(autoincrement())
   used   Int  @default(0)
-  max    Int
+  max    Int?
   user   User @relation(fields: [userId], references: [pkId])
   userId Int
 }
@@ -167,7 +167,7 @@ model ContactQuota {
 model DeviceQuota {
   id     Int  @id @default(autoincrement())
   used   Int  @default(0)
-  max    Int
+  max    Int?
   user   User @relation(fields: [userId], references: [pkId])
   userId Int
 }
