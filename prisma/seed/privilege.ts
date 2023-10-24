@@ -7,15 +7,15 @@ async function seedPrivileges(prisma: PrismaClient) {
         await prisma.privilege.createMany({
             data: [
                 {
-                    name: 'Super Admin',
+                    name: 'super admin',
                     isSuperadmin: true,
                 },
                 {
-                    name: 'Admin',
+                    name: 'admin',
                     isSuperadmin: false,
                 },
                 {
-                    name: 'CS',
+                    name: 'cs',
                     isSuperadmin: false,
                 },
             ],

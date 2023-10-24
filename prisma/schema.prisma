@@ -8,31 +8,36 @@ generator client {
 }
 
 model User {
-  pkId             Int               @id @default(autoincrement())
-  id               String            @unique @default(uuid()) @db.Uuid
-  firstName        String            @map("first_name") @db.VarChar(128)
-  lastName         String?           @map("last_name") @db.VarChar(128)
-  username         String            @unique @db.VarChar(128)
-  phone            String?           @unique @db.VarChar(20)
-  email            String            @unique @db.VarChar(255)
-  password         String            @db.VarChar(255)
-  accountApiKey    String            @unique @map("account_api_key") @db.VarChar(128)
-  googleId         String?           @unique @map("google_id") @db.VarChar(128)
-  affiliationCode  String            @map("affiliation_code") @db.VarChar(128)
-  emailOtpSecret   String?           @map("email_otp_secret") @db.VarChar(255)
-  refreshToken     String?           @unique @map("refresh_token") @db.VarChar(255)
-  createdAt        DateTime          @default(now()) @map("created_at")
-  updatedAt        DateTime          @default(now()) @map("updated_at")
-  deletedAt        DateTime?         @map("deleted_at")
-  emailVerifiedAt  DateTime?         @map("email_verfied_at")
-  subscriptionId   Int               @map("subsription_id")
-  privilegeId      Int               @map("privilege_id")
-  subscription     Subscription      @relation(fields: [subscriptionId], references: [pkId])
-  privilege        Privilege         @relation(fields: [privilegeId], references: [pkId])
+  pkId             Int                @id @default(autoincrement())
+  id               String             @unique @default(uuid()) @db.Uuid
+  firstName        String             @map("first_name") @db.VarChar(128)
+  lastName         String?            @map("last_name") @db.VarChar(128)
+  username         String             @unique @db.VarChar(128)
+  phone            String?            @unique @db.VarChar(20)
+  email            String             @unique @db.VarChar(255)
+  password         String             @db.VarChar(255)
+  accountApiKey    String             @unique @map("account_api_key") @db.VarChar(128)
+  googleId         String?            @unique @map("google_id") @db.VarChar(128)
+  affiliationCode  String             @map("affiliation_code") @db.VarChar(128)
+  emailOtpSecret   String?            @map("email_otp_secret") @db.VarChar(255)
+  refreshToken     String?            @unique @map("refresh_token") @db.VarChar(255)
+  createdAt        DateTime           @default(now()) @map("created_at")
+  updatedAt        DateTime           @default(now()) @map("updated_at")
+  deletedAt        DateTime?          @map("deleted_at")
+  emailVerifiedAt  DateTime?          @map("email_verfied_at")
+  subscriptionId   Int?               @map("subsription_id")
+  privilegeId      Int?               @map("privilege_id")
+  subscription     Subscription?      @relation(fields: [subscriptionId], references: [pkId], onDelete: SetNull)
+  privilege        Privilege?         @relation(fields: [privilegeId], references: [pkId], onDelete: SetNull)
   customerServices CustomerService[]
   transactions     Transaction[]
   devices          Device[]
   Group            Group[]
+  UserSubscription UserSubscription[]
+  AutoReplyQuota   AutoReplyQuota[]
+  BroadcastQuota   BroadcastQuota[]
+  ContactQuota     ContactQuota[]
+  DeviceQuota      DeviceQuota[]
 }
 
 model CustomerService {
@@ -55,7 +60,7 @@ model CustomerService {
 model Privilege {
   pkId             Int               @id @default(autoincrement())
   id               String            @unique @default(uuid()) @db.Uuid
-  name             String            @db.VarChar(128)
+  name             String            @unique @db.VarChar(128)
   isSuperadmin     Boolean           @default(false) @map("is_superadmin")
   users            User[]
   roles            PrivilegeRole[]
@@ -105,16 +110,66 @@ model Modul {
 }
 
 model Subscription {
-  pkId         Int           @id @default(autoincrement())
-  id           String        @unique @default(uuid()) @db.Uuid
-  name         String        @db.VarChar(128)
-  monthlyPrice Decimal       @map("monthly_price") @db.Decimal(10, 2)
-  yearlyPrice  Decimal       @map("yearly_price") @db.Decimal(10, 2)
-  isAvailable  Boolean       @default(true) @map("is_available")
-  createdAt    DateTime      @default(now()) @map("created_at")
-  updatedAt    DateTime      @default(now()) @map("updated_at")
-  users        User[]
-  transactions Transaction[]
+  pkId                  Int                @id @default(autoincrement())
+  id                    String             @unique @default(uuid()) @db.Uuid
+  name                  String             @unique @db.VarChar(128)
+  monthlyPrice          Decimal            @map("monthly_price") @db.Decimal(10, 2)
+  yearlyPrice           Decimal            @map("yearly_price") @db.Decimal(10, 2)
+  autoReplyQuota        Int?
+  broadcastQuota        Int?
+  contactQuota          Int?
+  deviceQuota           Int?
+  isIntegration         Boolean?
+  isGoogleContactSync   Boolean?
+  isWhatsappContactSync Boolean?
+  isAvailable           Boolean            @default(true) @map("is_available")
+  createdAt             DateTime           @default(now()) @map("created_at")
+  updatedAt             DateTime           @default(now()) @map("updated_at")
+  users                 User[]
+  transactions          Transaction[]
+  UserSubscription      UserSubscription[]
+}
+
+model UserSubscription {
+  pkId           Int          @id @default(autoincrement())
+  startDate      DateTime
+  endDate        DateTime
+  userId         Int
+  subscriptionId Int
+  user           User         @relation(fields: [userId], references: [pkId], onDelete: Cascade)
+  subscription   Subscription @relation(fields: [subscriptionId], references: [pkId], onDelete: Cascade)
+}
+
+model AutoReplyQuota {
+  id     Int  @id @default(autoincrement())
+  used   Int  @default(0)
+  max    Int
+  user   User @relation(fields: [userId], references: [pkId])
+  userId Int
+}
+
+model BroadcastQuota {
+  id     Int  @id @default(autoincrement())
+  used   Int  @default(0)
+  max    Int
+  user   User @relation(fields: [userId], references: [pkId])
+  userId Int
+}
+
+model ContactQuota {
+  id     Int  @id @default(autoincrement())
+  used   Int  @default(0)
+  max    Int
+  user   User @relation(fields: [userId], references: [pkId])
+  userId Int
+}
+
+model DeviceQuota {
+  id     Int  @id @default(autoincrement())
+  used   Int  @default(0)
+  max    Int
+  user   User @relation(fields: [userId], references: [pkId])
+  userId Int
 }
 
 model Transaction {
@@ -122,6 +177,7 @@ model Transaction {
   id             String       @unique @default(uuid()) @db.Uuid
   name           String       @db.VarChar(128)
   paidPrice      Decimal      @map("paid_price") @db.Decimal(10, 2)
+  status         String?
   createdAt      DateTime     @default(now()) @map("created_at")
   updatedAt      DateTime     @default(now()) @map("updated_at")
   userId         Int
@@ -169,8 +225,8 @@ model Contact {
   id             String          @unique @default(uuid()) @db.Uuid
   firstName      String          @db.VarChar(128)
   lastName       String?         @db.VarChar(128)
-  phone          String          @unique @db.VarChar(20)
-  email          String          @unique @db.VarChar(255)
+  phone          String          @db.VarChar(20)
+  email          String          @db.VarChar(255)
   gender         String          @db.VarChar(10)
   dob            DateTime        @db.Date
   colorCode      String?         @db.VarChar(6)
@@ -197,6 +253,8 @@ model DeviceLabel {
   updatedAt DateTime @updatedAt @map("updated_at")
   device    Device   @relation(fields: [deviceId], references: [pkId], onDelete: Cascade)
   label     Label    @relation(fields: [labelId], references: [pkId], onDelete: Cascade)
+
+  @@unique([deviceId, labelId])
 }
 
 model ContactLabel {
@@ -207,6 +265,8 @@ model ContactLabel {
   updatedAt DateTime @updatedAt @map("updated_at")
   contact   Contact  @relation(fields: [contactId], references: [pkId], onDelete: Cascade)
   label     Label    @relation(fields: [labelId], references: [pkId], onDelete: Cascade)
+
+  @@unique([contactId, labelId])
 }
 
 model ContactGroup {
@@ -227,6 +287,8 @@ model ContactDevice {
   deviceId  Int
   contact   Contact @relation(fields: [contactId], references: [pkId], onDelete: Cascade)
   device    Device  @relation(fields: [deviceId], references: [pkId], onDelete: Cascade)
+
+  @@unique([contactId, deviceId])
 }
 
 model Group {

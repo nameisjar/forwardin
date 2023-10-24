@@ -164,18 +164,7 @@ export const updateDevice: RequestHandler = async (req, res) => {
             });
 
             // update labels
-            // back here: deviceId_labelId
-            if (labels && labels.length === 0) {
-                await transaction.label.deleteMany({
-                    where: {
-                        DeviceLabel: {
-                            some: {
-                                deviceId: updatedDevice.pkId,
-                            },
-                        },
-                    },
-                });
-            } else if (labels && labels.length > 0) {
+            if (labels && labels.length > 0) {
                 const labelIds: number[] = [];
                 const slugs = labels.map((slug: string) => generateSlug(slug));
 
@@ -227,6 +216,16 @@ export const updateDevice: RequestHandler = async (req, res) => {
                     })),
                     skipDuplicates: true,
                 });
+            } else {
+                await transaction.label.deleteMany({
+                    where: {
+                        DeviceLabel: {
+                            some: {
+                                deviceId: updatedDevice.pkId,
+                            },
+                        },
+                    },
+                });
             }
         });
         res.status(200).json({ message: 'Device updated successfully' });
@@ -236,7 +235,6 @@ export const updateDevice: RequestHandler = async (req, res) => {
     }
 };
 
-// back here: delete devices
 export const deleteDevices: RequestHandler = async (req, res) => {
     try {
         const deviceIds = req.body.deviceIds;

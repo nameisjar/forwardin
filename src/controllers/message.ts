@@ -148,7 +148,7 @@ export const getMessages: RequestHandler = async (req, res) => {
     }
 };
 
-// back here: show the name of the contact
+// back here: show the name & color code of the contact
 export const getIncomingMessages: RequestHandler = async (req, res) => {
     try {
         const { sessionId } = req.params;
@@ -162,12 +162,17 @@ export const getIncomingMessages: RequestHandler = async (req, res) => {
             })
         ).map((m) => serializePrisma(m));
 
+        const totalMessages = await prisma.incomingMessage.count({
+            where: { sessionId },
+        });
+
         res.status(200).json({
             data: messages,
             cursor:
                 messages.length !== 0 && messages.length === Number(limit)
                     ? messages[messages.length - 1].pkId
                     : null,
+            total: totalMessages,
         });
     } catch (e) {
         const message = 'An error occured during message list';
@@ -189,12 +194,17 @@ export const getOutgoingMessages: RequestHandler = async (req, res) => {
             })
         ).map((m) => serializePrisma(m));
 
+        const totalMessages = await prisma.outgoingMessage.count({
+            where: { sessionId },
+        });
+
         res.status(200).json({
             data: messages,
             cursor:
                 messages.length !== 0 && messages.length === Number(limit)
                     ? messages[messages.length - 1].pkId
                     : null,
+            total: totalMessages,
         });
     } catch (e) {
         const message = 'An error occured during message list';

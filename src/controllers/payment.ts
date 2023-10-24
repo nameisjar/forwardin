@@ -161,11 +161,13 @@ export const pay: RequestHandler = async (req, res) => {
     }
 };
 
+// back here: update subscriptionId in user table
 export const handleNotification: RequestHandler = async (req, res) => {
     try {
         const {
             order_id,
             transaction_id,
+            transaction_status,
             transaction_time,
             gross_amount,
             custom_field1,
@@ -175,6 +177,7 @@ export const handleNotification: RequestHandler = async (req, res) => {
         if (
             !order_id ||
             !transaction_id ||
+            !transaction_status ||
             !transaction_time ||
             !gross_amount ||
             !custom_field1 ||
@@ -198,19 +201,28 @@ export const handleNotification: RequestHandler = async (req, res) => {
         }
 
         if (user) {
-            await prisma.transaction.upsert({
-                where: { id: transaction_id },
-                create: {
-                    name: order_id,
-                    id: transaction_id,
-                    paidPrice: gross_amount,
-                    userId: user.pkId,
-                    subscriptionId: subscription.pkId,
-                    createdAt: transaction_time_iso,
-                },
-                update: {
-                    updatedAt: transaction_time_iso,
-                },
+            await prisma.$transaction(async (transaction) => {
+                await transaction.transaction.upsert({
+                    where: { id: transaction_id },
+                    create: {
+                        name: order_id,
+                        id: transaction_id,
+                        paidPrice: gross_amount,
+                        status: transaction_status,
+                        userId: user.pkId,
+                        subscriptionId: subscription.pkId,
+                        createdAt: transaction_time_iso,
+                    },
+                    update: {
+                        updatedAt: transaction_time_iso,
+                    },
+                });
+                await transaction.user.update({
+                    where: { id: user.id },
+                    data: {
+                        subscriptionId: subscription.pkId,
+                    },
+                });
             });
             return res.status(200).json({ message: 'Transaction created successfully' });
         } else {
@@ -232,6 +244,13 @@ export const getSubscriptions: RequestHandler = async (req, res) => {
                 name: true,
                 monthlyPrice: true,
                 yearlyPrice: true,
+                autoReplyQuota: true,
+                broadcastQuota: true,
+                contactQuota: true,
+                deviceQuota: true,
+                isGoogleContactSync: true,
+                isIntegration: true,
+                isWhatsappContactSync: true,
             },
         });
         res.status(200).json(subscriptions);
@@ -251,6 +270,13 @@ export const getSubscription: RequestHandler = async (req, res) => {
                 name: true,
                 monthlyPrice: true,
                 yearlyPrice: true,
+                autoReplyQuota: true,
+                broadcastQuota: true,
+                contactQuota: true,
+                deviceQuota: true,
+                isGoogleContactSync: true,
+                isIntegration: true,
+                isWhatsappContactSync: true,
             },
         });
         res.status(200).json(subscription);
@@ -267,7 +293,25 @@ export const getTransactions: RequestHandler = async (req, res) => {
             where: { userId },
         });
         res.status(200).json(transactions);
-    } catch (error) {
-        res.status(500).json(error);
+    } catch (error: any) {
+        res.status(500).json(error.message);
+    }
+};
+
+export const getTransactionStatus: RequestHandler = async (req, res) => {
+    try {
+        const transactionId = req.params.transactionId;
+
+        const transactions = await prisma.transaction.findUnique({
+            where: { id: transactionId },
+        });
+
+        if (!transactions) {
+            res.status(404).json({ message: 'Transaction not found.' });
+        }
+
+        res.status(200).json({ status: transactions?.status });
+    } catch (error: any) {
+        res.status(500).json(error.message);
     }
 };

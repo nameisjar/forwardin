@@ -7,16 +7,19 @@ export const createContact: RequestHandler = async (req, res) => {
     try {
         const { firstName, lastName, phone, email, gender, dob, labels, deviceId } = req.body;
 
+        const pkId = req.prismaUser.pkId;
+
         const existingContact = await prisma.contact.findFirst({
             where: {
                 OR: [{ email: email }, { phone: phone }],
+                AND: { contactDevices: { some: { device: { userId: pkId } } } },
             },
         });
 
         if (existingContact) {
-            return res
-                .status(400)
-                .json({ message: 'Contact with this email or phone number already exists' });
+            return res.status(400).json({
+                message: 'Contact with this email or phone number already exists in your contact',
+            });
         }
 
         await prisma.$transaction(async (transaction) => {
@@ -154,7 +157,7 @@ export const getContact: RequestHandler = async (req, res) => {
                 contactDevices: {
                     select: {
                         device: {
-                            select: { name: true },
+                            select: { name: true, id: true },
                         },
                     },
                 },
@@ -181,39 +184,133 @@ export const getContact: RequestHandler = async (req, res) => {
 export const updateContact: RequestHandler = async (req, res) => {
     try {
         const contactId = req.params.contactId;
-        const { firstName, lastName, phone, email, gender, dob } = req.body;
+        const { firstName, lastName, phone, email, gender, dob, labels, deviceId } = req.body;
 
-        const existingContact = await prisma.contact.findUnique({
-            where: {
-                id: contactId,
-            },
-        });
+        await prisma.$transaction(async (transaction) => {
+            const existingContact = await prisma.contact.findUnique({
+                where: {
+                    id: contactId,
+                },
+                include: {
+                    contactDevices: {
+                        select: {
+                            id: true,
+                        },
+                    },
+                },
+            });
 
-        if (!existingContact) {
-            return res.status(404).json({ message: 'Contact nout found' });
-        }
+            if (!existingContact) {
+                return res.status(404).json({ message: 'Contact not found' });
+            }
 
-        await prisma.contact.update({
-            where: {
-                pkId: existingContact.pkId,
-            },
-            data: {
-                firstName,
-                lastName,
-                phone,
-                email,
-                gender,
-                dob: new Date(dob),
-            },
+            // update contact
+            const updatedContact = await transaction.contact.update({
+                where: {
+                    pkId: existingContact.pkId,
+                },
+                data: {
+                    firstName,
+                    lastName,
+                    phone,
+                    email,
+                    gender,
+                    dob: new Date(dob),
+                    updatedAt: new Date(),
+                },
+            });
+
+            // update labels
+            if (labels && labels.length > 0) {
+                const labelIds: number[] = [];
+                const slugs = labels.map((slug: string) => generateSlug(slug));
+
+                await transaction.label.deleteMany({
+                    where: {
+                        ContactLabel: {
+                            some: {
+                                contactId: updatedContact.pkId,
+                            },
+                        },
+                        NOT: {
+                            slug: {
+                                in: slugs,
+                            },
+                        },
+                    },
+                });
+
+                for (const labelName of labels) {
+                    const slug = generateSlug(labelName);
+                    const createdLabel = await transaction.label.upsert({
+                        where: {
+                            slug,
+                        },
+                        create: {
+                            name: labelName,
+                            slug,
+                        },
+                        update: {
+                            name: labelName,
+                            slug,
+                        },
+                    });
+
+                    labelIds.push(createdLabel.pkId);
+                }
+
+                // update contact-label
+                await transaction.contactLabel.deleteMany({
+                    where: {
+                        contactId: updatedContact.pkId,
+                    },
+                });
+
+                await transaction.contactLabel.createMany({
+                    data: labelIds.map((labelId) => ({
+                        contactId: updatedContact.pkId,
+                        labelId: labelId,
+                    })),
+                    skipDuplicates: true,
+                });
+            } else {
+                await transaction.label.deleteMany({
+                    where: {
+                        ContactLabel: {
+                            some: {
+                                contactId: updatedContact.pkId,
+                            },
+                        },
+                    },
+                });
+            }
+
+            // update device
+            const existingDevice = await transaction.device.findUnique({
+                where: {
+                    id: deviceId,
+                },
+            });
+
+            if (!existingDevice) {
+                throw new Error('Device not found');
+            }
+
+            await transaction.contactDevice.update({
+                where: { id: existingContact.contactDevices[0].id },
+                data: {
+                    deviceId: existingDevice.pkId,
+                },
+            });
         });
 
         res.status(200).json({ message: 'Contact updated successfully' });
-    } catch (error) {
-        res.status(500).json({ message: 'Internal server error' });
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } catch (error: any) {
+        res.status(500).json({ message: error.message });
     }
 };
 
-// back here: delete batch
 export const deleteContacts: RequestHandler = async (req, res) => {
     try {
         const contactIds = req.body.contactIds;

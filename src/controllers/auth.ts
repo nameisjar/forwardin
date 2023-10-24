@@ -10,8 +10,8 @@ import bcrypt from 'bcrypt';
 import jwt from 'jsonwebtoken';
 import prisma from '../utils/db';
 import axios from 'axios';
+import logger from '../config/logger';
 
-// back here: set default privilege
 export const register: RequestHandler = async (req, res) => {
     try {
         const { firstName, lastName, username, phone, email, password, confirmPassword } = req.body;
@@ -32,10 +32,11 @@ export const register: RequestHandler = async (req, res) => {
         }
 
         const existingSubscription = await prisma.subscription.findUnique({
-            where: { pkId: 1 },
+            where: { name: 'starter' },
         });
+
         const existingPrivilege = await prisma.privilege.findUnique({
-            where: { pkId: 2 },
+            where: { name: 'admin' },
         });
         if (existingSubscription && existingPrivilege) {
             const newUser = await prisma.user.create({
@@ -48,8 +49,8 @@ export const register: RequestHandler = async (req, res) => {
                     password: hashedPassword,
                     accountApiKey: generateUuid(),
                     affiliationCode: username,
-                    subscription: { connect: { pkId: 1 } },
-                    privilege: { connect: { pkId: 2 } },
+                    subscription: { connect: { pkId: existingSubscription.pkId } },
+                    privilege: { connect: { pkId: existingPrivilege.pkId } },
                 },
             });
 
@@ -69,7 +70,7 @@ export const register: RequestHandler = async (req, res) => {
             });
         }
     } catch (error: any) {
-        req.log.error('Error:', error.message);
+        logger.error('Error:', error.message);
         res.status(500).json({ message: 'Internal server error' });
     }
 };
@@ -138,7 +139,7 @@ export const login: RequestHandler = async (req, res) => {
         const refreshToken = user.refreshToken;
         const id = user.id;
 
-        return res.status(200).json({ accessToken, refreshToken, id });
+        return res.status(200).json({ accessToken, refreshToken, id, role: user.privilegeId });
     } catch (error) {
         req.log.error('Error:', error);
         return res.status(500).json({ message: 'Internal server error' });
@@ -464,10 +465,11 @@ export const loginRegisterByGoogle: RequestHandler = async (req, res) => {
             const profileData = response.data;
 
             const existingSubscription = await prisma.subscription.findUnique({
-                where: { pkId: 1 },
+                where: { name: 'starter' },
             });
+
             const existingPrivilege = await prisma.privilege.findUnique({
-                where: { pkId: 2 },
+                where: { name: 'admin' },
             });
 
             if (!profileData.emailAddresses || !profileData.names) {
@@ -503,8 +505,8 @@ export const loginRegisterByGoogle: RequestHandler = async (req, res) => {
                         accountApiKey: generateUuid(),
                         phone,
                         affiliationCode: username,
-                        subscription: { connect: { pkId: 1 } },
-                        privilege: { connect: { pkId: 2 } },
+                        subscription: { connect: { pkId: existingSubscription.pkId } },
+                        privilege: { connect: { pkId: existingPrivilege.pkId } },
                         email,
                         password: '',
                     },
