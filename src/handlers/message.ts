@@ -69,6 +69,7 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                             },
                         });
 
+                        // !!!back here: handle for extended text message and image message caption too
                         if (data.message.conversation) {
                             if (message.key.fromMe) {
                                 await prisma.outgoingMessage.createMany({

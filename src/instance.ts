@@ -191,13 +191,21 @@ export async function createInstance(options: createInstanceOptions) {
         if (connection === 'open') {
             retries.delete(sessionId);
             SSEQRGenerations.delete(sessionId);
+
+            // ?back here: forbid duplicate phone numbers
+            const phone = sock.user?.id.split(':')[0];
+
+            await prisma.device.update({
+                where: { pkId: deviceId },
+                data: { phone },
+            });
         }
         if (connection === 'close') handleConnectionClose();
         handleConnectionUpdate();
 
         await prisma.device.update({
             where: { pkId: deviceId },
-            data: { status: connection, phone: sock.user?.id.split(':')[0] },
+            data: { status: connection },
         });
     });
 
