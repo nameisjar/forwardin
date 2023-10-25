@@ -230,7 +230,7 @@ export const handleNotification: RequestHandler = async (req, res) => {
             });
 
             // back here: update userSubscription & subscription quota if status success
-            if (transaction.status == 'settlement') {
+            if (transaction.status == 'settlement' || transaction.status == 'success') {
                 await prisma.$transaction(async (transaction) => {
                     await transaction.user.update({
                         where: { id: user.id },
@@ -273,6 +273,8 @@ export const handleNotification: RequestHandler = async (req, res) => {
                     });
                 });
                 return res.status(200).json({ message: 'Transaction created successfully' });
+            } else {
+                return res.status(500).json({ error: 'Failed to create or update transaction' });
             }
         } else {
             return res.status(500).json({ error: 'Failed to create or update transaction' });
