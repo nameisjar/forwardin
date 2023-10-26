@@ -148,7 +148,6 @@ export const getMessages: RequestHandler = async (req, res) => {
     }
 };
 
-// back here: show the name & color code of the contact
 export const getIncomingMessages: RequestHandler = async (req, res) => {
     try {
         const { sessionId } = req.params;
@@ -229,6 +228,69 @@ export const getOutgoingMessages: RequestHandler = async (req, res) => {
     }
 };
 
+export const getConversationMessages: RequestHandler = async (req, res) => {
+    try {
+        const { sessionId } = req.params;
+        const { cursor = undefined, limit = 25, phoneNumber } = req.query;
+
+        const incomingMessages = await prisma.incomingMessage.findMany({
+            cursor: cursor ? { pkId: Number(cursor) } : undefined,
+            take: Number(limit),
+            skip: cursor ? 1 : 0,
+            where: {
+                sessionId,
+                from: phoneNumber ? phoneNumber.toString() + '@s.whatsapp.net' : undefined,
+            },
+            include: {
+                contact: {
+                    select: { firstName: true, lastName: true, colorCode: true },
+                },
+            },
+        });
+
+        const outgoingMessages = await prisma.outgoingMessage.findMany({
+            cursor: cursor ? { pkId: Number(cursor) } : undefined,
+            take: Number(limit),
+            skip: cursor ? 1 : 0,
+            where: {
+                sessionId,
+                to: phoneNumber ? phoneNumber.toString() + '@s.whatsapp.net' : undefined,
+            },
+            include: {
+                contact: {
+                    select: { firstName: true, lastName: true, colorCode: true },
+                },
+            },
+        });
+
+        // Combine incoming and outgoing messages into one array
+        const allMessages = [...incomingMessages, ...outgoingMessages];
+        logger.warn(allMessages);
+
+        // Sort the combined messages by timestamp (receivedAt or createdAt)
+        allMessages.sort((a, b) => {
+            const timestampA = a.createdAt;
+            const timestampB = b.createdAt;
+            return timestampA.getTime() - timestampB.getTime();
+        });
+
+        // Apply pagination
+        const messages = allMessages.slice(0, Number(limit));
+        const cursorId = messages.length > 0 ? messages[messages.length - 1].pkId : null;
+
+        const totalMessages = incomingMessages.length + outgoingMessages.length;
+
+        res.status(200).json({
+            data: messages.map((m) => serializePrisma(m)),
+            cursor: cursorId,
+            total: totalMessages,
+        });
+    } catch (e) {
+        const message = 'An error occurred during message list';
+        logger.error(e, message);
+        res.status(500).json({ error: message });
+    }
+};
 // to do: send template message & personalization
 // to do: auto reply (triggered by certain words)
 // to do: scheduled send message(s)

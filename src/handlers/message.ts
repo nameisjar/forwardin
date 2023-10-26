@@ -17,6 +17,7 @@ const getKeyAuthor = (key: WAMessageKey | undefined | null) =>
 export default function messageHandler(sessionId: string, event: BaileysEventEmitter) {
     let listening = false;
 
+    // obtain messages history
     const set: BaileysEventHandler<'messaging-history.set'> = async ({ messages, isLatest }) => {
         try {
             await prisma.$transaction(async (tx) => {
@@ -69,13 +70,16 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                             },
                         });
 
-                        // !!!back here: handle for extended text message and image message caption too
-                        if (data.message.conversation) {
+                        if (data.message) {
                             if (message.key.fromMe) {
                                 await prisma.outgoingMessage.createMany({
                                     data: {
                                         to: jidNormalizedUser(message.key.remoteJid!),
-                                        message: data.message.conversation || '',
+                                        message:
+                                            data.message.conversation ||
+                                            data.message.extendedTextMessage?.text ||
+                                            data.message.imageMessage?.caption ||
+                                            '',
                                         schedule: new Date(),
                                         status: data.status.toString(),
                                         source: '',
@@ -87,7 +91,11 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                                 await prisma.incomingMessage.createMany({
                                     data: {
                                         from: jidNormalizedUser(message.key.remoteJid!),
-                                        message: data.message.conversation,
+                                        message:
+                                            data.message.conversation ||
+                                            data.message.extendedTextMessage?.text ||
+                                            data.message.imageMessage?.caption ||
+                                            '',
                                         receivedAt: new Date(data.messageTimestamp * 1000),
                                         sessionId,
                                         contactId: contact?.pkId || null,
