@@ -134,7 +134,7 @@ model UserSubscription {
   pkId           Int          @id @default(autoincrement())
   startDate      DateTime
   endDate        DateTime
-  userId         Int
+  userId         Int          @unique
   subscriptionId Int
   user           User         @relation(fields: [userId], references: [pkId], onDelete: Cascade)
   subscription   Subscription @relation(fields: [subscriptionId], references: [pkId], onDelete: Cascade)
@@ -316,7 +316,7 @@ model OutgoingMessage {
   updatedAt DateTime @default(now()) @map("updated_at")
   sessionId String
   contactId Int?
-  contact   Contact?  @relation(fields: [contactId], references: [pkId], onDelete: Cascade)
+  contact   Contact? @relation(fields: [contactId], references: [pkId], onDelete: Cascade)
 }
 
 model IncomingMessage {
@@ -329,7 +329,7 @@ model IncomingMessage {
   updatedAt  DateTime @default(now()) @map("updated_at")
   sessionId  String
   contactId  Int?
-  contact    Contact?  @relation(fields: [contactId], references: [pkId], onDelete: Cascade)
+  contact    Contact? @relation(fields: [contactId], references: [pkId], onDelete: Cascade)
 }
 
 model AutoReply {

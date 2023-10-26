@@ -162,7 +162,6 @@ export const pay: RequestHandler = async (req, res) => {
     }
 };
 
-// back here: update status
 export const handleNotification: RequestHandler = async (req, res) => {
     try {
         const {
@@ -211,74 +210,79 @@ export const handleNotification: RequestHandler = async (req, res) => {
             return res.status(404).json({ error: 'Subscription not found' });
         }
 
-        if (user) {
-            const transaction = await prisma.transaction.upsert({
-                where: { id: transaction_id },
-                create: {
-                    name: order_id,
-                    id: transaction_id,
-                    paidPrice: gross_amount,
-                    status: transaction_status,
-                    userId: user.pkId,
-                    subscriptionId: subscription.pkId,
-                    createdAt: transaction_time_iso,
-                },
-                update: {
-                    status: transaction_status,
-                    updatedAt: transaction_time_iso,
-                },
-            });
-
-            // back here: update userSubscription & subscription quota if status success
-            if (transaction.status == 'settlement' || transaction.status == 'success') {
-                await prisma.$transaction(async (transaction) => {
-                    await transaction.user.update({
-                        where: { id: user.id },
-                        data: {
-                            subscriptionId: subscription.pkId,
-                        },
-                    });
-                    await transaction.userSubscription.create({
-                        data: {
-                            startDate: transaction_time_iso,
-                            endDate: custom_field3 == 'yearly' ? oneYearLaterISO : oneMonthLaterISO,
-                            userId: user.pkId,
-                            subscriptionId: subscription.pkId,
-                        },
-                    });
-
-                    await transaction.autoReplyQuota.create({
-                        data: {
-                            max: subscription.autoReplyQuota,
-                            userId: user.pkId,
-                        },
-                    });
-                    await transaction.broadcastQuota.create({
-                        data: {
-                            max: subscription.broadcastQuota,
-                            userId: user.pkId,
-                        },
-                    });
-                    await transaction.contactQuota.create({
-                        data: {
-                            max: subscription.contactQuota,
-                            userId: user.pkId,
-                        },
-                    });
-                    await transaction.deviceQuota.create({
-                        data: {
-                            max: subscription.deviceQuota,
-                            userId: user.pkId,
-                        },
-                    });
-                });
-                return res.status(200).json({ message: 'Transaction created successfully' });
-            } else {
-                return res.status(500).json({ error: 'Failed to create or update transaction' });
-            }
-        } else {
-            return res.status(500).json({ error: 'Failed to create or update transaction' });
+        if (!user) {
+            return res.status(404).json({ error: 'User not found' });
         }
+
+        const transaction = await prisma.transaction.upsert({
+            where: { id: transaction_id },
+            create: {
+                name: order_id,
+                id: transaction_id,
+                paidPrice: gross_amount,
+                status: transaction_status,
+                userId: user.pkId,
+                subscriptionId: subscription.pkId,
+                createdAt: transaction_time_iso,
+            },
+            update: {
+                status: transaction_status,
+                updatedAt: transaction_time_iso,
+            },
+        });
+
+        if (transaction.status == 'settlement' || transaction.status == 'success') {
+            await prisma.$transaction(async (transaction) => {
+                await transaction.user.update({
+                    where: { id: user.id },
+                    data: {
+                        subscriptionId: subscription.pkId,
+                    },
+                });
+                await transaction.userSubscription.upsert({
+                    where: { userId: user.pkId },
+                    create: {
+                        startDate: transaction_time_iso,
+                        endDate: custom_field3 == 'yearly' ? oneYearLaterISO : oneMonthLaterISO,
+                        userId: user.pkId,
+                        subscriptionId: subscription.pkId,
+                    },
+                    update: {
+                        startDate: transaction_time_iso,
+                        endDate: custom_field3 == 'yearly' ? oneYearLaterISO : oneMonthLaterISO,
+                        userId: user.pkId,
+                        subscriptionId: subscription.pkId,
+                    },
+                });
+
+                await transaction.autoReplyQuota.create({
+                    data: {
+                        max: subscription.autoReplyQuota,
+                        userId: user.pkId,
+                    },
+                });
+                await transaction.broadcastQuota.create({
+                    data: {
+                        max: subscription.broadcastQuota,
+                        userId: user.pkId,
+                    },
+                });
+                await transaction.contactQuota.create({
+                    data: {
+                        max: subscription.contactQuota,
+                        userId: user.pkId,
+                    },
+                });
+                await transaction.deviceQuota.create({
+                    data: {
+                        max: subscription.deviceQuota,
+                        userId: user.pkId,
+                    },
+                });
+            });
+            return res.status(200).json({ message: 'Subscription created successfully' });
+        }
+        return res.status(200).json({ message: 'Transaction created successfully' });
     } catch (error) {
         const message = 'An error occured during payment notification handling';
         logger.error(error, message);
