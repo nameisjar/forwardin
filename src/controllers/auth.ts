@@ -499,6 +499,7 @@ export const loginRegisterByGoogle: RequestHandler = async (req, res) => {
                         privilege: { connect: { pkId: existingPrivilege.pkId } },
                         email,
                         password: '',
+                        emailVerifiedAt: new Date(),
                     },
                     update: {
                         googleId,

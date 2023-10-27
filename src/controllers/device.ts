@@ -72,7 +72,7 @@ export const createDevice: RequestHandler = async (req, res) => {
                 },
             });
 
-            useDevice(transaction, subscription);
+            await useDevice(transaction, subscription);
 
             if (labels && labels.length > 0) {
                 const labelIds: number[] = [];
