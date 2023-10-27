@@ -1,7 +1,7 @@
 import { PrismaClient } from '@prisma/client';
 
-async function seedSubscriptions(prisma: PrismaClient) {
-    await prisma.subscription.createMany({
+async function seedSubscriptionPlans(prisma: PrismaClient) {
+    await prisma.subscriptionPlan.createMany({
         data: [
             {
                 name: 'starter',
@@ -59,4 +59,4 @@ async function seedSubscriptions(prisma: PrismaClient) {
     });
 }
 
-export { seedSubscriptions };
+export { seedSubscriptionPlans };

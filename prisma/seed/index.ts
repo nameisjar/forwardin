@@ -1,5 +1,5 @@
 import { PrismaClient } from '@prisma/client';
-import { seedSubscriptions } from './subscription';
+import { seedSubscriptionPlans } from './subscriptionPlan';
 import { seedPrivileges } from './privilege';
 
 async function seedDatabase() {
@@ -9,7 +9,7 @@ async function seedDatabase() {
         await prisma.subscription.deleteMany();
         await prisma.privilege.deleteMany();
 
-        await seedSubscriptions(prisma);
+        await seedSubscriptionPlans(prisma);
         await seedPrivileges(prisma);
     } catch (error) {
         console.error('Seeder error:', error);

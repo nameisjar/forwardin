@@ -31,14 +31,10 @@ export const register: RequestHandler = async (req, res) => {
                 .json({ message: 'User with this username, email, or phone already exists' });
         }
 
-        const existingSubscription = await prisma.subscription.findUnique({
-            where: { name: 'starter' },
-        });
-
         const existingPrivilege = await prisma.privilege.findUnique({
             where: { name: 'admin' },
         });
-        if (existingSubscription && existingPrivilege) {
+        if (existingPrivilege) {
             const newUser = await prisma.user.create({
                 data: {
                     username,
@@ -49,7 +45,6 @@ export const register: RequestHandler = async (req, res) => {
                     password: hashedPassword,
                     accountApiKey: generateUuid(),
                     affiliationCode: username,
-                    subscription: { connect: { pkId: existingSubscription.pkId } },
                     privilege: { connect: { pkId: existingPrivilege.pkId } },
                 },
             });
@@ -66,7 +61,7 @@ export const register: RequestHandler = async (req, res) => {
             res.status(201).json({ accessToken, refreshToken, accountApiKey, id });
         } else {
             return res.status(404).json({
-                error: 'Subscription or privilege not found',
+                error: 'Privilege not found',
             });
         }
     } catch (error: any) {
@@ -464,17 +459,13 @@ export const loginRegisterByGoogle: RequestHandler = async (req, res) => {
         if (response.status === 200) {
             const profileData = response.data;
 
-            const existingSubscription = await prisma.subscription.findUnique({
-                where: { name: 'starter' },
-            });
-
             const existingPrivilege = await prisma.privilege.findUnique({
                 where: { name: 'admin' },
             });
 
             if (!profileData.emailAddresses || !profileData.names) {
                 return res.status(400).json({ message: 'Missing some profile data' });
-            } else if (existingSubscription && existingPrivilege) {
+            } else if (existingPrivilege) {
                 const googleId = profileData.names[0].metadata.source.id;
                 const username = profileData.emailAddresses[0].value.split('@')[0];
                 const email = profileData.emailAddresses[0].value;
@@ -505,7 +496,6 @@ export const loginRegisterByGoogle: RequestHandler = async (req, res) => {
                         accountApiKey: generateUuid(),
                         phone,
                         affiliationCode: username,
-                        subscription: { connect: { pkId: existingSubscription.pkId } },
                         privilege: { connect: { pkId: existingPrivilege.pkId } },
                         email,
                         password: '',

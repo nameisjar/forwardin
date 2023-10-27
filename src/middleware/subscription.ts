@@ -1,9 +1,16 @@
 import { RequestHandler } from 'express';
+import prisma from '../utils/db';
 
-export const isPremiumMember: RequestHandler = (req, res, next) => {
-    if (req.prismaUser && req.prismaUser.subscriptionId === 2) {
+export const isSubscriber: RequestHandler = async (req, res, next) => {
+    const userId = req.prismaUser.pkId;
+
+    const subscription = await prisma.subscription.findFirst({
+        where: { userId },
+    });
+
+    if (userId && subscription && subscription.endDate > new Date()) {
         next();
     } else {
-        res.status(403).json({ message: 'Access denied: Premium membership required' });
+        res.status(403).json({ message: 'Access denied: Membership required' });
     }
 };

@@ -74,21 +74,21 @@ export const deleteUser: RequestHandler = async (req, res) => {
     }
 };
 
-export const getUserSubscriptionQuota: RequestHandler = async (req, res) => {
+export const getUserSubscriptionDetail: RequestHandler = async (req, res) => {
     try {
-        const { userId } = req.params;
+        const userId = req.prismaUser.pkId;
 
-        const user = await prisma.user.findUnique({
-            where: { id: userId },
-            select: {
-                AutoReplyQuota: { select: { max: true, used: true } },
-                BroadcastQuota: { select: { max: true, used: true } },
-                ContactQuota: { select: { max: true, used: true } },
-                DeviceQuota: { select: { max: true, used: true } },
-            },
+        const subscription = await prisma.subscription.findFirst({
+            where: { userId },
+            include: { subscriptionPlan: { select: { name: true } } },
+            orderBy: { startDate: 'desc' },
         });
 
-        res.status(200).json(user);
+        if (!subscription) {
+            res.status(404).json({ message: 'Subscription not found' });
+        }
+
+        res.status(200).json(subscription);
     } catch (error: any) {
         logger.error(error.message);
         res.status(500).json({ message: 'Internal server error' });

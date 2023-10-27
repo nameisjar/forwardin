@@ -11,18 +11,24 @@ export const pay: RequestHandler = async (req, res) => {
         const apiKey = process.env.MIDTRANS_KEY!;
         const user = req.prismaUser;
 
-        const { subscriptionId, subscriptionType } = req.body;
+        const { subscriptionPlanId, subscriptionPlanType } = req.body;
 
-        const subscription = await prisma.subscription.findUnique({
-            where: { id: subscriptionId },
+        if (!subscriptionPlanId || !subscriptionPlanType) {
+            return res.status(400).json({ error: 'Invalid payment data' });
+        }
+
+        const subscriptionPlan = await prisma.subscriptionPlan.findUnique({
+            where: { id: subscriptionPlanId },
         });
 
-        if (!subscription) {
+        if (!subscriptionPlan) {
             return res.status(404).json({ error: 'Subscription not found' });
         }
 
         const paidPrice =
-            subscriptionType == 'monthly' ? subscription?.monthlyPrice : subscription?.yearlyPrice;
+            subscriptionPlanType == 'monthly'
+                ? subscriptionPlan?.monthlyPrice
+                : subscriptionPlan?.yearlyPrice;
 
         if (paidPrice === null || paidPrice === undefined) {
             return res.status(400).json({ error: 'Invalid subscriptionType' });
@@ -39,10 +45,10 @@ export const pay: RequestHandler = async (req, res) => {
             },
             item_details: [
                 {
-                    id: subscriptionId,
+                    id: subscriptionPlanId,
                     price: paidPrice,
                     quantity: 1,
-                    name: subscription?.name,
+                    name: subscriptionPlan?.name,
                     brand: 'Forwardin',
                     category: 'Subscription',
                     merchant_name: 'Forwardin',
@@ -142,8 +148,8 @@ export const pay: RequestHandler = async (req, res) => {
                 duration: 10,
             },
             custom_field1: user.id,
-            custom_field2: subscriptionId,
-            custom_field3: subscriptionType,
+            custom_field2: subscriptionPlanId,
+            custom_field3: subscriptionPlanType,
         };
 
         logger.warn(requestBody);
@@ -154,6 +160,16 @@ export const pay: RequestHandler = async (req, res) => {
             },
         };
 
+        await prisma.transaction.create({
+            data: {
+                id: order_id,
+                paidPrice,
+                status: 'pending',
+                userId: user.pkId,
+                subscriptionPlanId: subscriptionPlan.pkId,
+            },
+        });
+
         const response = await axios.post(url, requestBody, config);
         res.status(200).json(response.data);
     } catch (error: any) {
@@ -162,11 +178,11 @@ export const pay: RequestHandler = async (req, res) => {
     }
 };
 
+// after the midtrans payment process is successful,
 export const handleNotification: RequestHandler = async (req, res) => {
     try {
         const {
             order_id,
-            transaction_id,
             transaction_status,
             transaction_time,
             gross_amount,
@@ -177,7 +193,6 @@ export const handleNotification: RequestHandler = async (req, res) => {
 
         if (
             !order_id ||
-            !transaction_id ||
             !transaction_status ||
             !transaction_time ||
             !gross_amount ||
@@ -185,7 +200,7 @@ export const handleNotification: RequestHandler = async (req, res) => {
             !custom_field2 ||
             !custom_field3
         ) {
-            return res.status(400).json({ error: 'Invalid notification data' });
+            return res.status(200).json({ message: 'Invalid notification data' });
         }
 
         const transaction_time_iso = new Date(transaction_time).toISOString();
@@ -202,11 +217,11 @@ export const handleNotification: RequestHandler = async (req, res) => {
             where: { id: custom_field1 },
         });
 
-        const subscription = await prisma.subscription.findUnique({
+        const subscriptionPlan = await prisma.subscriptionPlan.findUnique({
             where: { id: custom_field2 },
         });
 
-        if (!subscription) {
+        if (!subscriptionPlan) {
             return res.status(404).json({ error: 'Subscription not found' });
         }
 
@@ -214,75 +229,31 @@ export const handleNotification: RequestHandler = async (req, res) => {
             return res.status(404).json({ error: 'User not found' });
         }
 
-        const transaction = await prisma.transaction.upsert({
-            where: { id: transaction_id },
-            create: {
-                name: order_id,
-                id: transaction_id,
-                paidPrice: gross_amount,
+        const transaction = await prisma.transaction.update({
+            where: { id: order_id },
+            data: {
                 status: transaction_status,
-                userId: user.pkId,
-                subscriptionId: subscription.pkId,
-                createdAt: transaction_time_iso,
-            },
-            update: {
-                status: transaction_status,
-                updatedAt: transaction_time_iso,
             },
         });
 
         if (transaction.status == 'settlement' || transaction.status == 'success') {
             await prisma.$transaction(async (transaction) => {
-                await transaction.user.update({
-                    where: { id: user.id },
+                await transaction.subscription.create({
                     data: {
-                        subscriptionId: subscription.pkId,
-                    },
-                });
-                await transaction.userSubscription.upsert({
-                    where: { userId: user.pkId },
-                    create: {
                         startDate: transaction_time_iso,
                         endDate: custom_field3 == 'yearly' ? oneYearLaterISO : oneMonthLaterISO,
+                        autoReplyMax: subscriptionPlan.autoReplyQuota || 0,
+                        deviceMax: subscriptionPlan.deviceQuota || 0,
+                        contactMax: subscriptionPlan.contactQuota || 0,
+                        broadcastMax: subscriptionPlan.broadcastQuota || 0,
                         userId: user.pkId,
-                        subscriptionId: subscription.pkId,
-                    },
-                    update: {
-                        startDate: transaction_time_iso,
-                        endDate: custom_field3 == 'yearly' ? oneYearLaterISO : oneMonthLaterISO,
-                        userId: user.pkId,
-                        subscriptionId: subscription.pkId,
-                    },
-                });
-
-                await transaction.autoReplyQuota.create({
-                    data: {
-                        max: subscription.autoReplyQuota,
-                        userId: user.pkId,
-                    },
-                });
-                await transaction.broadcastQuota.create({
-                    data: {
-                        max: subscription.broadcastQuota,
-                        userId: user.pkId,
-                    },
-                });
-                await transaction.contactQuota.create({
-                    data: {
-                        max: subscription.contactQuota,
-                        userId: user.pkId,
-                    },
-                });
-                await transaction.deviceQuota.create({
-                    data: {
-                        max: subscription.deviceQuota,
-                        userId: user.pkId,
+                        subscriptionPlanId: subscriptionPlan.pkId,
                     },
                 });
             });
             return res.status(200).json({ message: 'Subscription created successfully' });
         }
-        return res.status(200).json({ message: 'Transaction created successfully' });
+        return res.status(200).json({ message: 'Transaction status updated successfully' });
     } catch (error) {
         const message = 'An error occured during payment notification handling';
         logger.error(error, message);
@@ -290,9 +261,45 @@ export const handleNotification: RequestHandler = async (req, res) => {
     }
 };
 
+export const subscribeToTrial: RequestHandler = async (req, res) => {
+    const userId = req.prismaUser.pkId;
+    const subscriptionPlan = await prisma.subscriptionPlan.findUnique({
+        where: { name: 'starter' },
+    });
+
+    if (!subscriptionPlan) {
+        return res.status(404).json({ message: 'Subscription not found' });
+    }
+
+    const existingTrialSubscription = await prisma.subscription.findFirst({
+        where: { userId, subscriptionPlanId: subscriptionPlan.pkId },
+    });
+
+    const startDate = new Date();
+    const oneWeekLater = new Date(startDate.getTime() + 7 * 24 * 60 * 60 * 1000);
+
+    if (existingTrialSubscription) {
+        res.status(403).json({ message: 'Trial subscription already used' });
+    } else {
+        await prisma.subscription.create({
+            data: {
+                startDate,
+                endDate: oneWeekLater,
+                autoReplyMax: subscriptionPlan.autoReplyQuota || 0,
+                deviceMax: subscriptionPlan.deviceQuota || 0,
+                contactMax: subscriptionPlan.contactQuota || 0,
+                broadcastMax: subscriptionPlan.broadcastQuota || 0,
+                userId,
+                subscriptionPlanId: subscriptionPlan.pkId,
+            },
+        });
+        return res.status(200).json({ message: 'Trial subscription created successfully' });
+    }
+};
+
 export const getSubscriptions: RequestHandler = async (req, res) => {
     try {
-        const subscriptions = await prisma.subscription.findMany({
+        const subscriptions = await prisma.subscriptionPlan.findMany({
             where: { isAvailable: true },
             select: {
                 id: true,
@@ -318,7 +325,7 @@ export const getSubscription: RequestHandler = async (req, res) => {
     try {
         const subscriptionId = req.params.subscriptionId;
 
-        const subscription = await prisma.subscription.findMany({
+        const subscription = await prisma.subscriptionPlan.findMany({
             where: { isAvailable: true, id: subscriptionId },
             select: {
                 id: true,
@@ -355,10 +362,10 @@ export const getTransactions: RequestHandler = async (req, res) => {
 
 export const getTransactionStatus: RequestHandler = async (req, res) => {
     try {
-        const transactionId = req.params.transactionId;
+        const id = req.params.transactionId;
 
         const transactions = await prisma.transaction.findUnique({
-            where: { id: transactionId },
+            where: { id },
         });
 
         if (!transactions) {
