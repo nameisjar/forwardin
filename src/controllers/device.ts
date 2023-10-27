@@ -3,6 +3,7 @@ import { generateUuid } from '../utils/keyGenerator';
 import prisma from '../utils/db';
 import logger from '../config/logger';
 import { generateSlug } from '../utils/slug';
+import { useDevice } from '../utils/quota';
 
 export const getDevices: RequestHandler = async (req, res) => {
     const pkId = req.prismaUser.pkId;
@@ -57,6 +58,7 @@ export const createDevice: RequestHandler = async (req, res) => {
     const { name, labels } = req.body;
     const apiKey = generateUuid();
     const pkId = req.prismaUser.pkId;
+    const subscription = req.subscription;
 
     // back here: what's severId?
     try {
@@ -69,6 +71,8 @@ export const createDevice: RequestHandler = async (req, res) => {
                     user: { connect: { pkId } },
                 },
             });
+
+            useDevice(transaction, subscription);
 
             if (labels && labels.length > 0) {
                 const labelIds: number[] = [];
