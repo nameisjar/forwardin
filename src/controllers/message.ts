@@ -148,6 +148,7 @@ export const getMessages: RequestHandler = async (req, res) => {
     }
 };
 
+// back here: fix cursor
 export const getIncomingMessages: RequestHandler = async (req, res) => {
     try {
         const { sessionId } = req.params;
@@ -265,7 +266,7 @@ export const getConversationMessages: RequestHandler = async (req, res) => {
 
         // Combine incoming and outgoing messages into one array
         const allMessages = [...incomingMessages, ...outgoingMessages];
-        logger.warn(allMessages);
+        logger.debug(allMessages);
 
         // Sort the combined messages by timestamp (receivedAt or createdAt)
         allMessages.sort((a, b) => {

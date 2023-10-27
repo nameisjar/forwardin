@@ -6,7 +6,6 @@ import logger from '../config/logger';
 export const getUserProfile: RequestHandler = async (req, res) => {
     try {
         const userId = req.prismaUser.pkId;
-        logger.warn(userId);
 
         const user = await prisma.user.findUnique({
             where: {

@@ -184,7 +184,8 @@ export async function createInstance(options: createInstanceOptions) {
 
     sock.ev.on('creds.update', saveCreds);
     sock.ev.on('connection.update', async (update) => {
-        logger.warn(update);
+        logger.debug(update);
+
         connectionState = update;
         const { connection } = update;
 

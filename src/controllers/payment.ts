@@ -152,7 +152,8 @@ export const pay: RequestHandler = async (req, res) => {
             custom_field3: subscriptionPlanType,
         };
 
-        logger.warn(requestBody);
+        logger.debug(requestBody);
+
         const config = {
             headers: {
                 Authorization: `Basic ${Buffer.from(apiKey).toString('base64')}`,

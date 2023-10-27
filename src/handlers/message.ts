@@ -47,7 +47,8 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                     try {
                         const jid = jidNormalizedUser(message.key.remoteJid!);
                         const data = transformPrisma(message);
-                        logger.warn(data);
+                        logger.debug(data);
+
                         await prisma.message.upsert({
                             select: { pkId: true },
                             create: { ...data, remoteJid: jid, id: message.key.id!, sessionId },
@@ -70,7 +71,7 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                             },
                         });
 
-                        if (data.message) {
+                        if (data.message && !data.message.protocolMessage) {
                             if (message.key.fromMe) {
                                 await prisma.outgoingMessage.createMany({
                                     data: {
