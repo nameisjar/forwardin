@@ -315,7 +315,7 @@ model AutoReply {
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @default(now()) @map("updated_at")
   deviceId  Int
-  device    Device   @relation(fields: [deviceId], references: [pkId])
+  device    Device   @relation(fields: [deviceId], references: [pkId], onDelete: Cascade)
 }
 
 model Campaign {

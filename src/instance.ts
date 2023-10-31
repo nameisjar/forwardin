@@ -84,7 +84,11 @@ export async function createInstance(options: createInstanceOptions) {
             await Promise.all([
                 logout && sock.logout(),
                 // prisma.chat.deleteMany({ where: { sessionId } }),
-                // prisma.contact.deleteMany({ where: { sessionId } }),
+                prisma.contact.deleteMany({
+                    where: {
+                        contactDevices: { some: { device: { sessions: { some: { sessionId } } } } },
+                    },
+                }),
                 prisma.message.deleteMany({ where: { sessionId } }),
                 // prisma.groupMetadata.deleteMany({ where: { sessionId } }),
                 prisma.incomingMessage.deleteMany({ where: { sessionId } }),
