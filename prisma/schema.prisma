@@ -305,11 +305,13 @@ model IncomingMessage {
 model AutoReply {
   pkId      Int      @id @default(autoincrement())
   id        String   @unique @default(uuid()) @db.Uuid
-  request   String   @db.VarChar(255)
+  name      String   @db.VarChar(128)
+  request   String[]
   response  String   @db.VarChar(255)
   schedule  DateTime
-  status    String   @db.VarChar(20)
+  status    Boolean  @default(true)
   source    String
+  receivers String[]
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @default(now()) @map("updated_at")
   deviceId  Int

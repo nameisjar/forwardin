@@ -148,16 +148,16 @@ export const getMessages: RequestHandler = async (req, res) => {
     }
 };
 
-// back here: fix cursor
 export const getIncomingMessages: RequestHandler = async (req, res) => {
     try {
         const { sessionId } = req.params;
-        const { cursor = undefined, limit = 25, phoneNumber } = req.query;
+        const { page = 1, pageSize = 25, phoneNumber } = req.query;
+        const offset = (Number(page) - 1) * Number(pageSize);
+
         const messages = (
             await prisma.incomingMessage.findMany({
-                cursor: cursor ? { pkId: Number(cursor) } : undefined,
-                take: Number(limit),
-                skip: cursor ? 1 : 0,
+                take: Number(pageSize),
+                skip: offset,
                 where: {
                     sessionId,
                     from: phoneNumber ? phoneNumber.toString() + '@s.whatsapp.net' : undefined,
@@ -174,13 +174,18 @@ export const getIncomingMessages: RequestHandler = async (req, res) => {
             where: { sessionId },
         });
 
+        const currentPage = Math.max(1, Number(page) || 1);
+        const totalPages = Math.ceil(totalMessages / Number(pageSize));
+        const hasMore = currentPage * Number(pageSize) < totalMessages;
+
         res.status(200).json({
             data: messages,
-            cursor:
-                messages.length !== 0 && messages.length === Number(limit)
-                    ? messages[messages.length - 1].pkId
-                    : null,
-            total: totalMessages,
+            metadata: {
+                totalMessages,
+                currentPage,
+                totalPages,
+                hasMore,
+            },
         });
     } catch (e) {
         const message = 'An error occured during message list';
@@ -192,12 +197,13 @@ export const getIncomingMessages: RequestHandler = async (req, res) => {
 export const getOutgoingMessages: RequestHandler = async (req, res) => {
     try {
         const { sessionId } = req.params;
-        const { cursor = undefined, limit = 25, phoneNumber } = req.query;
+        const { page = 1, pageSize = 25, phoneNumber } = req.query;
+        const offset = (Number(page) - 1) * Number(pageSize);
+
         const messages = (
             await prisma.outgoingMessage.findMany({
-                cursor: cursor ? { pkId: Number(cursor) } : undefined,
-                take: Number(limit),
-                skip: cursor ? 1 : 0,
+                take: Number(pageSize),
+                skip: offset,
                 where: {
                     sessionId,
                     to: phoneNumber ? phoneNumber.toString() + '@s.whatsapp.net' : undefined,
@@ -214,13 +220,18 @@ export const getOutgoingMessages: RequestHandler = async (req, res) => {
             where: { sessionId },
         });
 
+        const currentPage = Math.max(1, Number(page) || 1);
+        const totalPages = Math.ceil(totalMessages / Number(pageSize));
+        const hasMore = currentPage * Number(pageSize) < totalMessages;
+
         res.status(200).json({
             data: messages,
-            cursor:
-                messages.length !== 0 && messages.length === Number(limit)
-                    ? messages[messages.length - 1].pkId
-                    : null,
-            total: totalMessages,
+            metadata: {
+                totalMessages,
+                currentPage,
+                totalPages,
+                hasMore,
+            },
         });
     } catch (e) {
         const message = 'An error occured during message list';
@@ -229,15 +240,14 @@ export const getOutgoingMessages: RequestHandler = async (req, res) => {
     }
 };
 
+// back here: fix resource-intensive queries
 export const getConversationMessages: RequestHandler = async (req, res) => {
     try {
         const { sessionId } = req.params;
-        const { cursor = undefined, limit = 25, phoneNumber } = req.query;
+        const { page = 1, pageSize = 25, phoneNumber } = req.query;
+        const offset = (Number(page) - 1) * Number(pageSize);
 
         const incomingMessages = await prisma.incomingMessage.findMany({
-            cursor: cursor ? { pkId: Number(cursor) } : undefined,
-            take: Number(limit),
-            skip: cursor ? 1 : 0,
             where: {
                 sessionId,
                 from: phoneNumber ? phoneNumber.toString() + '@s.whatsapp.net' : undefined,
@@ -250,9 +260,6 @@ export const getConversationMessages: RequestHandler = async (req, res) => {
         });
 
         const outgoingMessages = await prisma.outgoingMessage.findMany({
-            cursor: cursor ? { pkId: Number(cursor) } : undefined,
-            take: Number(limit),
-            skip: cursor ? 1 : 0,
             where: {
                 sessionId,
                 to: phoneNumber ? phoneNumber.toString() + '@s.whatsapp.net' : undefined,
@@ -269,22 +276,24 @@ export const getConversationMessages: RequestHandler = async (req, res) => {
         logger.debug(allMessages);
 
         // Sort the combined messages by timestamp (receivedAt or createdAt)
-        allMessages.sort((a, b) => {
-            const timestampA = a.createdAt;
-            const timestampB = b.createdAt;
-            return timestampA.getTime() - timestampB.getTime();
-        });
+        allMessages.sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
 
         // Apply pagination
-        const messages = allMessages.slice(0, Number(limit));
-        const cursorId = messages.length > 0 ? messages[messages.length - 1].pkId : null;
+        const messages = allMessages.slice(offset, offset + Number(pageSize));
 
         const totalMessages = incomingMessages.length + outgoingMessages.length;
+        const currentPage = Math.max(1, Number(page) || 1);
+        const totalPages = Math.ceil(totalMessages / Number(pageSize));
+        const hasMore = currentPage * Number(pageSize) < totalMessages;
 
         res.status(200).json({
             data: messages.map((m) => serializePrisma(m)),
-            cursor: cursorId,
-            total: totalMessages,
+            metadata: {
+                totalMessages,
+                currentPage,
+                totalPages,
+                hasMore,
+            },
         });
     } catch (e) {
         const message = 'An error occurred during message list';

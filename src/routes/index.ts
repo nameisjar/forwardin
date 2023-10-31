@@ -7,6 +7,8 @@ import contactRoutes from './contacts';
 import groupRoutes from './groups';
 import messageRoutes from './messages';
 import paymentRoutes from './payments';
+import subscriptionPlanRoutes from './subscriptionPlans';
+import autoReplyRoutes from './autoReplies';
 import authMiddleware from '../middleware/auth';
 
 const router = Router();
@@ -23,5 +25,7 @@ router.use('/contacts', authMiddleware, contactRoutes);
 router.use('/groups', authMiddleware, groupRoutes);
 router.use('/messages', authMiddleware, messageRoutes);
 router.use('/payment', paymentRoutes);
+router.use('/subscriptions', authMiddleware, subscriptionPlanRoutes);
+router.use('/auto-reply', authMiddleware, autoReplyRoutes);
 
 export default router;

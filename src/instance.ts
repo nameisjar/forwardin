@@ -19,6 +19,7 @@ import { useSession } from './utils/useSession';
 // import { join } from 'path';
 import { Store } from './store';
 import { processButton } from './utils/processBtn';
+import { sendAutoReply } from './controllers/autoReply';
 
 type Instance = WASocket & {
     destroy: () => Promise<void>;
@@ -170,7 +171,6 @@ export async function createInstance(options: createInstanceOptions) {
         },
         logger,
 
-        // back here: get messages
         getMessage: async (key) => {
             const data = await prisma.message.findFirst({
                 where: { remoteJid: key.remoteJid!, id: key.id!, sessionId },
@@ -219,6 +219,12 @@ export async function createInstance(options: createInstanceOptions) {
             await sock.readMessages([message.key]);
         });
     }
+
+    // auto-reply
+    sock.ev.on('messages.upsert', async (message) => {
+        logger.warn(message);
+        sendAutoReply(sessionId, message);
+    });
 
     // Debug events
     // sock.ev.on('messaging-history.set', (data) => dump('messaging-history.set', data));
