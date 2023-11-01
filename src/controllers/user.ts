@@ -85,9 +85,9 @@ export const getUserSubscriptionDetail: RequestHandler = async (req, res) => {
 
         if (!subscription) {
             res.status(404).json({ message: 'Subscription not found' });
+        } else {
+            res.status(200).json(subscription);
         }
-
-        res.status(200).json(subscription);
     } catch (error: any) {
         logger.error(error.message);
         res.status(500).json({ message: 'Internal server error' });

@@ -301,6 +301,91 @@ export const getConversationMessages: RequestHandler = async (req, res) => {
         res.status(500).json({ error: message });
     }
 };
+
+export const getMessengerList: RequestHandler = async (req, res) => {
+    try {
+        const { sessionId } = req.params;
+        const { page = 1, pageSize = 25 } = req.query;
+        const offset = (Number(page) - 1) * Number(pageSize);
+
+        const incomingMessages = await prisma.incomingMessage.findMany({
+            where: {
+                sessionId,
+            },
+            select: { from: true, createdAt: true },
+        });
+
+        const outgoingMessages = await prisma.outgoingMessage.findMany({
+            where: {
+                sessionId,
+            },
+            select: { to: true, createdAt: true },
+        });
+
+        type Message = {
+            from?: string;
+            createdAt: Date;
+            to?: string;
+            phone?: string;
+        };
+
+        // Combine incoming and outgoing messages into one array
+        const allMessages: Message[] = [...incomingMessages, ...outgoingMessages];
+        for (const message of allMessages) {
+            if ('from' in message) {
+                message.phone = message.from;
+                delete message.from;
+            } else if ('to' in message) {
+                message.phone = message.to;
+                delete message.to;
+            }
+        }
+        logger.debug(allMessages);
+
+        // Sort the combined messages by timestamp (receivedAt or createdAt)
+        allMessages.sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
+
+        // Create a map to track unique recipients and their most recent timestamps
+        const uniqueRecipients = new Map();
+
+        for (const message of allMessages) {
+            const { createdAt, phone } = message;
+
+            // Incoming message
+            if (!uniqueRecipients.has(phone) || uniqueRecipients.get(phone).createdAt < createdAt) {
+                uniqueRecipients.set(phone, { createdAt });
+            }
+        }
+
+        // Convert the map back to an array of objects
+        const uniqueMessages = Array.from(uniqueRecipients, ([key, value]) => ({
+            phone: key.split('@')[0],
+            createdAt: value.createdAt,
+        }));
+
+        // Apply pagination
+        const messages = uniqueMessages.slice(offset, offset + Number(pageSize));
+
+        const totalMessages = incomingMessages.length + outgoingMessages.length;
+        const currentPage = Math.max(1, Number(page) || 1);
+        const totalPages = Math.ceil(totalMessages / Number(pageSize));
+        const hasMore = currentPage * Number(pageSize) < totalMessages;
+
+        res.status(200).json({
+            data: messages.map((m) => serializePrisma(m)),
+            metadata: {
+                totalMessages,
+                currentPage,
+                totalPages,
+                hasMore,
+            },
+        });
+    } catch (e) {
+        const message = 'An error occurred during message list';
+        logger.error(e, message);
+        res.status(500).json({ error: message });
+    }
+};
 // to do: send template message & personalization
 // to do: auto reply (triggered by certain words)
 // to do: scheduled send message(s)

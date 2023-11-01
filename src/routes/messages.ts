@@ -9,5 +9,6 @@ router.post('/:sessionId/send/button', controller.sendButton);
 router.get('/:sessionId', controller.getConversationMessages);
 router.get('/:sessionId/incoming', controller.getIncomingMessages);
 router.get('/:sessionId/outgoing', controller.getOutgoingMessages);
+router.get('/:sessionId/messenger-list', controller.getMessengerList);
 
 export default router;

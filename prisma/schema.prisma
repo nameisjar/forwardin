@@ -196,9 +196,9 @@ model Contact {
   firstName       String            @db.VarChar(128)
   lastName        String?           @db.VarChar(128)
   phone           String            @db.VarChar(20)
-  email           String            @db.VarChar(255)
+  email           String?           @db.VarChar(255)
   gender          String            @db.VarChar(10)
-  dob             DateTime          @db.Date
+  dob             DateTime?         @db.Date
   colorCode       String?           @db.VarChar(6)
   createdAt       DateTime          @default(now()) @map("created_at")
   updatedAt       DateTime          @default(now()) @map("updated_at")
