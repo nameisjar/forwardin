@@ -6,9 +6,11 @@ import {
     updateSubscriptionPlan,
     deleteSubscriptionPlan,
 } from '../controllers/subscriptionPlan';
+import { isSuperAdmin } from '../middleware/auth';
 
 const router = express.Router();
 
+router.use(isSuperAdmin);
 router.post('/subscription-plans', createSubscriptionPlan);
 router.get('/subscription-plans', getAllSubscriptionPlans);
 router.get('/subscription-plans/:id', getSubscriptionPlanById);
