@@ -58,10 +58,15 @@ export const apiKey: RequestHandler = async (req, res, next) => {
 export const isSuperAdmin: RequestHandler = async (req, res, next) => {
     const user = req.prismaUser;
 
-    if (user && user.privilegeId === 1) {
+    const privilege = await prisma.user.findUnique({
+        where: { id: user.id },
+        select: { privilege: { select: { name: true } } },
+    });
+
+    if (user && privilege?.privilege?.name === 'super admin') {
         next();
     } else {
-        res.status(403).json({ message: 'Access denied: Not a super admin' });
+        res.status(403).json({ message: 'Access denied: Super admin only' });
     }
 };
 
