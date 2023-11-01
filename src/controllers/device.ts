@@ -237,6 +237,7 @@ export const updateDevice: RequestHandler = async (req, res) => {
     }
 };
 
+// back here: handle error inside promise
 export const deleteDevices: RequestHandler = async (req, res) => {
     try {
         const deviceIds = req.body.deviceIds;

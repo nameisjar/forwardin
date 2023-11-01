@@ -5,6 +5,8 @@ import app from '../index';
 import prisma from '../utils/db';
 
 interface UserData {
+    firstName: string;
+    lastName: string;
     username: string;
     phone: string;
     email: string;
@@ -32,7 +34,9 @@ describe('------Auth API------', () => {
     describe('Registration', () => {
         it('should return 400 with validation errors when invalid data is sent', async () => {
             const response = await registerUser({
-                username: 'user',
+                firstName: 'failed',
+                lastName: 'user',
+                username: 'fail_user',
                 phone: '62',
                 email: 'invalid',
                 password: '11',
@@ -45,7 +49,9 @@ describe('------Auth API------', () => {
 
         it('should return 201 when valid data is sent', async () => {
             const response = await registerUser({
-                username: 'testuser',
+                firstName: 'successful',
+                lastName: 'user',
+                username: 'success_user',
                 phone: '628886945381',
                 email: 'test@example.com',
                 password: 'P4$sword!!!',

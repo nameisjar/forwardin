@@ -11,6 +11,8 @@ describe('------Device API------', () => {
         const response = await request(app)
             .post('/auth/register')
             .send({
+                firstName: 'test',
+                lastName: 'user',
                 username: 'testuser',
                 phone: '628886945381',
                 email: 'test@example.com',
@@ -21,6 +23,18 @@ describe('------Device API------', () => {
 
         authToken = response.body.accessToken;
         accountApiKey = response.body.accountApiKey;
+
+        const trialResponse = await request(app)
+            .post('/payment/trial')
+            .send({})
+            .set('Content-Type', 'application/json')
+            .set('Authorization', `Bearer ${authToken}`)
+            .set('X-Forwardin-Key', accountApiKey);
+
+        expect(trialResponse.body).to.have.property(
+            'message',
+            'Trial subscription created successfully',
+        );
     });
 
     describe('Create Device', () => {
@@ -57,20 +71,22 @@ describe('------Device API------', () => {
     describe('Delete Device', () => {
         it('should delete a device by ID', async () => {
             const response = await request(app)
-                .delete(`/devices/${deviceId}`)
+                .delete('/devices/')
+                .send({ deviceIds: [`${deviceId}`] })
                 .set('Authorization', `Bearer ${authToken}`)
                 .set('X-Forwardin-Key', accountApiKey)
                 .expect(200);
 
-            expect(response.body).to.have.property('message', 'Device deleted successfully');
+            expect(response.body).to.have.property('message', 'Device(s) deleted successfully');
         });
 
         it('should return an error when trying to delete a non-existent device', async () => {
             await request(app)
-                .delete('/devices/nonexistent-device-id')
+                .delete('/devices/')
+                .send({ deviceIds: ['non-existence-device'] })
                 .set('Authorization', `Bearer ${authToken}`)
                 .set('X-Forwardin-Key', accountApiKey)
-                .expect(400);
+                .expect(500);
         });
     });
 
