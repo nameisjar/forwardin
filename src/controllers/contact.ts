@@ -86,9 +86,9 @@ export const createContact: RequestHandler = async (req, res) => {
         });
 
         res.status(200).json({ message: 'Contact created successfully' });
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    } catch (error: any) {
-        res.status(500).json({ message: error.message });
+    } catch (error) {
+        logger.error(error);
+        res.status(500).json({ message: 'Internal server error' });
     }
 };
 
@@ -110,6 +110,7 @@ export const getContacts: RequestHandler = async (req, res) => {
         });
         res.status(200).json(contacts);
     } catch (error) {
+        logger.error(error);
         res.status(500).json({ message: 'Internal server error' });
     }
 };
@@ -134,6 +135,7 @@ export const getContactLabels: RequestHandler = async (req, res) => {
         const newLabels = labels.flatMap((item) => item.ContactLabel.map((obj) => obj.label.name));
         res.status(200).json(newLabels);
     } catch (error) {
+        logger.error(error);
         res.status(500).json({ message: 'Internal server error' });
     }
 };
@@ -178,6 +180,7 @@ export const getContact: RequestHandler = async (req, res) => {
 
         res.status(200).json(contact);
     } catch (error) {
+        logger.error(error);
         res.status(500).json({ message: 'Internal server error' });
     }
 };
@@ -307,8 +310,9 @@ export const updateContact: RequestHandler = async (req, res) => {
 
         res.status(200).json({ message: 'Contact updated successfully' });
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    } catch (error: any) {
-        res.status(500).json({ message: error.message });
+    } catch (error) {
+        logger.error(error);
+        res.status(500).json({ message: 'Internal server error' });
     }
 };
 

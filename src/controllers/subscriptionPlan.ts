@@ -37,7 +37,7 @@ export const createSubscriptionPlan: RequestHandler = async (req, res) => {
         res.status(201).json(subscriptionPlan);
     } catch (error) {
         logger.error(error);
-        res.status(500).json({ error: 'Internal server error' });
+        res.status(500).json({ message: 'Internal server error' });
     }
 };
 
@@ -47,7 +47,7 @@ export const getAllSubscriptionPlans: RequestHandler = async (req, res) => {
         res.status(200).json(subscriptionPlans);
     } catch (error) {
         logger.error(error);
-        res.status(500).json({ error: 'Internal server error' });
+        res.status(500).json({ message: 'Internal server error' });
     }
 };
 
@@ -66,7 +66,7 @@ export const getSubscriptionPlanById: RequestHandler = async (req, res) => {
         }
     } catch (error) {
         logger.error(error);
-        res.status(500).json({ error: 'Internal server error' });
+        res.status(500).json({ message: 'Internal server error' });
     }
 };
 
@@ -102,13 +102,14 @@ export const updateSubscriptionPlan: RequestHandler = async (req, res) => {
                 isGoogleContactSync,
                 isWhatsappContactSync,
                 isAvailable,
+                updatedAt: new Date(),
             },
         });
 
         res.json(updatedSubscriptionPlan);
     } catch (error) {
         logger.error(error);
-        res.status(500).json({ error: 'Internal server error' });
+        res.status(500).json({ message: 'Internal server error' });
     }
 };
 
@@ -123,6 +124,6 @@ export const deleteSubscriptionPlan: RequestHandler = async (req, res) => {
         res.status(204).end();
     } catch (error) {
         logger.error(error);
-        res.status(500).json({ error: 'Internal server error' });
+        res.status(500).json({ message: 'Internal server error' });
     }
 };

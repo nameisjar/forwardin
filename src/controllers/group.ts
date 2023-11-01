@@ -26,6 +26,7 @@ export const getGroups: RequestHandler = async (req, res) => {
 
         res.status(200).json(groups);
     } catch (error) {
+        logger.error(error);
         res.status(500).json({ message: 'Internal server error' });
     }
 };
@@ -44,6 +45,7 @@ export const createGroup: RequestHandler = async (req, res) => {
         });
         res.status(200).json({ message: 'Group created successfully' });
     } catch (error) {
+        logger.error(error);
         res.status(500).json({ message: 'Internal server error' });
     }
 };
@@ -72,27 +74,26 @@ export const addMemberToGroup: RequestHandler = async (req, res) => {
                     });
 
                     if (!contact) {
-                        failedContactIds.push(contactId);
-                    } else {
-                        await prisma.contactGroup.upsert({
-                            where: {
-                                contactId_groupId: {
-                                    contactId: contact.pkId,
-                                    groupId: group.pkId,
-                                },
-                            },
-                            create: {
-                                contactId: contact.pkId,
-                                groupId: group.pkId,
-                            },
-                            update: {
-                                contactId: contact.pkId,
-                                groupId: group.pkId,
-                            },
-                        });
-
-                        addedContactIds.push(contactId);
+                        return failedContactIds.push(contactId);
                     }
+                    await prisma.contactGroup.upsert({
+                        where: {
+                            contactId_groupId: {
+                                contactId: contact.pkId,
+                                groupId: group.pkId,
+                            },
+                        },
+                        create: {
+                            contactId: contact.pkId,
+                            groupId: group.pkId,
+                        },
+                        update: {
+                            contactId: contact.pkId,
+                            groupId: group.pkId,
+                        },
+                    });
+
+                    addedContactIds.push(contactId);
                 } catch (error) {
                     logger.error(`Error adding contact ${contactId} to group:`, error);
                     failedContactIds.push(contactId);
@@ -112,7 +113,7 @@ export const addMemberToGroup: RequestHandler = async (req, res) => {
             });
         }
     } catch (error) {
-        logger.error('Error adding contacts to group:', error);
+        logger.error(error);
         res.status(500).json({ message: 'Internal server error' });
     }
 };
@@ -166,9 +167,8 @@ export const removeMembersFromGroup: RequestHandler = async (req, res) => {
         );
 
         res.status(200).json({ message: 'Members removed from the group successfully' });
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    } catch (error: any) {
-        logger.error(error.message);
+    } catch (error) {
+        logger.error(error);
         res.status(500).json({ message: 'Internal server error' });
     }
 };
@@ -194,6 +194,7 @@ export const getGroup: RequestHandler = async (req, res) => {
 
         res.status(200).json(group);
     } catch (error) {
+        logger.error(error);
         res.status(500).json({ message: 'Internal server error' });
     }
 };
@@ -216,6 +217,7 @@ export const updatedGroup: RequestHandler = async (req, res) => {
             data: {
                 name,
                 isCampaign,
+                updatedAt: new Date(),
             },
         });
 

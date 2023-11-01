@@ -6,6 +6,7 @@ export async function useDevice(transaction: any, subscription: Subscription) {
         where: { pkId: subscription.pkId },
         data: {
             deviceUsed: subscription.deviceUsed + 1,
+            updatedAt: new Date(),
         },
     });
 }

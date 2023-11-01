@@ -64,8 +64,8 @@ export const register: RequestHandler = async (req, res) => {
                 error: 'Privilege not found',
             });
         }
-    } catch (error: any) {
-        logger.error('Error:', error.message);
+    } catch (error) {
+        logger.error(error);
         res.status(500).json({ message: 'Internal server error' });
     }
 };
@@ -97,7 +97,7 @@ export const checkIdentifierAvailability: RequestHandler = async (req, res) => {
 
         res.status(200).json({ message: `${identifierType} is available` });
     } catch (error) {
-        req.log.error('Error:', error);
+        logger.error(error);
         res.status(500).json({ message: 'Internal server error' });
     }
 };
@@ -167,7 +167,7 @@ export const refreshToken: RequestHandler = async (req, res) => {
             res.status(200).json({ accessToken, id });
         });
     } catch (error) {
-        req.log.error('Error:', error);
+        logger.error(error);
         res.status(500).json({ message: 'Internal server error' });
     }
 };
@@ -212,13 +212,13 @@ export const sendVerificationEmail: RequestHandler = async (req, res) => {
 
         await prisma.user.update({
             where: { pkId: user.pkId },
-            data: { emailOtpSecret: otpSecret, email },
+            data: { emailOtpSecret: otpSecret, email, updatedAt: new Date() },
         });
 
         await sendEmail(email, body, 'Verify your email');
         res.status(200).json({ message: 'Verification email sent successfully', otpToken });
     } catch (error) {
-        req.log.error('Error:', error);
+        logger.error(error);
         res.status(500).json({ message: 'Internal server error' });
     }
 };
@@ -242,14 +242,14 @@ export const verifyEmail: RequestHandler = async (req, res) => {
         if (isValid) {
             await prisma.user.update({
                 where: { pkId: pkId },
-                data: { emailVerifiedAt: new Date() },
+                data: { emailVerifiedAt: new Date(), updatedAt: new Date() },
             });
             return res.status(200).json({ message: 'Email verification successful' });
         } else {
             return res.status(401).json({ message: 'Invalid OTP token' });
         }
     } catch (error) {
-        req.log.error('Error:', error);
+        logger.error(error);
         res.status(500).json({ message: 'Internal server error' });
     }
 };
@@ -320,7 +320,7 @@ export const forgotPassword: RequestHandler = async (req, res) => {
         await sendEmail(email, body, 'Reset password');
         res.status(200).json({ message: 'Password reset email sent' });
     } catch (error) {
-        req.log.error('Error:', error);
+        logger.error(error);
         res.status(500).json({ message: 'Internal server error' });
     }
 };
@@ -355,12 +355,13 @@ export const resetPassword: RequestHandler = async (req, res) => {
             where: { email },
             data: {
                 password: hashedPassword,
+                updatedAt: new Date(),
             },
         });
 
         res.status(200).json({ message: 'Password reset successful' });
     } catch (error) {
-        req.log.error('Error:', error);
+        logger.error(error);
         res.status(500).json({ message: 'Internal server error' });
     }
 };
@@ -394,12 +395,13 @@ export const changePassword: RequestHandler = async (req, res) => {
             where: { email },
             data: {
                 password: hashedPassword,
+                updatedAt: new Date(),
             },
         });
 
         res.status(200).json({ message: 'Password change successful' });
     } catch (error) {
-        req.log.error('Error:', error);
+        logger.error(error);
         res.status(500).json({ message: 'Internal server error' });
     }
 };
@@ -528,9 +530,10 @@ export const loginRegisterByGoogle: RequestHandler = async (req, res) => {
             }
         } else {
             const errorMessage = response.data?.error?.message || 'Unknown Error';
-            return res.status(response.status).json({ error: errorMessage });
+            res.status(response.status).json({ error: errorMessage });
         }
-    } catch (error: any) {
-        return res.status(500).json({ error: 'Internal Server Error', message: error.message });
+    } catch (error) {
+        logger.error(error);
+        res.status(500).json({ message: 'Internal server error' });
     }
 };

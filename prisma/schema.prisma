@@ -272,6 +272,8 @@ model Group {
   user          User           @relation(fields: [userId], references: [pkId], onDelete: Cascade)
   contactGroups ContactGroup[]
   campaigns     Campaign[]
+  createdAt     DateTime       @default(now()) @map("created_at")
+  updatedAt     DateTime       @default(now()) @map("updated_at")
 }
 
 model OutgoingMessage {
@@ -312,6 +314,8 @@ model Broadcast {
   isSent     Boolean  @default(false)
   deviceId   Int
   device     Device   @relation(fields: [deviceId], references: [pkId], onDelete: Cascade)
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @default(now()) @map("updated_at")
 }
 
 model AutoReply {
@@ -340,8 +344,10 @@ model Campaign {
   groupId             Int               @map("group_id")
   deviceId            Int               @map("device_id")
   group               Group             @relation(fields: [groupId], references: [pkId], onDelete: Cascade)
-  device              Device            @relation(fields: [deviceId], references: [pkId])
+  device              Device            @relation(fields: [deviceId], references: [pkId], onDelete: Cascade)
   CampaignMessage     CampaignMessage[]
+  createdAt           DateTime          @default(now()) @map("created_at")
+  updatedAt           DateTime          @default(now()) @map("updated_at")
 }
 
 model CampaignMessage {
@@ -352,7 +358,9 @@ model CampaignMessage {
   delay      Int
   isSent     Boolean  @default(false)
   schedule   DateTime @map("schedule")
-  Campaign   Campaign @relation(fields: [campaignId], references: [pkId])
+  Campaign   Campaign @relation(fields: [campaignId], references: [pkId], onDelete: Cascade)
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @default(now()) @map("updated_at")
 }
 
 model BusinessHour {

@@ -33,10 +33,8 @@ export const createSession: RequestHandler = async (req, res) => {
 
         createInstance({ sessionId, deviceId: existingDevice.pkId, res });
     } catch (error) {
-        const message =
-            error instanceof Error ? error.message : 'An error occurred during get session status';
-        logger.error(error, message);
-        res.status(500).json({ error: message });
+        logger.error(error);
+        res.status(500).json({ message: 'Internal server error' });
     }
 };
 
@@ -71,10 +69,8 @@ export const getSessionStatus: RequestHandler = async (req, res) => {
         const session = getInstance(req.params.sessionId)!;
         res.status(200).json({ status: getInstanceStatus(session), session });
     } catch (error) {
-        const message =
-            error instanceof Error ? error.message : 'An error occurred during get session status';
-        logger.error(error, message);
-        res.status(500).json({ error: message });
+        logger.error(error);
+        res.status(500).json({ message: 'Internal server error' });
     }
 };
 

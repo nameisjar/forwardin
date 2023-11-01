@@ -2,6 +2,7 @@ import speakeasy from 'speakeasy';
 // import Mailgun from 'mailgun.js';
 // import formData from 'form-data';
 import nodemailer from 'nodemailer';
+import logger from '../config/logger';
 
 export function generateOTPSecret(): string {
     const secret = speakeasy.generateSecret();
@@ -56,7 +57,7 @@ export async function sendEmail(toEmail: string, body: string, subject: string) 
 
         // await mg.messages.create(process.env.MAILGUN_DOMAIN!, data);
     } catch (error) {
-        console.error('Error sending email:', error);
+        logger.error('Error sending email', error);
         throw error;
     }
 }

@@ -28,7 +28,8 @@ export const getUserProfile: RequestHandler = async (req, res) => {
 
         return res.status(200).json(user);
     } catch (error) {
-        return res.status(500).json({ message: 'Internal server error' });
+        logger.error(error);
+        res.status(500).json({ message: 'Internal server error' });
     }
 };
 
@@ -68,8 +69,8 @@ export const deleteUser: RequestHandler = async (req, res) => {
 
         return res.status(200).json({ message: 'User deleted successfully' });
     } catch (error) {
-        logger.error('Error deleting user:', error);
-        return res.status(500).json({ message: 'Internal server error' });
+        logger.error(error);
+        res.status(500).json({ message: 'Internal server error' });
     }
 };
 
@@ -84,12 +85,11 @@ export const getUserSubscriptionDetail: RequestHandler = async (req, res) => {
         });
 
         if (!subscription) {
-            res.status(404).json({ message: 'Subscription not found' });
-        } else {
-            res.status(200).json(subscription);
+            return res.status(404).json({ message: 'Subscription not found' });
         }
-    } catch (error: any) {
-        logger.error(error.message);
+        res.status(200).json(subscription);
+    } catch (error) {
+        logger.error(error);
         res.status(500).json({ message: 'Internal server error' });
     }
 };

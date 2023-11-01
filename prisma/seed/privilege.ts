@@ -1,6 +1,7 @@
 import { PrismaClient } from '@prisma/client';
+import { Logger } from 'pino';
 
-async function seedPrivileges(prisma: PrismaClient) {
+async function seedPrivileges(prisma: PrismaClient, logger: Logger) {
     try {
         await prisma.$connect();
 
@@ -21,9 +22,9 @@ async function seedPrivileges(prisma: PrismaClient) {
             ],
         });
 
-        console.log('Privilege seeder executed successfully.');
+        logger.info('Privilege seeder executed successfully.');
     } catch (error) {
-        console.error('Error running privilege seeder:', error);
+        logger.error(error);
     } finally {
         await prisma.$disconnect();
     }

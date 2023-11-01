@@ -24,7 +24,7 @@ export const getDevices: RequestHandler = async (req, res) => {
 
         res.status(200).json(devices);
     } catch (error) {
-        logger.error('Error:', error);
+        logger.error(error);
         res.status(500).json({ message: 'Internal server error' });
     }
 };
@@ -49,7 +49,7 @@ export const getDeviceLabels: RequestHandler = async (req, res) => {
         const newLabels = labels.flatMap((item) => item.DeviceLabel.map((obj) => obj.label.name));
         res.status(200).json(newLabels);
     } catch (error) {
-        logger.error('Error:', error);
+        logger.error(error);
         res.status(500).json({ message: 'Internal server error' });
     }
 };
@@ -105,7 +105,7 @@ export const createDevice: RequestHandler = async (req, res) => {
             res.status(201).json({ message: 'Device created successfully', data: createdDevice });
         });
     } catch (error) {
-        logger.error('Error:', error);
+        logger.error(error);
         res.status(500).json({ message: 'Internal server error' });
     }
 };
@@ -232,7 +232,7 @@ export const updateDevice: RequestHandler = async (req, res) => {
         });
         res.status(200).json({ message: 'Device updated successfully' });
     } catch (error) {
-        logger.error('Error:', error);
+        logger.error(error);
         res.status(500).json({ message: 'Internal server error' });
     }
 };
@@ -242,9 +242,10 @@ export const deleteDevices: RequestHandler = async (req, res) => {
         const deviceIds = req.body.deviceIds;
 
         const devicePromises = deviceIds.map(async (deviceId: string) => {
-            if (!isValidUUID(deviceId)) {
-                return res.status(400).json({ message: 'Invalid deviceId format' });
+            if (!deviceIds) {
+                return res.status(400).json({ message: 'deviceIds are invalid' });
             }
+
             const deletedDevice = await prisma.device.delete({
                 where: {
                     id: deviceId,
@@ -272,9 +273,3 @@ export const deleteDevices: RequestHandler = async (req, res) => {
         res.status(500).json({ message: 'Internal server error' });
     }
 };
-
-function isValidUUID(uuid: string): boolean {
-    const uuidPattern =
-        /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
-    return uuidPattern.test(uuid);
-}

@@ -25,7 +25,7 @@ export const createCampaign: RequestHandler = async (req, res) => {
         });
 
         if (!device) {
-            res.status(401).json({ message: 'Device not found' });
+            return res.status(401).json({ message: 'Device not found' });
         } else if (!device.sessions[0]) {
             return res.status(400).json({ message: 'Session not found' });
         } else {
@@ -72,13 +72,14 @@ export const createCampaign: RequestHandler = async (req, res) => {
                 where: { id: campaign.id },
                 data: {
                     isSent: true,
+                    updatedAt: new Date(),
                 },
             });
             res.status(201).json({ message: 'Campaign created' });
         }
     } catch (error) {
         logger.error(error);
-        res.status(500).json({ error: 'Internal server error' });
+        res.status(500).json({ message: 'Internal server error' });
     }
 };
 
@@ -107,7 +108,7 @@ export const createCampaignMessage: RequestHandler = async (req, res) => {
         }
     } catch (error) {
         logger.error(error);
-        res.status(500).json({ error: 'Internal server error' });
+        res.status(500).json({ message: 'Internal server error' });
     }
 };
 
@@ -218,6 +219,7 @@ schedule.scheduleJob('*', async () => {
                 where: { id: campaignMessage.id },
                 data: {
                     isSent: true,
+                    updatedAt: new Date(),
                 },
             });
         }

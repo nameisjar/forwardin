@@ -173,9 +173,9 @@ export const pay: RequestHandler = async (req, res) => {
 
         const response = await axios.post(url, requestBody, config);
         res.status(200).json(response.data);
-    } catch (error: any) {
-        logger.error('Payment failed:', error);
-        res.status(500).json({ error: 'Payment failed', details: error.message });
+    } catch (error) {
+        logger.error(error);
+        res.status(500).json({ message: 'Internal server error' });
     }
 };
 
@@ -234,6 +234,7 @@ export const handleNotification: RequestHandler = async (req, res) => {
             where: { id: order_id },
             data: {
                 status: transaction_status,
+                updatedAt: new Date(),
             },
         });
 
@@ -256,9 +257,8 @@ export const handleNotification: RequestHandler = async (req, res) => {
         }
         return res.status(200).json({ message: 'Transaction status updated successfully' });
     } catch (error) {
-        const message = 'An error occured during payment notification handling';
-        logger.error(error, message);
-        res.status(500).json({ error: message });
+        logger.error(error);
+        res.status(500).json({ message: 'Internal server error' });
     }
 };
 
@@ -319,7 +319,8 @@ export const getSubscriptions: RequestHandler = async (req, res) => {
         });
         res.status(200).json(subscriptions);
     } catch (error) {
-        res.status(500).json(error);
+        logger.error(error);
+        res.status(500).json({ message: 'Internal server error' });
     }
 };
 
@@ -345,7 +346,8 @@ export const getSubscription: RequestHandler = async (req, res) => {
         });
         res.status(200).json(subscription);
     } catch (error) {
-        res.status(500).json(error);
+        logger.error(error);
+        res.status(500).json({ message: 'Internal server error' });
     }
 };
 
@@ -357,8 +359,9 @@ export const getTransactions: RequestHandler = async (req, res) => {
             where: { userId },
         });
         res.status(200).json(transactions);
-    } catch (error: any) {
-        res.status(500).json(error.message);
+    } catch (error) {
+        logger.error(error);
+        res.status(500).json({ message: 'Internal server error' });
     }
 };
 
@@ -371,11 +374,12 @@ export const getTransactionStatus: RequestHandler = async (req, res) => {
         });
 
         if (!transactions) {
-            res.status(404).json({ message: 'Transaction not found.' });
+            return res.status(404).json({ message: 'Transaction not found.' });
         }
 
-        res.status(200).json({ status: transactions?.status });
-    } catch (error: any) {
-        res.status(500).json(error.message);
+        res.status(200).json({ status: transactions.status });
+    } catch (error) {
+        logger.error(error);
+        res.status(500).json({ message: 'Internal server error' });
     }
 };

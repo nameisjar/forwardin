@@ -42,10 +42,8 @@ export const sendMessages: RequestHandler = async (req, res) => {
             errors,
         });
     } catch (error) {
-        const message =
-            error instanceof Error ? error.message : 'An error occurred during message send';
-        logger.error(error, message);
-        res.status(500).json({ error: message });
+        logger.error(error);
+        res.status(500).json({ message: 'Internal server error' });
     }
 };
 
@@ -98,10 +96,8 @@ export const sendImageMessages: RequestHandler = async (req, res) => {
             });
         });
     } catch (error) {
-        const message =
-            error instanceof Error ? error.message : 'An error occurred during message send';
-        logger.error(error, message);
-        res.status(500).json({ error: message });
+        logger.error(error);
+        res.status(500).json({ message: 'Internal server error' });
     }
 };
 
@@ -114,10 +110,9 @@ export const sendButton: RequestHandler = async (req, res) => {
         const result = await sendButtonMessage(session, to, data);
 
         res.status(200).json({ success: true, result });
-    } catch (e) {
-        const message = e instanceof Error ? e.message : 'An error occurred during message send';
-        logger.error(e, message);
-        res.status(500).json({ error: message });
+    } catch (error) {
+        logger.error(error);
+        res.status(500).json({ message: 'Internal server error' });
     }
 };
 
@@ -141,10 +136,9 @@ export const getMessages: RequestHandler = async (req, res) => {
                     ? messages[messages.length - 1].pkId
                     : null,
         });
-    } catch (e) {
-        const message = 'An error occured during message list';
-        logger.error(e, message);
-        res.status(500).json({ error: message });
+    } catch (error) {
+        logger.error(error);
+        res.status(500).json({ message: 'Internal server error' });
     }
 };
 
@@ -187,10 +181,9 @@ export const getIncomingMessages: RequestHandler = async (req, res) => {
                 hasMore,
             },
         });
-    } catch (e) {
-        const message = 'An error occured during message list';
-        logger.error(e, message);
-        res.status(500).json({ error: message });
+    } catch (error) {
+        logger.error(error);
+        res.status(500).json({ message: 'Internal server error' });
     }
 };
 
@@ -233,10 +226,9 @@ export const getOutgoingMessages: RequestHandler = async (req, res) => {
                 hasMore,
             },
         });
-    } catch (e) {
-        const message = 'An error occured during message list';
-        logger.error(e, message);
-        res.status(500).json({ error: message });
+    } catch (error) {
+        logger.error(error);
+        res.status(500).json({ message: 'Internal server error' });
     }
 };
 
@@ -380,10 +372,9 @@ export const getMessengerList: RequestHandler = async (req, res) => {
                 hasMore,
             },
         });
-    } catch (e) {
-        const message = 'An error occurred during message list';
-        logger.error(e, message);
-        res.status(500).json({ error: message });
+    } catch (error) {
+        logger.error(error);
+        res.status(500).json({ message: 'Internal server error' });
     }
 };
 // to do: send template message & personalization

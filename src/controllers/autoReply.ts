@@ -12,26 +12,25 @@ export const createAutoReply: RequestHandler = async (req, res) => {
         });
 
         if (!device) {
-            res.status(401).json({ message: 'Device not found' });
-        } else {
-            const autoReply = await prisma.autoReply.create({
-                data: {
-                    name,
-                    requests: {
-                        set: requests,
-                    },
-                    response,
-                    deviceId: device.pkId,
-                    recipients: {
-                        set: recipients,
-                    },
-                },
-            });
-            res.status(201).json(autoReply);
+            return res.status(404).json({ message: 'Device not found' });
         }
+        const autoReply = await prisma.autoReply.create({
+            data: {
+                name,
+                requests: {
+                    set: requests,
+                },
+                response,
+                deviceId: device.pkId,
+                recipients: {
+                    set: recipients,
+                },
+            },
+        });
+        res.status(201).json(autoReply);
     } catch (error) {
         logger.error(error);
-        res.status(500).json({ error: 'Internal server error' });
+        res.status(500).json({ message: 'Internal server error' });
     }
 };
 
@@ -45,7 +44,7 @@ export const getAutoReplies: RequestHandler = async (req, res) => {
         res.json(autoReplies);
     } catch (error) {
         logger.error(error);
-        res.status(500).json({ error: 'Internal server error' });
+        res.status(500).json({ message: 'Internal server error' });
     }
 };
 
@@ -64,7 +63,7 @@ export const getAutoReplyTemplateById: RequestHandler = async (req, res) => {
         }
     } catch (error) {
         logger.error(error);
-        res.status(500).json({ error: 'Internal server error' });
+        res.status(500).json({ message: 'Internal server error' });
     }
 };
 
@@ -81,13 +80,14 @@ export const updateAutoReplyTemplate: RequestHandler = async (req, res) => {
                 response,
                 status,
                 deviceId,
+                updatedAt: new Date(),
             },
         });
 
         res.json(updatedAutoReply);
     } catch (error) {
         logger.error(error);
-        res.status(500).json({ error: 'Internal server error' });
+        res.status(500).json({ message: 'Internal server error' });
     }
 };
 
@@ -102,7 +102,7 @@ export const deleteAutoReplyTemplate: RequestHandler = async (req, res) => {
         res.status(204).end();
     } catch (error) {
         logger.error(error);
-        res.status(500).json({ error: 'Internal server error' });
+        res.status(500).json({ message: 'Internal server error' });
     }
 };
 

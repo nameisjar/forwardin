@@ -14,25 +14,24 @@ export const createBroadcast: RequestHandler = async (req, res) => {
         });
 
         if (!device) {
-            res.status(401).json({ message: 'Device not found' });
-        } else {
-            const broadcast = await prisma.broadcast.create({
-                data: {
-                    name,
-                    message,
-                    schedule,
-                    deviceId: device.pkId,
-                    delay,
-                    recipients: {
-                        set: recipients,
-                    },
-                },
-            });
-            res.status(201).json(broadcast);
+            return res.status(401).json({ message: 'Device not found' });
         }
+        const broadcast = await prisma.broadcast.create({
+            data: {
+                name,
+                message,
+                schedule,
+                deviceId: device.pkId,
+                delay,
+                recipients: {
+                    set: recipients,
+                },
+            },
+        });
+        res.status(201).json(broadcast);
     } catch (error) {
         logger.error(error);
-        res.status(500).json({ error: 'Internal server error' });
+        res.status(500).json({ message: 'Internal server error' });
     }
 };
 
@@ -78,6 +77,7 @@ schedule.scheduleJob('*', async () => {
                 where: { id: broadcast.id },
                 data: {
                     isSent: true,
+                    updatedAt: new Date(),
                 },
             });
         }

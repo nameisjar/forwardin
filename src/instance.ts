@@ -203,7 +203,7 @@ export async function createInstance(options: createInstanceOptions) {
 
             await prisma.device.update({
                 where: { pkId: deviceId },
-                data: { phone },
+                data: { phone, updatedAt: new Date() },
             });
         }
         if (connection === 'close') handleConnectionClose();
@@ -211,7 +211,7 @@ export async function createInstance(options: createInstanceOptions) {
 
         await prisma.device.update({
             where: { pkId: deviceId },
-            data: { status: connection },
+            data: { status: connection, updatedAt: new Date() },
         });
     });
 
@@ -343,7 +343,7 @@ export async function sendMediaFile(
 
             const result = await session.sendMessage(getJid(recipient), messsage);
             results.push({ index, result });
-        } catch (error: any) {
+        } catch (error: unknown) {
             const message =
                 error instanceof Error ? error.message : 'An error occurred during media send';
             logger.error(error, message);
