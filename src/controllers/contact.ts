@@ -2,6 +2,7 @@ import { RequestHandler } from 'express';
 import prisma from '../utils/db';
 import { getRandomColor } from '../utils/profilePic';
 import { generateSlug } from '../utils/slug';
+import logger from '../config/logger';
 
 export const createContact: RequestHandler = async (req, res) => {
     try {
@@ -349,7 +350,7 @@ export const deleteContacts: RequestHandler = async (req, res) => {
 
         res.status(200).json({ message: 'Device(s) deleted successfully' });
     } catch (error) {
-        console.error(error);
+        logger.error(error);
         res.status(500).json({ message: 'Internal server error' });
     }
 };
@@ -397,7 +398,7 @@ export const addContactToGroup: RequestHandler = async (req, res) => {
 
         res.status(200).json({ message: 'Contact added to group(s) successfully' });
     } catch (error) {
-        console.error(error);
+        logger.error(error);
         res.status(500).json({ message: 'Internal server error' });
     }
 };

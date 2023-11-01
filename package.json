@@ -67,6 +67,7 @@
     "dependencies": {
         "@hapi/boom": "^10.0.1",
         "@prisma/client": "^5.2.0",
+        "@types/node-schedule": "^2.1.2",
         "@types/passport": "^1.0.13",
         "@types/passport-google-oauth20": "^2.0.12",
         "@whiskeysockets/baileys": "^6.4.1",
@@ -84,6 +85,7 @@
         "mailgun.js": "^9.2.1",
         "moment-timezone": "^0.5.43",
         "multer": "^1.4.5-lts.1",
+        "node-schedule": "^2.1.1",
         "nodemailer": "^6.9.5",
         "passport": "^0.6.0",
         "passport-google-oauth20": "^2.0.0",

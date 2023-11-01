@@ -5,7 +5,7 @@ import logger from '../config/logger';
 
 export const createAutoReply: RequestHandler = async (req, res) => {
     try {
-        const { name, deviceId, receivers, request, response } = req.body;
+        const { name, deviceId, recipients, requests, response } = req.body;
 
         const device = await prisma.device.findUnique({
             where: { id: deviceId },
@@ -17,22 +17,20 @@ export const createAutoReply: RequestHandler = async (req, res) => {
             const autoReply = await prisma.autoReply.create({
                 data: {
                     name,
-                    request: {
-                        set: request,
+                    requests: {
+                        set: requests,
                     },
                     response,
-                    schedule: new Date(),
-                    source: '1',
                     deviceId: device.pkId,
-                    receivers: {
-                        set: receivers,
+                    recipients: {
+                        set: recipients,
                     },
                 },
             });
             res.status(201).json(autoReply);
         }
     } catch (error) {
-        console.error(error);
+        logger.error(error);
         res.status(500).json({ error: 'Internal server error' });
     }
 };
@@ -46,7 +44,7 @@ export const getAutoReplies: RequestHandler = async (req, res) => {
         });
         res.json(autoReplies);
     } catch (error) {
-        console.error(error);
+        logger.error(error);
         res.status(500).json({ error: 'Internal server error' });
     }
 };
@@ -65,7 +63,7 @@ export const getAutoReplyTemplateById: RequestHandler = async (req, res) => {
             res.status(404).json({ error: 'Auto reply not found' });
         }
     } catch (error) {
-        console.error(error);
+        logger.error(error);
         res.status(500).json({ error: 'Internal server error' });
     }
 };
@@ -74,23 +72,21 @@ export const updateAutoReplyTemplate: RequestHandler = async (req, res) => {
     const id = parseInt(req.params.id);
 
     try {
-        const { request, response, schedule, status, source, deviceId } = req.body;
+        const { requests, response, status, deviceId } = req.body;
 
         const updatedAutoReply = await prisma.autoReply.update({
             where: { pkId: id },
             data: {
-                request,
+                requests,
                 response,
-                schedule,
                 status,
-                source,
                 deviceId,
             },
         });
 
         res.json(updatedAutoReply);
     } catch (error) {
-        console.error(error);
+        logger.error(error);
         res.status(500).json({ error: 'Internal server error' });
     }
 };
@@ -105,7 +101,7 @@ export const deleteAutoReplyTemplate: RequestHandler = async (req, res) => {
 
         res.status(204).end();
     } catch (error) {
-        console.error(error);
+        logger.error(error);
         res.status(500).json({ error: 'Internal server error' });
     }
 };
@@ -121,10 +117,10 @@ export async function sendAutoReply(sessionId: any, m: any) {
         const messageText = msg.message.conversation || msg.message.extendedTextMessage?.text || '';
         const matchingAutoReply = await prisma.autoReply.findFirst({
             where: {
-                request: {
+                requests: {
                     has: messageText,
                 },
-                receivers: {
+                recipients: {
                     has: recipient.split('@')[0],
                 },
                 status: true,

@@ -60,14 +60,12 @@ export const createDevice: RequestHandler = async (req, res) => {
     const pkId = req.prismaUser.pkId;
     const subscription = req.subscription;
 
-    // back here: what's severId?
     try {
         await prisma.$transaction(async (transaction) => {
             const createdDevice = await transaction.device.create({
                 data: {
                     apiKey,
                     name,
-                    serverId: 1,
                     user: { connect: { pkId } },
                 },
             });

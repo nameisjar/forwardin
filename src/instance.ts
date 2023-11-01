@@ -20,6 +20,7 @@ import { useSession } from './utils/useSession';
 import { Store } from './store';
 import { processButton } from './utils/processBtn';
 import { sendAutoReply } from './controllers/autoReply';
+import { sendCampaign } from './controllers/campaign';
 
 type Instance = WASocket & {
     destroy: () => Promise<void>;
@@ -226,8 +227,9 @@ export async function createInstance(options: createInstanceOptions) {
 
     // auto-reply
     sock.ev.on('messages.upsert', async (message) => {
-        logger.warn(message);
+        logger.debug(message);
         sendAutoReply(sessionId, message);
+        sendCampaign(sessionId, message);
     });
 
     // Debug events
@@ -371,7 +373,7 @@ export async function sendButtonMessage(
 
         return result;
     } catch (error) {
-        console.error('Error sending button message:', error);
+        logger.error('Error sending button message:', error);
         throw error;
     }
 }

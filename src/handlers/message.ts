@@ -83,7 +83,6 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                                             '',
                                         schedule: new Date(),
                                         status: data.status.toString(),
-                                        source: '',
                                         sessionId,
                                         contactId: contact?.pkId || null,
                                     },

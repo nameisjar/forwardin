@@ -162,7 +162,6 @@ model Device {
   name           String          @db.VarChar(128)
   phone          String?         @db.VarChar(20)
   apiKey         String          @unique @map("api_key") @db.VarChar(255)
-  serverId       Int
   status         String          @default("close") @map("status") @db.VarChar(20)
   createdAt      DateTime        @default(now()) @map("created_at")
   updatedAt      DateTime        @default(now()) @map("updated_at")
@@ -176,6 +175,7 @@ model Device {
   orders         Order[]
   contactDevices ContactDevice[]
   DeviceLabel    DeviceLabel[]
+  Broadcast      Broadcast[]
 }
 
 model Session {
@@ -281,7 +281,6 @@ model OutgoingMessage {
   message   String
   schedule  DateTime
   status    String   @db.VarChar(20)
-  source    String
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @default(now()) @map("updated_at")
   sessionId String
@@ -302,46 +301,58 @@ model IncomingMessage {
   contact    Contact? @relation(fields: [contactId], references: [pkId], onDelete: Cascade)
 }
 
+model Broadcast {
+  pkId       Int      @id @default(autoincrement())
+  id         String   @unique @default(uuid()) @db.Uuid
+  name       String   @db.VarChar(128)
+  recipients String[]
+  message    String   @db.VarChar(255)
+  schedule   DateTime
+  delay      Int
+  isSent     Boolean  @default(false)
+  deviceId   Int
+  device     Device   @relation(fields: [deviceId], references: [pkId], onDelete: Cascade)
+}
+
 model AutoReply {
-  pkId      Int      @id @default(autoincrement())
-  id        String   @unique @default(uuid()) @db.Uuid
-  name      String   @db.VarChar(128)
-  request   String[]
-  response  String   @db.VarChar(255)
-  schedule  DateTime
-  status    Boolean  @default(true)
-  source    String
-  receivers String[]
-  createdAt DateTime @default(now()) @map("created_at")
-  updatedAt DateTime @default(now()) @map("updated_at")
-  deviceId  Int
-  device    Device   @relation(fields: [deviceId], references: [pkId], onDelete: Cascade)
+  pkId       Int      @id @default(autoincrement())
+  id         String   @unique @default(uuid()) @db.Uuid
+  name       String   @db.VarChar(128)
+  requests   String[]
+  response   String   @db.VarChar(255)
+  status     Boolean  @default(true)
+  recipients String[]
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @default(now()) @map("updated_at")
+  deviceId   Int
+  device     Device   @relation(fields: [deviceId], references: [pkId], onDelete: Cascade)
 }
 
 model Campaign {
-  pkId                Int             @id @default(autoincrement())
-  id                  String          @unique @default(uuid()) @db.Uuid
-  name                String          @db.VarChar(128)
-  syntaxRegistration  String          @map("syntax_registration") @db.VarChar(255)
-  registrationMessage String          @map("registration_message")
-  messageRegistered   String          @map("message_registered")
-  phone               String          @unique @db.VarChar(20)
-  campaignMessageId   Int             @map("campaign_message_id")
-  groupId             Int             @map("group_id")
-  deviceId            Int             @map("device_id")
-  campaignMessages    CampaignMessage @relation(fields: [campaignMessageId], references: [pkId])
-  group               Group           @relation(fields: [groupId], references: [pkId])
-  device              Device          @relation(fields: [deviceId], references: [pkId])
+  pkId                Int               @id @default(autoincrement())
+  id                  String            @unique @default(uuid()) @db.Uuid
+  name                String            @db.VarChar(128)
+  syntaxRegistration  String            @map("syntax_registration") @db.VarChar(255)
+  registrationMessage String            @map("registration_message")
+  messageRegistered   String            @map("message_registered")
+  recipients          String[]
+  isSent              Boolean           @default(false)
+  groupId             Int               @map("group_id")
+  deviceId            Int               @map("device_id")
+  group               Group             @relation(fields: [groupId], references: [pkId], onDelete: Cascade)
+  device              Device            @relation(fields: [deviceId], references: [pkId])
+  CampaignMessage     CampaignMessage[]
 }
 
 model CampaignMessage {
-  pkId      Int        @id @default(autoincrement())
-  id        String     @unique @default(uuid()) @db.Uuid
-  day       String     @db.VarChar(128)
-  message   String
-  sechedule DateTime   @map("sechedule")
-  delay     Int
-  campaigns Campaign[]
+  pkId       Int      @id @default(autoincrement())
+  id         String   @unique @default(uuid()) @db.Uuid
+  campaignId Int      @map("campaign_id")
+  message    String
+  delay      Int
+  isSent     Boolean  @default(false)
+  schedule   DateTime @map("schedule")
+  Campaign   Campaign @relation(fields: [campaignId], references: [pkId])
 }
 
 model BusinessHour {

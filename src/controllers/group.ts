@@ -94,7 +94,7 @@ export const addMemberToGroup: RequestHandler = async (req, res) => {
                         addedContactIds.push(contactId);
                     }
                 } catch (error) {
-                    console.error(`Error adding contact ${contactId} to group:`, error);
+                    logger.error(`Error adding contact ${contactId} to group:`, error);
                     failedContactIds.push(contactId);
                 }
             }),
@@ -112,7 +112,7 @@ export const addMemberToGroup: RequestHandler = async (req, res) => {
             });
         }
     } catch (error) {
-        console.error('Error adding contacts to group:', error);
+        logger.error('Error adding contacts to group:', error);
         res.status(500).json({ message: 'Internal server error' });
     }
 };
@@ -221,7 +221,7 @@ export const updatedGroup: RequestHandler = async (req, res) => {
 
         res.status(200).json({ message: 'Group updated successfully', data: updatedGroup });
     } catch (error) {
-        console.error(error);
+        logger.error(error);
         res.status(500).json({ message: 'Internal server error' });
     }
 };
@@ -240,7 +240,7 @@ export const deleteGroups: RequestHandler = async (req, res) => {
 
         res.status(200).json({ message: 'Group(s) deleted successfully' });
     } catch (error) {
-        console.error(error);
+        logger.error(error);
         res.status(500).json({ message: 'Internal server error' });
     }
 };
