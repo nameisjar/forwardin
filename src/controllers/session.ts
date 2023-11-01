@@ -132,7 +132,7 @@ export const getSessionsByDeviceApiKey: RequestHandler = async (req, res) => {
     }
 };
 
-// back here: get session logs
+//to do: get session logs
 
 export const deleteSession: RequestHandler = async (req, res) => {
     await deleteInstance(req.params.sessionId);

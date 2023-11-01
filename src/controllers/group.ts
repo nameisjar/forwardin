@@ -118,7 +118,6 @@ export const addMemberToGroup: RequestHandler = async (req, res) => {
     }
 };
 
-// back here: remove multiple members
 export const removeMembersFromGroup: RequestHandler = async (req, res) => {
     try {
         const { groupId, contactIds } = req.body;

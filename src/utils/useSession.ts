@@ -8,8 +8,6 @@ import { PrismaClientKnownRequestError } from '@prisma/client/runtime/library';
 
 const fixId = (id: string) => id.replace(/\//g, '__').replace(/:/g, '-');
 
-// back here: review where id
-// back here: creds issue -> failed to decrypt msg
 export async function useSession(sessionId: string, deviceId: number) {
     const model = prisma.session;
 
