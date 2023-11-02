@@ -73,8 +73,34 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
 
                         if (data.message && !data.message.protocolMessage) {
                             if (message.key.fromMe) {
+                                let status;
+
+                                switch (data.status) {
+                                    case 0:
+                                        status = 'error';
+                                        break;
+                                    case 1:
+                                        status = 'pending';
+                                        break;
+                                    case 2:
+                                        status = 'server_ack';
+                                        break;
+                                    case 3:
+                                        status = 'delivery_ack';
+                                        break;
+                                    case 4:
+                                        status = 'read';
+                                        break;
+                                    case 5:
+                                        status = 'played';
+                                        break;
+                                    default:
+                                        status = 'pending';
+                                        break;
+                                }
                                 await prisma.outgoingMessage.create({
                                     data: {
+                                        id: message.key.id!,
                                         to: jidNormalizedUser(message.key.remoteJid!),
                                         message:
                                             data.message.conversation ||
@@ -82,7 +108,7 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                                             data.message.imageMessage?.caption ||
                                             '',
                                         schedule: new Date(),
-                                        status: data.status.toString(),
+                                        status,
                                         sessionId,
                                         contactId: contact?.pkId || null,
                                     },
@@ -152,6 +178,43 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                             remoteJid: data.key.remoteJid!,
                             sessionId,
                         },
+                    });
+
+                    let status;
+
+                    switch (update.status) {
+                        case 0:
+                            status = 'error';
+                            break;
+                        case 1:
+                            status = 'pending';
+                            break;
+                        case 2:
+                            status = 'server_ack';
+                            break;
+                        case 3:
+                            status = 'delivery_ack';
+                            break;
+                        case 4:
+                            status = 'read';
+                            break;
+                        case 5:
+                            status = 'played';
+                            break;
+                        default:
+                            status = 'pending';
+                            break;
+                    }
+
+                    await tx.outgoingMessage.update({
+                        where: {
+                            sessionId_to_id: {
+                                id: key.id!,
+                                to: key.remoteJid!,
+                                sessionId,
+                            },
+                        },
+                        data: { status },
                     });
                 });
             } catch (e) {

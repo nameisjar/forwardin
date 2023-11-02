@@ -278,7 +278,7 @@ model Group {
 
 model OutgoingMessage {
   pkId      Int      @id @default(autoincrement())
-  id        String   @unique @default(uuid()) @db.Uuid
+  id        String   @unique 
   to        String
   message   String
   schedule  DateTime
@@ -288,6 +288,8 @@ model OutgoingMessage {
   sessionId String
   contactId Int?
   contact   Contact? @relation(fields: [contactId], references: [pkId], onDelete: Cascade)
+
+  @@unique([sessionId, to, id], map: "unique_outgoing_message_key_per_session_id")
 }
 
 model IncomingMessage {
