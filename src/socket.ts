@@ -8,7 +8,7 @@ export function initSocketServer(app: Express.Application): http.Server {
     const server = http.createServer(app);
     io = new Server(server, { cors: { origin: '*' } });
     io.on('connection', (socket) => {
-        logger.warn(socket.id);
+        logger.info(socket.id);
 
         // const data = {
         //     deviceId: '8631e4e7-b399-4b71-b741-a865a60df877',

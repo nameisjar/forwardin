@@ -73,7 +73,7 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
 
                         if (data.message && !data.message.protocolMessage) {
                             if (message.key.fromMe) {
-                                await prisma.outgoingMessage.createMany({
+                                await prisma.outgoingMessage.create({
                                     data: {
                                         to: jidNormalizedUser(message.key.remoteJid!),
                                         message:
@@ -88,7 +88,7 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                                     },
                                 });
                             } else {
-                                await prisma.incomingMessage.createMany({
+                                await prisma.incomingMessage.create({
                                     data: {
                                         from: jidNormalizedUser(message.key.remoteJid!),
                                         message:
