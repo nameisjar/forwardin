@@ -21,6 +21,8 @@ import { Store } from './store';
 import { processButton } from './utils/processBtn';
 import { sendAutoReply } from './controllers/autoReply';
 import { sendCampaign } from './controllers/campaign';
+import { getSocketIO } from './socket';
+import { Server } from 'socket.io';
 
 type Instance = WASocket & {
     destroy: () => Promise<void>;
@@ -209,10 +211,13 @@ export async function createInstance(options: createInstanceOptions) {
         if (connection === 'close') handleConnectionClose();
         handleConnectionUpdate();
 
-        await prisma.device.update({
+        const device = await prisma.device.update({
             where: { pkId: deviceId },
             data: { status: connection, updatedAt: new Date() },
         });
+
+        const io: Server = getSocketIO();
+        io.emit(`device:${device.id}:status`, connection);
     });
 
     if (readIncomingMessages) {
