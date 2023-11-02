@@ -350,6 +350,7 @@ export const deleteContacts: RequestHandler = async (req, res) => {
             });
         });
 
+        // wait for all the Promises to settle (either resolve or reject)
         await Promise.all(contactPromises);
 
         res.status(200).json({ message: 'Device(s) deleted successfully' });
@@ -398,6 +399,7 @@ export const addContactToGroup: RequestHandler = async (req, res) => {
             });
         });
 
+        // wait for all the Promises to settle (either resolve or reject)
         await Promise.all(groupPromises);
 
         res.status(200).json({ message: 'Contact added to group(s) successfully' });

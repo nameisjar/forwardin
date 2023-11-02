@@ -66,6 +66,7 @@ export const addMemberToGroup: RequestHandler = async (req, res) => {
         const failedContactIds: string[] = [];
 
         // use `Promise.all` to parallelize contact operations and track results
+        // wait for all the Promises to settle (either resolve or reject)
         await Promise.all(
             contactIds.map(async (contactId: string) => {
                 try {
@@ -130,6 +131,7 @@ export const removeMembersFromGroup: RequestHandler = async (req, res) => {
             return res.status(404).json({ message: 'Group not found' });
         }
 
+        // wait for all the Promises to settle (either resolve or reject)
         await Promise.all(
             contactIds.map(async (contactId: string) => {
                 const contact = await prisma.contact.findUnique({
@@ -237,6 +239,7 @@ export const deleteGroups: RequestHandler = async (req, res) => {
             });
         });
 
+        // wait for all the Promises to settle (either resolve or reject)
         await Promise.all(groupPromises);
 
         res.status(200).json({ message: 'Group(s) deleted successfully' });

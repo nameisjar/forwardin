@@ -242,9 +242,19 @@ export const deleteDevices: RequestHandler = async (req, res) => {
     try {
         const deviceIds = req.body.deviceIds;
 
+        if (!deviceIds || !Array.isArray(deviceIds) || deviceIds.length === 0) {
+            return res.status(400).json({ message: 'Invalid deviceIds' });
+        }
+
         const devicePromises = deviceIds.map(async (deviceId: string) => {
-            if (!deviceIds) {
-                return res.status(400).json({ message: 'deviceIds are invalid' });
+            const device = await prisma.device.findUnique({
+                where: {
+                    id: deviceId,
+                },
+            });
+
+            if (!device) {
+                return { success: false, deviceId };
             }
 
             const deletedDevice = await prisma.device.delete({
@@ -264,9 +274,21 @@ export const deleteDevices: RequestHandler = async (req, res) => {
                     },
                 },
             });
+
+            return { success: true };
         });
 
-        await Promise.all(devicePromises);
+        // wait for all the Promises to settle (either resolve or reject)
+        const deviceResults = await Promise.all(devicePromises);
+        const hasFailures = deviceResults.some((result) => !result.success);
+        if (hasFailures) {
+            const failedDeviceIds = deviceResults
+                .filter((result) => !result.success)
+                .map((result) => result.deviceId);
+            return res
+                .status(404)
+                .json({ message: `Devices not found: ${failedDeviceIds.join(', ')}` });
+        }
 
         res.status(200).json({ message: 'Device(s) deleted successfully' });
     } catch (error) {
