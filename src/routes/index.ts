@@ -10,7 +10,10 @@ import paymentRoutes from './payments';
 import autoReplyRoutes from './autoReplies';
 import broadcastRoutes from './broadcasts';
 import campaignRoutes from './campaigns';
-import superAdminRoutes from './superAdmin';
+import menuRoutes from './menus';
+import subsPlanRoutes from './subscriptionPlans';
+import privilegeRoutes from './privileges';
+import customerServiceRoutes from './customerServices';
 import authMiddleware from '../middleware/auth';
 
 const router = Router();
@@ -30,7 +33,9 @@ router.use('/payment', paymentRoutes);
 router.use('/auto-replies', authMiddleware, autoReplyRoutes);
 router.use('/broadcasts', authMiddleware, broadcastRoutes);
 router.use('/campaigns', authMiddleware, campaignRoutes);
-
-router.use('/super-admin', authMiddleware, superAdminRoutes);
+router.use('/menus', authMiddleware, menuRoutes);
+router.use('/privileges', authMiddleware, privilegeRoutes);
+router.use('/subscription-plans', authMiddleware, subsPlanRoutes);
+router.use('/customer-services', authMiddleware, customerServiceRoutes);
 
 export default router;

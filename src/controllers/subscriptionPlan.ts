@@ -34,7 +34,10 @@ export const createSubscriptionPlan: RequestHandler = async (req, res) => {
             },
         });
 
-        res.status(201).json(subscriptionPlan);
+        res.status(201).json({
+            message: 'Subscription plan created successfully',
+            data: subscriptionPlan,
+        });
     } catch (error) {
         logger.error(error);
         res.status(500).json({ message: 'Internal server error' });
@@ -52,15 +55,15 @@ export const getAllSubscriptionPlans: RequestHandler = async (req, res) => {
 };
 
 export const getSubscriptionPlanById: RequestHandler = async (req, res) => {
-    const id = parseInt(req.params.id);
+    const id = req.params.id;
 
     try {
         const subscriptionPlan = await prisma.subscriptionPlan.findUnique({
-            where: { pkId: id },
+            where: { id },
         });
 
         if (subscriptionPlan) {
-            res.json(subscriptionPlan);
+            res.status(200).json(subscriptionPlan);
         } else {
             res.status(404).json({ error: 'Subscription plan not found' });
         }
@@ -71,7 +74,7 @@ export const getSubscriptionPlanById: RequestHandler = async (req, res) => {
 };
 
 export const updateSubscriptionPlan: RequestHandler = async (req, res) => {
-    const id = parseInt(req.params.id);
+    const id = req.params.id;
 
     try {
         const {
@@ -89,7 +92,7 @@ export const updateSubscriptionPlan: RequestHandler = async (req, res) => {
         } = req.body;
 
         const updatedSubscriptionPlan = await prisma.subscriptionPlan.update({
-            where: { pkId: id },
+            where: { id },
             data: {
                 name,
                 monthlyPrice,
@@ -106,7 +109,10 @@ export const updateSubscriptionPlan: RequestHandler = async (req, res) => {
             },
         });
 
-        res.json(updatedSubscriptionPlan);
+        res.status(201).json({
+            message: 'Subscription plan updated successfully',
+            data: updatedSubscriptionPlan,
+        });
     } catch (error) {
         logger.error(error);
         res.status(500).json({ message: 'Internal server error' });
@@ -114,14 +120,14 @@ export const updateSubscriptionPlan: RequestHandler = async (req, res) => {
 };
 
 export const deleteSubscriptionPlan: RequestHandler = async (req, res) => {
-    const id = parseInt(req.params.id);
+    const id = req.params.id;
 
     try {
         await prisma.subscriptionPlan.delete({
-            where: { pkId: id },
+            where: { id },
         });
 
-        res.status(204).end();
+        res.status(200).json({ message: 'Subscription plan deleted successfully' });
     } catch (error) {
         logger.error(error);
         res.status(500).json({ message: 'Internal server error' });

@@ -35,20 +35,18 @@ model User {
 }
 
 model CustomerService {
-  pkId        Int       @id @default(autoincrement())
-  id          String    @unique @default(uuid()) @db.Uuid
-  username    String    @db.VarChar(128)
-  phone       String    @db.VarChar(20)
-  email       String    @db.VarChar(255)
-  password    String    @db.VarChar(255)
-  createdAt   DateTime  @default(now()) @map("created_at")
-  updatedAt   DateTime  @default(now()) @map("updated_at")
+  pkId        Int        @id @default(autoincrement())
+  id          String     @unique @default(uuid()) @db.Uuid
+  email       String     @unique @db.VarChar(255)
+  password    String     @db.VarChar(255)
+  createdAt   DateTime   @default(now()) @map("created_at")
+  updatedAt   DateTime   @default(now()) @map("updated_at")
   userId      Int
-  privilegeId Int       @map("privilege_id")
-  user        User      @relation(fields: [userId], references: [pkId])
-  privilege   Privilege @relation(fields: [privilegeId], references: [pkId])
-
-  @@unique([email, username, phone])
+  deviceId    Int?
+  privilegeId Int?       @map("privilege_id")
+  user        User       @relation(fields: [userId], references: [pkId], onDelete: Cascade)
+  device      Device?    @relation(fields: [deviceId], references: [pkId], onDelete: SetNull)
+  privilege   Privilege? @relation(fields: [privilegeId], references: [pkId], onDelete: SetNull)
 }
 
 model Privilege {
@@ -157,25 +155,26 @@ model Transaction {
 }
 
 model Device {
-  pkId           Int             @id @default(autoincrement())
-  id             String          @unique @default(uuid()) @db.Uuid
-  name           String          @db.VarChar(128)
-  phone          String?         @db.VarChar(20)
-  apiKey         String          @unique @map("api_key") @db.VarChar(255)
-  status         String          @default("close") @map("status") @db.VarChar(20)
-  createdAt      DateTime        @default(now()) @map("created_at")
-  updatedAt      DateTime        @default(now()) @map("updated_at")
-  businessHourId Int?            @map("business_hour_id")
-  userId         Int
-  businessHour   BusinessHour?   @relation(fields: [businessHourId], references: [pkId], onDelete: SetNull)
-  user           User            @relation(fields: [userId], references: [pkId], onDelete: Cascade)
-  sessions       Session[]
-  autoReplies    AutoReply[]
-  campaigns      Campaign[]
-  orders         Order[]
-  contactDevices ContactDevice[]
-  DeviceLabel    DeviceLabel[]
-  Broadcast      Broadcast[]
+  pkId            Int               @id @default(autoincrement())
+  id              String            @unique @default(uuid()) @db.Uuid
+  name            String            @db.VarChar(128)
+  phone           String?           @db.VarChar(20)
+  apiKey          String            @unique @map("api_key") @db.VarChar(255)
+  status          String            @default("close") @map("status") @db.VarChar(20)
+  createdAt       DateTime          @default(now()) @map("created_at")
+  updatedAt       DateTime          @default(now()) @map("updated_at")
+  businessHourId  Int?              @map("business_hour_id")
+  userId          Int
+  businessHour    BusinessHour?     @relation(fields: [businessHourId], references: [pkId], onDelete: SetNull)
+  user            User              @relation(fields: [userId], references: [pkId], onDelete: Cascade)
+  sessions        Session[]
+  autoReplies     AutoReply[]
+  campaigns       Campaign[]
+  orders          Order[]
+  contactDevices  ContactDevice[]
+  DeviceLabel     DeviceLabel[]
+  Broadcast       Broadcast[]
+  CustomerService CustomerService[]
 }
 
 model Session {

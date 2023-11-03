@@ -1,8 +1,8 @@
-import { User } from '@prisma/client';
 import { RequestHandler } from 'express';
 import jwt from 'jsonwebtoken';
 import prisma from '../utils/db';
 import { jwtSecretKey } from '../utils/jwtGenerator';
+import { userPayload } from '../types';
 
 export const authMiddleware: RequestHandler = (req, res, next) => {
     if (!req.header('Authorization')) {
@@ -29,7 +29,7 @@ export const accessToken: RequestHandler = (req, res, next) => {
         if (err) {
             return res.status(403).json({ message: 'Access denied: Invalid token' });
         }
-        req.prismaUser = user as User;
+        req.userReq = user as userPayload;
         next();
     });
 };
@@ -44,20 +44,22 @@ export const apiKey: RequestHandler = async (req, res, next) => {
         where: {
             accountApiKey: apiKey,
         },
+        include: { privilege: { select: { name: true } } },
     });
 
     if (!user) {
         return res.status(401).json({ message: 'Access denied: Invalid API key' });
     }
 
-    req.prismaUser = user;
+    req.userReq = user;
+    req.privilege = user.privilege?.name;
     req.apiKey = apiKey;
     next();
 };
 
 // to protect super admin routes
 export const superAdminOnly: RequestHandler = async (req, res, next) => {
-    const user = req.prismaUser;
+    const user = req.userReq;
 
     const privilege = await prisma.user.findUnique({
         where: { id: user.id },
@@ -78,7 +80,7 @@ export function checkPrivilege(controller: string): RequestHandler {
         const method = req.method.toLowerCase();
 
         const user = await prisma.user.findUnique({
-            where: { pkId: req.prismaUser.pkId },
+            where: { pkId: req.userReq.pkId },
             select: { privilege: { select: { roles: { include: { module: true } } } } },
         });
 
@@ -124,7 +126,7 @@ export function checkPrivilege(controller: string): RequestHandler {
 export default authMiddleware;
 
 export const isEmailVerified: RequestHandler = async (req, res, next) => {
-    const user = req.prismaUser;
+    const user = req.userReq;
 
     if (user && user.emailVerifiedAt) {
         next();

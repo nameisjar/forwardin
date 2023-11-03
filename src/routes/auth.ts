@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import * as controller from '../controllers/auth';
 import { passwordRules, registerValidationRules, validate } from '../middleware/requestValidator';
-import { accessToken, checkPrivilege } from '../middleware/auth';
+import { accessToken } from '../middleware/auth';
 
 const router = Router();
 
@@ -16,7 +16,6 @@ router.get('/google', controller.googleAuth);
 router.get('/google/callback', controller.googleAuthCallback);
 // router.get('/auth/facebook', controller.facebookAuth);
 
-router.use(checkPrivilege('auth'));
 router.use(accessToken);
 router.post('/send-verification-email', controller.sendVerificationEmail);
 router.post('/verify-email', controller.verifyEmail);

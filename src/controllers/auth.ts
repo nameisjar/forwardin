@@ -47,6 +47,7 @@ export const register: RequestHandler = async (req, res) => {
                     affiliationCode: username,
                     privilege: { connect: { pkId: existingPrivilege.pkId } },
                 },
+                include: { privilege: { select: { name: true } } },
             });
 
             const accessToken = generateAccessToken(newUser);
@@ -174,8 +175,8 @@ export const refreshToken: RequestHandler = async (req, res) => {
 
 export const sendVerificationEmail: RequestHandler = async (req, res) => {
     try {
-        const user = req.prismaUser;
-        const email = req.prismaUser.email;
+        const user = req.userReq;
+        const email = req.userReq.email;
 
         if (!user) {
             return res
@@ -225,7 +226,7 @@ export const sendVerificationEmail: RequestHandler = async (req, res) => {
 
 export const verifyEmail: RequestHandler = async (req, res) => {
     try {
-        const pkId = req.prismaUser.pkId;
+        const pkId = req.userReq.pkId;
         const otpToken = String(req.body.otpToken);
 
         const user = await prisma.user.findUnique({
@@ -370,7 +371,7 @@ export const changePassword: RequestHandler = async (req, res) => {
     try {
         const { currentPassword, password, confirmPassword } = req.body;
 
-        const email = req.prismaUser.email;
+        const email = req.userReq.email;
         const user = await prisma.user.findUnique({
             where: { email },
         });

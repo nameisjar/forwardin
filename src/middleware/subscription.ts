@@ -2,7 +2,7 @@ import { RequestHandler } from 'express';
 import prisma from '../utils/db';
 
 export const checkSubscriptionQuota: RequestHandler = async (req, res, next) => {
-    const userId = req.prismaUser.pkId;
+    const userId = req.userReq.pkId;
 
     const subscription = await prisma.subscription.findFirst({
         where: { userId },

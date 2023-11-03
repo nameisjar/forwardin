@@ -8,7 +8,7 @@ export const pay: RequestHandler = async (req, res) => {
     try {
         const url = 'https://app.sandbox.midtrans.com/snap/v1/transactions';
         const apiKey = process.env.MIDTRANS_KEY!;
-        const user = req.prismaUser;
+        const user = req.userReq;
 
         const { subscriptionPlanId, subscriptionPlanType } = req.body;
 
@@ -262,7 +262,7 @@ export const handleNotification: RequestHandler = async (req, res) => {
 };
 
 export const subscribeToTrial: RequestHandler = async (req, res) => {
-    const userId = req.prismaUser.pkId;
+    const userId = req.userReq.pkId;
     const subscriptionPlan = await prisma.subscriptionPlan.findUnique({
         where: { name: 'starter' },
     });
@@ -352,7 +352,7 @@ export const getSubscription: RequestHandler = async (req, res) => {
 
 export const getTransactions: RequestHandler = async (req, res) => {
     try {
-        const userId = req.prismaUser.pkId;
+        const userId = req.userReq.pkId;
 
         const transactions = await prisma.transaction.findMany({
             where: { userId },

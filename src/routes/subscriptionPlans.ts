@@ -6,15 +6,16 @@ import {
     updateSubscriptionPlan,
     deleteSubscriptionPlan,
 } from '../controllers/subscriptionPlan';
-import { checkPrivilege } from '../middleware/auth';
+import { checkPrivilege, superAdminOnly } from '../middleware/auth';
 
 const router = express.Router();
 
+router.use(superAdminOnly);
 router.use(checkPrivilege('subscriptionPlan'));
-router.post('/subscription-plans', createSubscriptionPlan);
-router.get('/subscription-plans', getAllSubscriptionPlans);
-router.get('/subscription-plans/:id', getSubscriptionPlanById);
-router.put('/subscription-plans/:id', updateSubscriptionPlan);
-router.delete('/subscription-plans/:id', deleteSubscriptionPlan);
+router.post('/', createSubscriptionPlan);
+router.get('/', getAllSubscriptionPlans);
+router.get('/:id', getSubscriptionPlanById);
+router.put('/:id', updateSubscriptionPlan);
+router.delete('/:id', deleteSubscriptionPlan);
 
 export default router;

@@ -8,7 +8,7 @@ export const createContact: RequestHandler = async (req, res) => {
     try {
         const { firstName, lastName, phone, email, gender, dob, labels, deviceId } = req.body;
 
-        const pkId = req.prismaUser.pkId;
+        const pkId = req.userReq.pkId;
 
         const existingContact = await prisma.contact.findFirst({
             where: {
@@ -93,7 +93,7 @@ export const createContact: RequestHandler = async (req, res) => {
 };
 
 export const getContacts: RequestHandler = async (req, res) => {
-    const pkId = req.prismaUser.pkId;
+    const pkId = req.userReq.pkId;
 
     try {
         const contacts = await prisma.contact.findMany({
@@ -116,7 +116,7 @@ export const getContacts: RequestHandler = async (req, res) => {
 };
 
 export const getContactLabels: RequestHandler = async (req, res) => {
-    const pkId = req.prismaUser.pkId;
+    const pkId = req.userReq.pkId;
 
     try {
         const labels = await prisma.contact.findMany({
