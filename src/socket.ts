@@ -6,7 +6,7 @@ let io: Server;
 
 export function initSocketServer(app: Express.Application): http.Server {
     const server = http.createServer(app);
-    io = new Server(server, { cors: { origin: '*' } });
+    io = new Server(server, { cors: { origin: `${process.env.CLIENT_URL}` } });
     io.on('connection', (socket) => {
         logger.info(socket.id);
 
