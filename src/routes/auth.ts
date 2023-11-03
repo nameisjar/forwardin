@@ -1,9 +1,11 @@
 import { Router } from 'express';
 import * as controller from '../controllers/auth';
 import { passwordRules, registerValidationRules, validate } from '../middleware/requestValidator';
-import { accessToken } from '../middleware/auth';
+import { accessToken, checkPrivilege } from '../middleware/auth';
 
 const router = Router();
+
+router.use(checkPrivilege('auth'));
 router.post('/register', registerValidationRules, validate, controller.register);
 router.post('/check-identifier-availability', controller.checkIdentifierAvailability);
 router.post('/login', controller.login);

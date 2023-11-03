@@ -1,9 +1,11 @@
 import { Router } from 'express';
 import * as controller from '../controllers/device';
 import { checkSubscriptionQuota, isDeviceQuotaAvailable } from '../middleware/subscription';
+import { checkPrivilege } from '../middleware/auth';
 
 const router = Router();
 
+router.use(checkPrivilege('device'));
 router.get('/', controller.getDevices);
 router.get('/labels', controller.getDeviceLabels);
 router.post('/create', checkSubscriptionQuota, isDeviceQuotaAvailable, controller.createDevice);

@@ -71,8 +71,8 @@ model PrivilegeRole {
   isRead      Boolean
   isEdit      Boolean
   moduleId    Int       @map("module_id")
-  module      Modul     @relation(fields: [moduleId], references: [pkId])
-  privilege   Privilege @relation(fields: [privilegeId], references: [pkId])
+  module      Module    @relation(fields: [moduleId], references: [pkId], onDelete: Cascade)
+  privilege   Privilege @relation(fields: [privilegeId], references: [pkId], onDelete: Cascade)
   privilegeId Int       @map("privilege_id")
 }
 
@@ -91,11 +91,11 @@ model MenuPrivilege {
   id          String    @unique @default(uuid()) @db.Uuid
   menu        Menu      @relation(fields: [menuId], references: [pkId])
   menuId      Int       @map("menu_id")
-  privilege   Privilege @relation(fields: [privilegeId], references: [pkId])
+  privilege   Privilege @relation(fields: [privilegeId], references: [pkId], onDelete: Cascade)
   privilegeId Int       @map("privilege_id")
 }
 
-model Modul {
+model Module {
   pkId           Int             @id @default(autoincrement())
   id             String          @unique @default(uuid()) @db.Uuid
   name           String          @db.VarChar(128)
@@ -167,7 +167,7 @@ model Device {
   updatedAt      DateTime        @default(now()) @map("updated_at")
   businessHourId Int?            @map("business_hour_id")
   userId         Int
-  businessHour   BusinessHour?   @relation(fields: [businessHourId], references: [pkId])
+  businessHour   BusinessHour?   @relation(fields: [businessHourId], references: [pkId], onDelete: SetNull)
   user           User            @relation(fields: [userId], references: [pkId], onDelete: Cascade)
   sessions       Session[]
   autoReplies    AutoReply[]
@@ -278,7 +278,7 @@ model Group {
 
 model OutgoingMessage {
   pkId      Int      @id @default(autoincrement())
-  id        String   @unique 
+  id        String   @unique
   to        String
   message   String
   schedule  DateTime

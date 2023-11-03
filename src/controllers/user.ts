@@ -1,15 +1,24 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
 import { RequestHandler } from 'express';
 import prisma from '../utils/db';
 import logger from '../config/logger';
 
+export const getUsers: RequestHandler = async (req, res) => {
+    try {
+        const users = await prisma.user.findMany({});
+        res.status(200).json(users);
+    } catch (error) {
+        logger.error(error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};
+
 export const getUserProfile: RequestHandler = async (req, res) => {
     try {
-        const userId = req.prismaUser.pkId;
+        const userId = req.params.userId;
 
         const user = await prisma.user.findUnique({
             where: {
-                pkId: userId,
+                id: userId,
             },
             select: {
                 firstName: true,
@@ -18,6 +27,7 @@ export const getUserProfile: RequestHandler = async (req, res) => {
                 phone: true,
                 email: true,
                 accountApiKey: true,
+                googleId: true,
                 affiliationCode: true,
             },
         });

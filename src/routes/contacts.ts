@@ -1,9 +1,11 @@
 import { Router } from 'express';
 import * as controller from '../controllers/contact';
 import { dateRules, validate } from '../middleware/requestValidator';
+import { checkPrivilege } from '../middleware/auth';
 
 const router = Router();
 
+router.use(checkPrivilege('contact'));
 router.post('/create', dateRules, validate, controller.createContact);
 router.get('/', controller.getContacts);
 router.get('/labels', controller.getContactLabels);

@@ -55,7 +55,8 @@ export const apiKey: RequestHandler = async (req, res, next) => {
     next();
 };
 
-export const isSuperAdmin: RequestHandler = async (req, res, next) => {
+// to protect super admin routes
+export const superAdminOnly: RequestHandler = async (req, res, next) => {
     const user = req.prismaUser;
 
     const privilege = await prisma.user.findUnique({
@@ -69,6 +70,56 @@ export const isSuperAdmin: RequestHandler = async (req, res, next) => {
         res.status(403).json({ message: 'Access denied: Super admin only' });
     }
 };
+
+// to protect controllers based on user privilege roles
+// eg: users with non-super admin privilege can't perform user deletion
+export function checkPrivilege(controller: string): RequestHandler {
+    return async (req, res, next) => {
+        const method = req.method.toLowerCase();
+
+        const user = await prisma.user.findUnique({
+            where: { pkId: req.prismaUser.pkId },
+            select: { privilege: { select: { roles: { include: { module: true } } } } },
+        });
+
+        if (!user) {
+            return res.status(404).json({ message: 'User not found' });
+        }
+
+        const userRoles = user.privilege?.roles;
+
+        if (!userRoles) {
+            return res
+                .status(403)
+                .json({ message: "Access denied. You haven't been assigned to any roles" });
+        }
+
+        const hasRequiredPrivilege = userRoles.some((role) => {
+            if (method === 'post' && role.isCreate) {
+                return role.module.controller === controller;
+            }
+            if (method === 'get' && role.isRead) {
+                return role.module.controller === controller;
+            }
+            if (method === 'put' && role.isEdit) {
+                return role.module.controller === controller;
+            }
+            if (method === 'delete' && role.isDelete) {
+                return role.module.controller === controller;
+            }
+            return false;
+        });
+
+        if (hasRequiredPrivilege) {
+            next();
+        } else {
+            res.status(403).json({
+                message:
+                    'Access denied. You do not have the required privileges to perform this action',
+            });
+        }
+    };
+}
 
 export default authMiddleware;
 

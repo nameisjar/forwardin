@@ -1,8 +1,10 @@
 import { Router } from 'express';
 import * as controller from '../controllers/message';
+import { checkPrivilege } from '../middleware/auth';
 
 const router = Router();
 
+router.use(checkPrivilege('message'));
 router.post('/:sessionId/send', controller.sendMessages);
 router.post('/:sessionId/send/image', controller.sendImageMessages);
 router.post('/:sessionId/send/button', controller.sendButton);

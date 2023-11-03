@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
 import { RequestHandler } from 'express';
 import prisma from '../utils/db';
 import logger from '../config/logger';
