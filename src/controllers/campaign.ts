@@ -75,7 +75,7 @@ export const createCampaign: RequestHandler = async (req, res) => {
                     updatedAt: new Date(),
                 },
             });
-            res.status(201).json({ message: 'Campaign created' });
+            res.status(201).json({ mmessage: 'Campaign created successfully' });
         }
     } catch (error) {
         logger.error(error);
@@ -95,7 +95,7 @@ export const createCampaignMessage: RequestHandler = async (req, res) => {
         if (!campaign) {
             res.status(404).json({ message: 'Campaign not found' });
         } else {
-            const campaignMessage = await prisma.campaignMessage.create({
+            await prisma.campaignMessage.create({
                 data: {
                     message,
                     schedule,
@@ -104,7 +104,7 @@ export const createCampaignMessage: RequestHandler = async (req, res) => {
                 },
             });
 
-            res.status(201).json(campaignMessage);
+            res.status(201).json({ message: 'Campaign message created successfully' });
         }
     } catch (error) {
         logger.error(error);
@@ -158,6 +158,37 @@ export async function sendCampaign(sessionId: any, m: any) {
         throw error;
     }
 }
+
+export const getAllCampaigns: RequestHandler = async (req, res) => {
+    try {
+        const deviceId = req.params.deviceId;
+
+        const campaigns = await prisma.campaign.findMany({
+            where: { device: { id: deviceId } },
+            include: { device: true },
+        });
+
+        res.status(200).json(campaigns);
+    } catch (error) {
+        logger.error(error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};
+
+export const getAllCampaignMessagess: RequestHandler = async (req, res) => {
+    try {
+        const campaignId = req.params.campaignId;
+
+        const campaignMessages = await prisma.campaignMessage.findMany({
+            where: { Campaign: { id: campaignId } },
+        });
+
+        res.status(200).json(campaignMessages);
+    } catch (error) {
+        logger.error(error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};
 
 const processedRecipients: (string | number)[] = [];
 
@@ -225,6 +256,6 @@ schedule.scheduleJob('*', async () => {
         }
         logger.debug('Campaign job is running...');
     } catch (error) {
-        logger.error('Error processing scheduled campaign messages:', error);
+        logger.error(error, 'Error processing scheduled campaign messages');
     }
 });

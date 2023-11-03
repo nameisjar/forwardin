@@ -10,6 +10,8 @@ import prisma from '../utils/db';
 import { generateUuid } from '../utils/keyGenerator';
 import logger from '../config/logger';
 
+// one device, one session
+// one whatsapp number, multiple devices == one whatsapp number, multiple sessions
 export const createSession: RequestHandler = async (req, res) => {
     try {
         const { deviceId } = req.body;

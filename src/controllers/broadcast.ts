@@ -11,12 +11,17 @@ export const createBroadcast: RequestHandler = async (req, res) => {
 
         const device = await prisma.device.findUnique({
             where: { id: deviceId },
+            include: { sessions: { select: { sessionId: true } } },
         });
 
         if (!device) {
             return res.status(401).json({ message: 'Device not found' });
         }
-        const broadcast = await prisma.broadcast.create({
+        if (!device.sessions[0]) {
+            return res.status(400).json({ message: 'Session not found' });
+        }
+
+        await prisma.broadcast.create({
             data: {
                 name,
                 message,
@@ -28,7 +33,23 @@ export const createBroadcast: RequestHandler = async (req, res) => {
                 },
             },
         });
-        res.status(201).json(broadcast);
+        res.status(201).json({ message: 'Broadcast created successfully' });
+    } catch (error) {
+        logger.error(error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};
+
+export const getAllBroadcasts: RequestHandler = async (req, res) => {
+    try {
+        const deviceId = req.params.deviceId;
+
+        const broadcasts = await prisma.broadcast.findMany({
+            where: { device: { id: deviceId } },
+            include: { device: true },
+        });
+
+        res.status(200).json(broadcasts);
     } catch (error) {
         logger.error(error);
         res.status(500).json({ message: 'Internal server error' });
@@ -83,6 +104,6 @@ schedule.scheduleJob('*', async () => {
         }
         logger.debug('Broadcast job is running...');
     } catch (error) {
-        logger.error('Error processing scheduled broadcasts:', error);
+        logger.error(error, 'Error processing scheduled broadcast messages');
     }
 });

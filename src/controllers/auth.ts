@@ -136,8 +136,8 @@ export const login: RequestHandler = async (req, res) => {
 
         return res.status(200).json({ accessToken, refreshToken, id, role: user.privilegeId });
     } catch (error) {
-        req.log.error('Error:', error);
-        return res.status(500).json({ message: 'Internal server error' });
+        logger.error(error);
+        res.status(500).json({ message: 'Internal server error' });
     }
 };
 
