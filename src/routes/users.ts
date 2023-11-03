@@ -6,8 +6,8 @@ const router = Router();
 
 router.use(checkPrivilege('user'));
 router.get('/:userId', controller.getUserProfile);
-router.get('/subscription', controller.getUserSubscriptionDetail);
-// router.put('/update', controller.updateUser);
-router.delete('/delete', controller.deleteUser);
+router.get('/:userId/subscription', controller.getUserSubscriptionDetail);
+// router.put('/:userId/update', controller.updateUser);
+router.delete('/:userId/delete', controller.deleteUser);
 
 export default router;

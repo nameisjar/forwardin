@@ -45,7 +45,7 @@ export const getUserProfile: RequestHandler = async (req, res) => {
 
 export const deleteUser: RequestHandler = async (req, res) => {
     try {
-        const userId = req.prismaUser.pkId;
+        const userId = req.params.userId;
 
         if (!userId) {
             return res.status(401).json({ message: 'Unauthorized: User not authenticated' });
@@ -53,7 +53,7 @@ export const deleteUser: RequestHandler = async (req, res) => {
 
         const user = await prisma.user.findUnique({
             where: {
-                pkId: userId,
+                id: userId,
             },
         });
 
@@ -63,7 +63,7 @@ export const deleteUser: RequestHandler = async (req, res) => {
 
         await prisma.user.delete({
             where: {
-                pkId: userId,
+                id: userId,
             },
         });
 
@@ -86,10 +86,20 @@ export const deleteUser: RequestHandler = async (req, res) => {
 
 export const getUserSubscriptionDetail: RequestHandler = async (req, res) => {
     try {
-        const userId = req.prismaUser.pkId;
+        const userId = req.params.userId;
+
+        const user = await prisma.user.findUnique({
+            where: {
+                id: userId,
+            },
+        });
+
+        if (!user) {
+            return res.status(404).json({ message: 'User not found' });
+        }
 
         const subscription = await prisma.subscription.findFirst({
-            where: { userId },
+            where: { userId: user.pkId },
             include: { subscriptionPlan: { select: { name: true } } },
             orderBy: { startDate: 'desc' },
         });

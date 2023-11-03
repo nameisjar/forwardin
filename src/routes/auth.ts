@@ -5,7 +5,6 @@ import { accessToken, checkPrivilege } from '../middleware/auth';
 
 const router = Router();
 
-router.use(checkPrivilege('auth'));
 router.post('/register', registerValidationRules, validate, controller.register);
 router.post('/check-identifier-availability', controller.checkIdentifierAvailability);
 router.post('/login', controller.login);
@@ -17,6 +16,7 @@ router.get('/google', controller.googleAuth);
 router.get('/google/callback', controller.googleAuthCallback);
 // router.get('/auth/facebook', controller.facebookAuth);
 
+router.use(checkPrivilege('auth'));
 router.use(accessToken);
 router.post('/send-verification-email', controller.sendVerificationEmail);
 router.post('/verify-email', controller.verifyEmail);
