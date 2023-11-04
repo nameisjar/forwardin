@@ -3,7 +3,7 @@ import prisma from '../utils/db';
 import logger from '../config/logger';
 
 export const getGroups: RequestHandler = async (req, res) => {
-    const userId = req.userReq.pkId;
+    const userId = req.authenticatedUser.pkId;
     try {
         const rawGroups = await prisma.group.findMany({
             where: { userId },
@@ -33,7 +33,7 @@ export const getGroups: RequestHandler = async (req, res) => {
 
 export const createGroup: RequestHandler = async (req, res) => {
     const { name } = req.body;
-    const userId = req.userReq.pkId;
+    const userId = req.authenticatedUser.pkId;
 
     try {
         await prisma.group.create({

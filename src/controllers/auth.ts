@@ -47,7 +47,6 @@ export const register: RequestHandler = async (req, res) => {
                     affiliationCode: username,
                     privilege: { connect: { pkId: existingPrivilege.pkId } },
                 },
-                include: { privilege: { select: { name: true } } },
             });
 
             const accessToken = generateAccessToken(newUser);
@@ -120,7 +119,6 @@ export const login: RequestHandler = async (req, res) => {
             where: {
                 OR: [{ email: identifier }, { username: identifier }, { phone: identifier }],
             },
-            include: { privilege: { select: { name: true } } },
         });
 
         if (!user) {
@@ -158,7 +156,6 @@ export const refreshToken: RequestHandler = async (req, res) => {
             const pkId = (decoded as User).pkId;
             const user = await prisma.user.findUnique({
                 where: { pkId },
-                include: { privilege: { select: { name: true } } },
             });
             if (!user) {
                 return res.status(401).json({ message: 'User not found' });
@@ -177,8 +174,8 @@ export const refreshToken: RequestHandler = async (req, res) => {
 
 export const sendVerificationEmail: RequestHandler = async (req, res) => {
     try {
-        const user = req.userReq;
-        const email = req.userReq.email;
+        const user = req.authenticatedUser;
+        const email = req.authenticatedUser.email;
 
         if (!user) {
             return res
@@ -228,7 +225,7 @@ export const sendVerificationEmail: RequestHandler = async (req, res) => {
 
 export const verifyEmail: RequestHandler = async (req, res) => {
     try {
-        const pkId = req.userReq.pkId;
+        const pkId = req.authenticatedUser.pkId;
         const otpToken = String(req.body.otpToken);
 
         const user = await prisma.user.findUnique({
@@ -373,7 +370,7 @@ export const changePassword: RequestHandler = async (req, res) => {
     try {
         const { currentPassword, password, confirmPassword } = req.body;
 
-        const email = req.userReq.email;
+        const email = req.authenticatedUser.email;
         const user = await prisma.user.findUnique({
             where: { email },
         });
@@ -484,7 +481,6 @@ export const loginRegisterByGoogle: RequestHandler = async (req, res) => {
 
                 const existingUser = await prisma.user.findUnique({
                     where: { googleId },
-                    include: { privilege: { select: { name: true } } },
                 });
                 if (existingUser) {
                     const accessToken = generateAccessToken(existingUser);
@@ -512,7 +508,6 @@ export const loginRegisterByGoogle: RequestHandler = async (req, res) => {
                     update: {
                         googleId,
                     },
-                    include: { privilege: { select: { name: true } } },
                 });
 
                 const accessToken = generateAccessToken(newUser);

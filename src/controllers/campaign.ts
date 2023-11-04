@@ -17,7 +17,7 @@ export const createCampaign: RequestHandler = async (req, res) => {
             delay = 5000,
         } = req.body;
 
-        const userId = req.userReq.pkId;
+        const userId = req.authenticatedUser.pkId;
 
         const device = await prisma.device.findUnique({
             where: { id: deviceId },

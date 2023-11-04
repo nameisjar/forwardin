@@ -1,24 +1,13 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { Subscription } from '@prisma/client';
+import { User, Privilege, Subscription } from '@prisma/client';
 
-type userPayload = {
-    id;
-    pkId;
-    emailVerifiedAt;
-    email;
-    phone;
-    username;
-    firstName;
-    lastName;
-    privilege?;
-};
+type authenticatedUser = User;
 
 declare global {
     namespace Express {
         interface Request {
-            userReq: userPayload;
-            apiKey: string;
-            privilege: string | undefined;
+            authenticatedUser: authenticatedUser;
+            privilege: Privilege;
             subscription: Subscription;
         }
     }

@@ -6,8 +6,8 @@ import { generateSlug } from '../utils/slug';
 import { useDevice } from '../utils/quota';
 
 export const getDevices: RequestHandler = async (req, res) => {
-    const pkId = req.userReq.pkId;
-    const privilegeName = req.userReq.privilege.name;
+    const pkId = req.authenticatedUser.pkId;
+    const privilegeName = req.privilege.name;
 
     try {
         const devices = await prisma.device.findMany({
@@ -31,7 +31,7 @@ export const getDevices: RequestHandler = async (req, res) => {
 };
 
 export const getDeviceLabels: RequestHandler = async (req, res) => {
-    const pkId = req.userReq.pkId;
+    const pkId = req.authenticatedUser.pkId;
 
     try {
         const labels = await prisma.device.findMany({
@@ -58,7 +58,7 @@ export const getDeviceLabels: RequestHandler = async (req, res) => {
 export const createDevice: RequestHandler = async (req, res) => {
     const { name, labels } = req.body;
     const apiKey = generateUuid();
-    const pkId = req.userReq.pkId;
+    const pkId = req.authenticatedUser.pkId;
     const subscription = req.subscription;
 
     try {

@@ -36,7 +36,7 @@ export const createAutoReply: RequestHandler = async (req, res) => {
 
 export const getAutoReplies: RequestHandler = async (req, res) => {
     try {
-        const userId = req.userReq.pkId;
+        const userId = req.authenticatedUser.pkId;
 
         const autoReplies = await prisma.autoReply.findMany({
             where: { device: { userId } },

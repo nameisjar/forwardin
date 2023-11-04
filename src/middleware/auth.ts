@@ -2,7 +2,7 @@ import { RequestHandler } from 'express';
 import jwt from 'jsonwebtoken';
 import prisma from '../utils/db';
 import { jwtSecretKey } from '../utils/jwtGenerator';
-import { userPayload } from '../types';
+import { User } from '@prisma/client';
 
 export const authMiddleware: RequestHandler = (req, res, next) => {
     if (!req.header('Authorization')) {
@@ -25,11 +25,30 @@ export const accessToken: RequestHandler = (req, res, next) => {
         return res.status(401).json({ error: 'Authentication failed: Invalid token' });
     }
 
-    jwt.verify(token, jwtSecretKey, (err, user) => {
+    jwt.verify(token, jwtSecretKey, async (err, decoded) => {
         if (err) {
-            return res.status(403).json({ message: 'Access denied: Invalid token' });
+            return res.status(401).json({ message: 'Authentication failed: Invalid token' });
         }
-        req.userReq = user as userPayload;
+        const accountApiKey = (decoded as User).accountApiKey;
+        const user = await prisma.user.findUnique({
+            where: {
+                accountApiKey,
+            },
+            include: { privilege: true },
+        });
+
+        if (!user) {
+            return res.status(401).json({ message: 'Authentication failed: Invalid API key' });
+        }
+
+        if (!user.privilege) {
+            return res
+                .status(401)
+                .json({ message: 'Access denied: User does not have a privilege' });
+        }
+
+        req.authenticatedUser = user;
+        req.privilege = user.privilege;
         next();
     });
 };
@@ -44,22 +63,25 @@ export const apiKey: RequestHandler = async (req, res, next) => {
         where: {
             accountApiKey: apiKey,
         },
-        include: { privilege: { select: { name: true } } },
+        include: { privilege: true },
     });
 
     if (!user) {
-        return res.status(401).json({ message: 'Access denied: Invalid API key' });
+        return res.status(401).json({ message: 'Authentication failed: Invalid API key' });
     }
 
-    req.userReq = user;
-    req.privilege = user.privilege?.name;
-    req.apiKey = apiKey;
+    if (!user.privilege) {
+        return res.status(401).json({ message: 'Access denied: User does not have a privilege' });
+    }
+
+    req.authenticatedUser = user;
+    req.privilege = user.privilege;
     next();
 };
 
 // to protect super admin routes
 export const superAdminOnly: RequestHandler = async (req, res, next) => {
-    const user = req.userReq;
+    const user = req.authenticatedUser;
 
     const privilege = await prisma.user.findUnique({
         where: { id: user.id },
@@ -80,7 +102,7 @@ export function checkPrivilege(controller: string): RequestHandler {
         const method = req.method.toLowerCase();
 
         const user = await prisma.user.findUnique({
-            where: { pkId: req.userReq.pkId },
+            where: { id: req.authenticatedUser.id },
             select: { privilege: { select: { roles: { include: { module: true } } } } },
         });
 
@@ -126,7 +148,14 @@ export function checkPrivilege(controller: string): RequestHandler {
 export default authMiddleware;
 
 export const isEmailVerified: RequestHandler = async (req, res, next) => {
-    const user = req.userReq;
+    const user = await prisma.user.findUnique({
+        where: { id: req.authenticatedUser.id },
+        select: { emailVerifiedAt: true },
+    });
+
+    if (!user) {
+        return res.status(404).json({ message: 'User not found' });
+    }
 
     if (user && user.emailVerifiedAt) {
         next();
