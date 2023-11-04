@@ -120,6 +120,7 @@ export const login: RequestHandler = async (req, res) => {
             where: {
                 OR: [{ email: identifier }, { username: identifier }, { phone: identifier }],
             },
+            include: { privilege: { select: { name: true } } },
         });
 
         if (!user) {
@@ -157,6 +158,7 @@ export const refreshToken: RequestHandler = async (req, res) => {
             const pkId = (decoded as User).pkId;
             const user = await prisma.user.findUnique({
                 where: { pkId },
+                include: { privilege: { select: { name: true } } },
             });
             if (!user) {
                 return res.status(401).json({ message: 'User not found' });
@@ -480,7 +482,10 @@ export const loginRegisterByGoogle: RequestHandler = async (req, res) => {
                 const lastName = nameParts.length > 1 ? nameParts[0].trim() : null;
                 const firstName = lastName ? nameParts[1].trim() : nameParts[0].trim();
 
-                const existingUser = await prisma.user.findUnique({ where: { googleId } });
+                const existingUser = await prisma.user.findUnique({
+                    where: { googleId },
+                    include: { privilege: { select: { name: true } } },
+                });
                 if (existingUser) {
                     const accessToken = generateAccessToken(existingUser);
                     const refreshToken = existingUser.refreshToken;
@@ -507,6 +512,7 @@ export const loginRegisterByGoogle: RequestHandler = async (req, res) => {
                     update: {
                         googleId,
                     },
+                    include: { privilege: { select: { name: true } } },
                 });
 
                 const accessToken = generateAccessToken(newUser);
