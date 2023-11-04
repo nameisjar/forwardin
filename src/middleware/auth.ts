@@ -29,10 +29,10 @@ export const accessToken: RequestHandler = (req, res, next) => {
         if (err) {
             return res.status(401).json({ message: 'Authentication failed: Invalid token' });
         }
-        const accountApiKey = (decoded as User).accountApiKey;
+        const email = (decoded as User).email;
         const user = await prisma.user.findUnique({
             where: {
-                accountApiKey,
+                email,
             },
             include: { privilege: true },
         });

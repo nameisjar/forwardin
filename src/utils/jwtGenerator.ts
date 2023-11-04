@@ -6,7 +6,7 @@ export const jwtSecretKey = process.env.JWT_SECRET_KEY!;
 
 export function generateAccessToken(user: User): string {
     const payload = {
-        accountApiKey: user.accountApiKey,
+        email: user.email,
     };
 
     return jwt.sign(payload, jwtSecretKey, { expiresIn: '15m' });
