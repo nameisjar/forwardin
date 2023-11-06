@@ -42,10 +42,17 @@ export const createBroadcast: RequestHandler = async (req, res) => {
 
 export const getAllBroadcasts: RequestHandler = async (req, res) => {
     try {
-        const deviceId = req.params.deviceId;
+        const deviceId = req.query.deviceId as string;
+        const userId = req.authenticatedUser.pkId;
+        const privilegeId = req.privilege.pkId;
 
         const broadcasts = await prisma.broadcast.findMany({
-            where: { device: { id: deviceId } },
+            where: {
+                device: {
+                    userId: privilegeId !== Number(process.env.SUPER_ADMIN_ID) ? userId : undefined,
+                    id: deviceId,
+                },
+            },
             include: { device: true },
         });
 

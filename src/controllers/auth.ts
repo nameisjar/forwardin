@@ -14,7 +14,16 @@ import logger from '../config/logger';
 
 export const register: RequestHandler = async (req, res) => {
     try {
-        const { firstName, lastName, username, phone, email, password, confirmPassword } = req.body;
+        const {
+            firstName,
+            lastName,
+            username,
+            phone,
+            email,
+            role = Number(process.env.ADMIN_ID),
+            password,
+            confirmPassword,
+        } = req.body;
         const hashedPassword = await bcrypt.hash(password, 10);
         if (password !== confirmPassword) {
             return res.status(400).json({ message: 'Passwords do not match' });
@@ -32,38 +41,37 @@ export const register: RequestHandler = async (req, res) => {
         }
 
         const existingPrivilege = await prisma.privilege.findUnique({
-            where: { name: 'admin' },
+            where: { pkId: role },
         });
-        if (existingPrivilege) {
-            const newUser = await prisma.user.create({
-                data: {
-                    username,
-                    firstName,
-                    lastName,
-                    phone,
-                    email,
-                    password: hashedPassword,
-                    accountApiKey: generateUuid(),
-                    affiliationCode: username,
-                    privilege: { connect: { pkId: existingPrivilege.pkId } },
-                },
-            });
-
-            const accessToken = generateAccessToken(newUser);
-            const refreshToken = generateRefreshToken(newUser);
-            const accountApiKey = newUser.accountApiKey;
-            const id = newUser.id;
-
-            await prisma.user.update({
-                where: { pkId: newUser.pkId },
-                data: { refreshToken },
-            });
-            res.status(201).json({ accessToken, refreshToken, accountApiKey, id });
-        } else {
+        if (!existingPrivilege) {
             return res.status(404).json({
-                error: 'Privilege not found',
+                error: 'Privilege or role not found',
             });
         }
+        const newUser = await prisma.user.create({
+            data: {
+                username,
+                firstName,
+                lastName,
+                phone,
+                email,
+                password: hashedPassword,
+                accountApiKey: generateUuid(),
+                affiliationCode: username,
+                privilege: { connect: { pkId: role } },
+            },
+        });
+
+        const accessToken = generateAccessToken(newUser);
+        const refreshToken = generateRefreshToken(newUser);
+        const accountApiKey = newUser.accountApiKey;
+        const id = newUser.id;
+
+        await prisma.user.update({
+            where: { pkId: newUser.pkId },
+            data: { refreshToken },
+        });
+        res.status(201).json({ accessToken, refreshToken, accountApiKey, id });
     } catch (error) {
         logger.error(error);
         res.status(500).json({ message: 'Internal server error' });
@@ -462,74 +470,75 @@ export const loginRegisterByGoogle: RequestHandler = async (req, res) => {
             const profileData = response.data;
 
             const existingPrivilege = await prisma.privilege.findUnique({
-                where: { name: 'admin' },
+                where: { pkId: Number(process.env.ADMIN_ID) },
             });
 
             if (!profileData.emailAddresses || !profileData.names) {
                 return res.status(400).json({ message: 'Missing some profile data' });
-            } else if (existingPrivilege) {
-                const googleId = profileData.names[0].metadata.source.id;
-                const username = profileData.emailAddresses[0].value.split('@')[0];
-                const email = profileData.emailAddresses[0].value;
-                const phones = profileData.phoneNumbers || [];
-                const phone =
-                    phones.length > 0 ? phones[0].canonicalForm?.replace(/\+/g, '') : null;
+            }
 
-                const nameParts = profileData.names[0].displayNameLastFirst.split(',');
-                const lastName = nameParts.length > 1 ? nameParts[0].trim() : null;
-                const firstName = lastName ? nameParts[1].trim() : nameParts[0].trim();
+            const googleId = profileData.names[0].metadata.source.id;
+            const username = profileData.emailAddresses[0].value.split('@')[0];
+            const email = profileData.emailAddresses[0].value;
+            const phones = profileData.phoneNumbers || [];
+            const phone = phones.length > 0 ? phones[0].canonicalForm?.replace(/\+/g, '') : null;
 
-                const existingUser = await prisma.user.findUnique({
-                    where: { googleId },
-                });
-                if (existingUser) {
-                    const accessToken = generateAccessToken(existingUser);
-                    const refreshToken = existingUser.refreshToken;
-                    const id = existingUser.id;
+            const nameParts = profileData.names[0].displayNameLastFirst.split(',');
+            const lastName = nameParts.length > 1 ? nameParts[0].trim() : null;
+            const firstName = lastName ? nameParts[1].trim() : nameParts[0].trim();
 
-                    return res.status(200).json({ accessToken, refreshToken, id });
-                }
+            const existingUser = await prisma.user.findUnique({
+                where: { googleId },
+            });
+            if (existingUser) {
+                const accessToken = generateAccessToken(existingUser);
+                const refreshToken = existingUser.refreshToken;
+                const id = existingUser.id;
 
-                const newUser = await prisma.user.upsert({
-                    where: { email },
-                    create: {
-                        googleId,
-                        username,
-                        firstName,
-                        lastName,
-                        accountApiKey: generateUuid(),
-                        phone,
-                        affiliationCode: username,
-                        privilege: { connect: { pkId: existingPrivilege.pkId } },
-                        email,
-                        password: '',
-                        emailVerifiedAt: new Date(),
-                    },
-                    update: {
-                        googleId,
-                    },
-                });
+                return res.status(200).json({ accessToken, refreshToken, id });
+            }
 
-                const accessToken = generateAccessToken(newUser);
-                const accountApiKey = newUser.accountApiKey;
-                const id = newUser.id;
-                let refreshToken;
-
-                if (!newUser.refreshToken) {
-                    refreshToken = generateRefreshToken(newUser);
-                    await prisma.user.update({
-                        where: { pkId: newUser.pkId },
-                        data: { refreshToken },
-                    });
-                } else {
-                    refreshToken = newUser.refreshToken;
-                }
-                res.status(201).json({ accessToken, refreshToken, accountApiKey, id });
-            } else {
+            if (!existingPrivilege) {
                 return res.status(404).json({
-                    error: 'Subscription or privilege not found',
+                    error: 'Privilege or role not found',
                 });
             }
+
+            const newUser = await prisma.user.upsert({
+                where: { email },
+                create: {
+                    googleId,
+                    username,
+                    firstName,
+                    lastName,
+                    accountApiKey: generateUuid(),
+                    phone,
+                    affiliationCode: username,
+                    privilege: { connect: { pkId: existingPrivilege.pkId } },
+                    email,
+                    password: '',
+                    emailVerifiedAt: new Date(),
+                },
+                update: {
+                    googleId,
+                },
+            });
+
+            const accessToken = generateAccessToken(newUser);
+            const accountApiKey = newUser.accountApiKey;
+            const id = newUser.id;
+            let refreshToken;
+
+            if (!newUser.refreshToken) {
+                refreshToken = generateRefreshToken(newUser);
+                await prisma.user.update({
+                    where: { pkId: newUser.pkId },
+                    data: { refreshToken },
+                });
+            } else {
+                refreshToken = newUser.refreshToken;
+            }
+            res.status(201).json({ accessToken, refreshToken, accountApiKey, id });
         } else {
             const errorMessage = response.data?.error?.message || 'Unknown Error';
             res.status(response.status).json({ error: errorMessage });

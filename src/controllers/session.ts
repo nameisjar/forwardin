@@ -79,10 +79,13 @@ export const getSessionStatus: RequestHandler = async (req, res) => {
 export const getSessions: RequestHandler = async (req, res) => {
     try {
         const pkId = req.authenticatedUser.pkId;
+        const privilegeId = req.privilege.pkId;
 
         const sessions = await prisma.session.findMany({
             where: {
-                device: { user: { pkId } },
+                device: {
+                    userId: privilegeId !== Number(process.env.SUPER_ADMIN_ID) ? pkId : undefined,
+                },
                 id: { contains: 'config' },
             },
             select: {

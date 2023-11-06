@@ -36,10 +36,17 @@ export const createAutoReply: RequestHandler = async (req, res) => {
 
 export const getAutoReplies: RequestHandler = async (req, res) => {
     try {
+        const deviceId = req.query.deviceId as string;
         const userId = req.authenticatedUser.pkId;
+        const privilegeId = req.privilege.pkId;
 
         const autoReplies = await prisma.autoReply.findMany({
-            where: { device: { userId } },
+            where: {
+                device: {
+                    userId: privilegeId !== Number(process.env.SUPER_ADMIN_ID) ? userId : undefined,
+                    id: deviceId,
+                },
+            },
         });
         res.json(autoReplies);
     } catch (error) {
@@ -132,6 +139,5 @@ export async function sendAutoReply(sessionId: any, m: any) {
         }
     } catch (error) {
         logger.error(error);
-        throw error;
     }
 }

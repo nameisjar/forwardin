@@ -19,7 +19,7 @@ export const registerCS: RequestHandler = async (req, res) => {
         }
 
         const privilege = await prisma.privilege.findUnique({
-            where: { name: 'cs' },
+            where: { pkId: Number(process.env.CS_ID) },
         });
         if (!privilege) {
             return res.status(404).json({

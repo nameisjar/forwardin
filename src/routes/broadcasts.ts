@@ -6,6 +6,6 @@ const router = express.Router();
 
 router.use(checkPrivilege('broadcast'));
 router.post('/', controller.createBroadcast);
-router.get('/:deviceId', controller.getAllBroadcasts);
+router.get('/', controller.getAllBroadcasts);
 
 export default router;

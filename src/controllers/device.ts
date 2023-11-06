@@ -7,11 +7,13 @@ import { useDevice } from '../utils/quota';
 
 export const getDevices: RequestHandler = async (req, res) => {
     const pkId = req.authenticatedUser.pkId;
-    const privilegeName = req.privilege.name;
+    const privilegeId = req.privilege.pkId;
 
     try {
         const devices = await prisma.device.findMany({
-            where: { userId: privilegeName !== 'super admin' ? pkId : undefined },
+            where: {
+                userId: privilegeId !== Number(process.env.SUPER_ADMIN_ID) ? pkId : undefined,
+            },
             include: {
                 DeviceLabel: {
                     select: {

@@ -50,10 +50,9 @@ model CustomerService {
 }
 
 model Privilege {
-  pkId             Int               @id @default(autoincrement())
+  pkId             Int               @id
   id               String            @unique @default(uuid()) @db.Uuid
-  name             String            @unique @db.VarChar(128)
-  isSuperadmin     Boolean           @default(false) @map("is_superadmin")
+  name             String            @db.VarChar(128)
   users            User[]
   roles            PrivilegeRole[]
   customerServices CustomerService[]

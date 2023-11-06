@@ -161,10 +161,17 @@ export async function sendCampaign(sessionId: any, m: any) {
 
 export const getAllCampaigns: RequestHandler = async (req, res) => {
     try {
-        const deviceId = req.params.deviceId;
+        const deviceId = req.query.deviceId as string;
+        const userId = req.authenticatedUser.pkId;
+        const privilegeId = req.privilege.pkId;
 
         const campaigns = await prisma.campaign.findMany({
-            where: { device: { id: deviceId } },
+            where: {
+                device: {
+                    userId: privilegeId !== Number(process.env.SUPER_ADMIN_ID) ? userId : undefined,
+                    id: deviceId,
+                },
+            },
             include: { device: true },
         });
 

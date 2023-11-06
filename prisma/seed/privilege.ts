@@ -9,16 +9,16 @@ async function seedPrivileges(prisma: PrismaClient, logger: Logger) {
 
         const privilegesData = [
             {
+                pkId: Number(process.env.SUPER_ADMIN_ID),
                 name: 'super admin',
-                isSuperadmin: true,
             },
             {
+                pkId: Number(process.env.ADMIN_ID),
                 name: 'admin',
-                isSuperadmin: false,
             },
             {
+                pkId: Number(process.env.CS_ID),
                 name: 'cs',
-                isSuperadmin: false,
             },
         ];
 
@@ -26,7 +26,7 @@ async function seedPrivileges(prisma: PrismaClient, logger: Logger) {
         const controllerFiles = fs.readdirSync(path.join(__dirname, controllerDirectory));
 
         // Create privileges and modules and store their PK IDs in maps
-        const privilegeIdMap = new Map();
+        const privilegeIds: number[] = [];
         const moduleIdMap = new Map();
 
         // Create privileges and modules
@@ -35,10 +35,9 @@ async function seedPrivileges(prisma: PrismaClient, logger: Logger) {
                 data: privilegeData,
                 select: {
                     pkId: true,
-                    name: true,
                 },
             });
-            privilegeIdMap.set(privilege.name, privilege.pkId);
+            privilegeIds.push(privilege.pkId);
         }
 
         await prisma.module.deleteMany();
@@ -58,9 +57,9 @@ async function seedPrivileges(prisma: PrismaClient, logger: Logger) {
         }
 
         await prisma.privilegeRole.deleteMany();
-        for (const [privilegeName, privilegeId] of privilegeIdMap) {
+        for (const privilegeId of privilegeIds) {
             for (const [controllerName, moduleId] of moduleIdMap) {
-                const isSuperAdmin = privilegeName === 'super admin';
+                const isSuperAdmin = privilegeId === 0;
                 const superAdminOnlyControllers = ['subscriptionPlan'];
                 const isSuperAdminOnlyController =
                     superAdminOnlyControllers.includes(controllerName);

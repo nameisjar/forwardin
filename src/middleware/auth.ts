@@ -81,14 +81,7 @@ export const apiKey: RequestHandler = async (req, res, next) => {
 
 // to protect super admin routes
 export const superAdminOnly: RequestHandler = async (req, res, next) => {
-    const user = req.authenticatedUser;
-
-    const privilege = await prisma.user.findUnique({
-        where: { id: user.id },
-        select: { privilege: { select: { name: true } } },
-    });
-
-    if (user && privilege?.privilege?.name === 'super admin') {
+    if (req.privilege.pkId === Number(process.env.SUPER_ADMIN_ID)) {
         next();
     } else {
         res.status(403).json({ message: 'Access denied: Super admin only' });

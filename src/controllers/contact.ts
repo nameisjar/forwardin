@@ -94,10 +94,22 @@ export const createContact: RequestHandler = async (req, res) => {
 
 export const getContacts: RequestHandler = async (req, res) => {
     const pkId = req.authenticatedUser.pkId;
+    const privilegeId = req.privilege.pkId;
 
     try {
         const contacts = await prisma.contact.findMany({
-            where: { contactDevices: { some: { device: { userId: pkId } } } },
+            where: {
+                contactDevices: {
+                    some: {
+                        device: {
+                            userId:
+                                privilegeId !== Number(process.env.SUPER_ADMIN_ID)
+                                    ? pkId
+                                    : undefined,
+                        },
+                    },
+                },
+            },
             include: {
                 ContactLabel: {
                     select: {

@@ -5,6 +5,6 @@ import { checkPrivilege } from '../middleware/auth';
 const router = Router();
 
 router.use(checkPrivilege('customerService'));
-router.post('/', controller.registerCS);
+router.post('/register', controller.registerCS);
 
 export default router;

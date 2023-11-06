@@ -4,9 +4,13 @@ import logger from '../config/logger';
 
 export const getGroups: RequestHandler = async (req, res) => {
     const userId = req.authenticatedUser.pkId;
+    const privilegeId = req.privilege.pkId;
+
     try {
         const rawGroups = await prisma.group.findMany({
-            where: { userId },
+            where: {
+                userId: privilegeId !== Number(process.env.SUPER_ADMIN_ID) ? userId : undefined,
+            },
             include: { contactGroups: true },
         });
 
