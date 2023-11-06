@@ -2,20 +2,25 @@ import { RequestHandler } from 'express';
 import bcrypt from 'bcrypt';
 import prisma from '../utils/db';
 import logger from '../config/logger';
+import { generateAccessToken, generateRefreshToken } from '../utils/jwtGenerator';
 
 export const registerCS: RequestHandler = async (req, res) => {
     try {
-        const { email, password, userId, deviceId, confirmPassword } = req.body;
+        const { username, email, password, userId, deviceId, confirmPassword } = req.body;
         const hashedPassword = await bcrypt.hash(password, 10);
         if (password !== confirmPassword) {
             return res.status(400).json({ message: 'Passwords do not match' });
         }
 
-        const existingCS = await prisma.customerService.findUnique({
-            where: { email },
+        const existingCS = await prisma.customerService.findFirst({
+            where: {
+                OR: [{ email }, { username }],
+            },
         });
         if (existingCS) {
-            return res.status(400).json({ message: 'CS with this email already exists' });
+            return res
+                .status(400)
+                .json({ message: 'CS with this email or username already exists' });
         }
 
         const privilege = await prisma.privilege.findUnique({
@@ -41,31 +46,66 @@ export const registerCS: RequestHandler = async (req, res) => {
         });
         if (!device) {
             return res.status(404).json({
-                error: 'User not found',
+                error: 'Device not found',
             });
         }
 
         const newCS = await prisma.customerService.create({
             data: {
+                username,
                 email,
                 password: hashedPassword,
-                // accountApiKey: generateUuid(),
                 privilegeId: privilege.pkId,
                 userId: user.pkId,
                 deviceId: device.pkId,
             },
         });
 
-        // const accessToken = generateAccessToken(newUser);
-        // const refreshToken = generateRefreshToken(newUser);
-        // const accountApiKey = newUser.accountApiKey;
-        // const id = newCS.id;
+        const accessToken = generateAccessToken(newCS);
+        const refreshToken = generateRefreshToken(newCS);
+        const id = newCS.id;
 
-        // await prisma.user.update({
-        //     where: { pkId: newUser.pkId },
-        //     data: { refreshToken },
-        // });
-        res.status(201).json({ message: 'CS created successfully', data: newCS });
+        await prisma.customerService.update({
+            where: { pkId: newCS.pkId },
+            data: { refreshToken },
+        });
+        res.status(201).json({
+            message: 'CS created successfully',
+            accessToken,
+            refreshToken,
+            id,
+            role: newCS.privilegeId,
+        });
+    } catch (error) {
+        logger.error(error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};
+
+export const login: RequestHandler = async (req, res) => {
+    try {
+        const { identifier, password } = req.body;
+
+        const cs = await prisma.customerService.findFirst({
+            where: {
+                OR: [{ email: identifier }, { username: identifier }],
+            },
+        });
+
+        if (!cs) {
+            return res.status(401).json({ message: 'CS Account not found' });
+        }
+
+        const passwordMatch = await bcrypt.compare(password, cs.password);
+        if (!passwordMatch) {
+            return res.status(401).json({ message: 'Wrong password' });
+        }
+
+        const accessToken = generateAccessToken(cs);
+        const refreshToken = cs.refreshToken;
+        const id = cs.id;
+
+        return res.status(200).json({ accessToken, refreshToken, id, role: cs.privilegeId });
     } catch (error) {
         logger.error(error);
         res.status(500).json({ message: 'Internal server error' });

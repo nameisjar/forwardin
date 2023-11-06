@@ -1,6 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { RequestHandler } from 'express';
-import { User } from '@prisma/client';
 import passport from 'passport';
 import { Strategy as GoogleStrategy, Profile } from 'passport-google-oauth20';
 import { generateUuid } from '../utils/keyGenerator';
@@ -11,6 +10,7 @@ import jwt from 'jsonwebtoken';
 import prisma from '../utils/db';
 import axios from 'axios';
 import logger from '../config/logger';
+import { refreshTokenPayload } from '../types';
 
 export const register: RequestHandler = async (req, res) => {
     try {
@@ -161,18 +161,31 @@ export const refreshToken: RequestHandler = async (req, res) => {
                 return res.status(401).json({ message: 'Decoded token is missing' });
             }
 
-            const pkId = (decoded as User).pkId;
+            const userId = (decoded as refreshTokenPayload).id;
+
             const user = await prisma.user.findUnique({
-                where: { pkId },
+                where: { id: userId },
             });
+
             if (!user) {
-                return res.status(401).json({ message: 'User not found' });
+                const cs = await prisma.customerService.findUnique({
+                    where: { id: userId },
+                });
+
+                if (!cs) {
+                    return res.status(401).json({ message: 'User not found' });
+                }
+
+                const accessToken = generateAccessToken(cs);
+                const id = cs.id;
+
+                return res.status(200).json({ accessToken, id });
             }
 
             const accessToken = generateAccessToken(user);
             const id = user.id;
 
-            res.status(200).json({ accessToken, id });
+            return res.status(200).json({ accessToken, id });
         });
     } catch (error) {
         logger.error(error);

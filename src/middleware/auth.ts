@@ -30,6 +30,9 @@ export const accessToken: RequestHandler = (req, res, next) => {
             return res.status(401).json({ message: 'Authentication failed: Invalid token' });
         }
         const email = (decoded as User).email;
+
+        let thisUser;
+
         const user = await prisma.user.findUnique({
             where: {
                 email,
@@ -37,18 +40,31 @@ export const accessToken: RequestHandler = (req, res, next) => {
             include: { privilege: true },
         });
 
+        thisUser = user;
+
         if (!user) {
+            const cs = await prisma.customerService.findUnique({
+                where: {
+                    email,
+                },
+                include: { privilege: true },
+            });
+
+            thisUser = cs;
+        }
+
+        if (!thisUser) {
             return res.status(401).json({ message: 'Authentication failed: Invalid API key' });
         }
 
-        if (!user.privilege) {
+        if (!thisUser.privilege) {
             return res
                 .status(401)
                 .json({ message: 'Access denied: User does not have a privilege' });
         }
 
-        req.authenticatedUser = user;
-        req.privilege = user.privilege;
+        req.authenticatedUser = thisUser;
+        req.privilege = thisUser.privilege;
         next();
     });
 };
@@ -94,16 +110,28 @@ export function checkPrivilege(controller: string): RequestHandler {
     return async (req, res, next) => {
         const method = req.method.toLowerCase();
 
+        let thisUser;
+
         const user = await prisma.user.findUnique({
             where: { id: req.authenticatedUser.id },
             select: { privilege: { select: { roles: { include: { module: true } } } } },
         });
+        thisUser = user;
 
         if (!user) {
+            const cs = await prisma.customerService.findUnique({
+                where: { id: req.authenticatedUser.id },
+                select: { privilege: { select: { roles: { include: { module: true } } } } },
+            });
+
+            thisUser = cs;
+        }
+
+        if (!thisUser) {
             return res.status(404).json({ message: 'User not found' });
         }
 
-        const userRoles = user.privilege?.roles;
+        const userRoles = thisUser.privilege?.roles;
 
         if (!userRoles) {
             return res
@@ -128,6 +156,7 @@ export function checkPrivilege(controller: string): RequestHandler {
         });
 
         if (hasRequiredPrivilege) {
+            console.log(userRoles);
             next();
         } else {
             res.status(403).json({
@@ -137,8 +166,6 @@ export function checkPrivilege(controller: string): RequestHandler {
         }
     };
 }
-
-export default authMiddleware;
 
 export const isEmailVerified: RequestHandler = async (req, res, next) => {
     const user = await prisma.user.findUnique({
@@ -156,3 +183,5 @@ export const isEmailVerified: RequestHandler = async (req, res, next) => {
         res.status(403).json({ message: 'Email not verified yet' });
     }
 };
+
+export default authMiddleware;

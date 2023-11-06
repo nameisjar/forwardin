@@ -1,7 +1,35 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { User, Privilege, Subscription } from '@prisma/client';
+import { Privilege, Subscription } from '@prisma/client';
 
-type authenticatedUser = User;
+type authenticatedUser = {
+    pkId;
+    id;
+    firstName?;
+    lastName?;
+    username;
+    phone?;
+    email;
+    password;
+    accountApiKey?;
+    googleId?;
+    privilegeId;
+    userId?;
+    deviceId?;
+    affiliationCode?;
+    emailOtpSecret?;
+    refreshToken?;
+    createdAt;
+    updatedAt;
+    deletedAt?;
+    emailVerifiedAt?;
+};
+type accessTokenPayload = {
+    email: string;
+};
+
+type refreshTokenPayload = {
+    id: string;
+};
 
 declare global {
     namespace Express {

@@ -169,7 +169,7 @@ export async function createInstance(options: createInstanceOptions) {
 
     const { state, saveCreds } = await useSession(sessionId, deviceId);
     const sock = makeWASocket({
-        printQRInTerminal: false,
+        printQRInTerminal: process.env.NODE_ENV === 'development' ? true : false,
         browser: ['Forwardin', 'Chrome', '10.0'],
         ...socketConfig,
         auth: {

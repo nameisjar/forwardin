@@ -205,17 +205,19 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                             status = 'pending';
                             break;
                     }
-                    // back here: An operation failed because it depends on one or more records that were required but not found. Record to update not found.
-                    await tx.outgoingMessage.update({
-                        where: {
-                            sessionId_to_id: {
-                                id: key.id!,
-                                to: key.remoteJid!,
-                                sessionId,
+
+                    if (key.fromMe) {
+                        await tx.outgoingMessage.update({
+                            where: {
+                                sessionId_to_id: {
+                                    id: key.id!,
+                                    to: key.remoteJid!,
+                                    sessionId,
+                                },
                             },
-                        },
-                        data: { status },
-                    });
+                            data: { status },
+                        });
+                    }
                 });
             } catch (e) {
                 logger.error(e, 'An error occured during message update');

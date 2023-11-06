@@ -59,7 +59,7 @@ async function seedPrivileges(prisma: PrismaClient, logger: Logger) {
         await prisma.privilegeRole.deleteMany();
         for (const privilegeId of privilegeIds) {
             for (const [controllerName, moduleId] of moduleIdMap) {
-                const isSuperAdmin = privilegeId === 0;
+                const isSuperAdmin = privilegeId === Number(process.env.SUPER_ADMIN_ID);
                 const superAdminOnlyControllers = ['subscriptionPlan'];
                 const isSuperAdminOnlyController =
                     superAdminOnlyControllers.includes(controllerName);
