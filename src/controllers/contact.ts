@@ -97,29 +97,31 @@ export const getContacts: RequestHandler = async (req, res) => {
     const privilegeId = req.privilege.pkId;
 
     try {
-        const contacts = await prisma.contact.findMany({
-            where: {
-                contactDevices: {
-                    some: {
-                        device: {
-                            userId:
-                                privilegeId !== Number(process.env.SUPER_ADMIN_ID)
-                                    ? pkId
-                                    : undefined,
+        let contacts;
+        if (privilegeId == Number(process.env.SUPER_ADMIN_ID)) {
+            contacts = await prisma.contact.findMany();
+        } else {
+            contacts = await prisma.contact.findMany({
+                where: {
+                    contactDevices: {
+                        some: {
+                            device: {
+                                userId: pkId,
+                            },
                         },
                     },
                 },
-            },
-            include: {
-                ContactLabel: {
-                    select: {
-                        label: {
-                            select: { name: true },
+                include: {
+                    ContactLabel: {
+                        select: {
+                            label: {
+                                select: { name: true },
+                            },
                         },
                     },
                 },
-            },
-        });
+            });
+        }
         res.status(200).json(contacts);
     } catch (error) {
         logger.error(error);
