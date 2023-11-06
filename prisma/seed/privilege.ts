@@ -63,14 +63,45 @@ async function seedPrivileges(prisma: PrismaClient, logger: Logger) {
                 const superAdminOnlyControllers = ['subscriptionPlan'];
                 const isSuperAdminOnlyController =
                     superAdminOnlyControllers.includes(controllerName);
+                const isCS = privilegeId === Number(process.env.CS_ID);
+                const csControllers = [
+                    'message',
+                    'autoReply',
+                    'broadcast',
+                    'campaign',
+                    'customerService',
+                ];
+                const isCsController = csControllers.includes(controllerName);
 
-                const isVisible = isSuperAdmin || (!isSuperAdmin && !isSuperAdminOnlyController);
-                const isCreate = isSuperAdmin || (!isSuperAdmin && !isSuperAdminOnlyController);
-                const isRead = isSuperAdmin || (!isSuperAdmin && !isSuperAdminOnlyController);
-                const isEdit = isSuperAdmin || (!isSuperAdmin && !isSuperAdminOnlyController);
+                const isVisible =
+                    isSuperAdmin ||
+                    (isCS && isCsController) ||
+                    (!isSuperAdmin && !isCS && !isSuperAdminOnlyController);
+                const isCreate =
+                    isSuperAdmin ||
+                    (isCS && isCsController) ||
+                    (!isSuperAdmin &&
+                        !isCS &&
+                        !isSuperAdminOnlyController &&
+                        !['menu', 'privilege'].includes(controllerName));
+                const isRead =
+                    isSuperAdmin ||
+                    (isCS && isCsController) ||
+                    (!isSuperAdmin && !isCS && !isSuperAdminOnlyController);
+                const isEdit =
+                    isSuperAdmin ||
+                    (isCS && isCsController) ||
+                    (!isSuperAdmin &&
+                        !isCS &&
+                        !isSuperAdminOnlyController &&
+                        !['menu', 'privilege'].includes(controllerName));
                 const isDelete =
                     isSuperAdmin ||
-                    (!isSuperAdmin && !isSuperAdminOnlyController && controllerName !== 'user');
+                    (!isSuperAdmin &&
+                        !isCS &&
+                        !isSuperAdminOnlyController &&
+                        !['menu', 'privilege', 'user'].includes(controllerName)) ||
+                    (isCS && isCsController);
 
                 await prisma.privilegeRole.create({
                     data: {
