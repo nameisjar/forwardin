@@ -206,6 +206,8 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                             break;
                     }
 
+                    logger.warn({ sessionId, key }, 'update status');
+
                     // back here: An operation failed because it depends on one or more records that were required but not found.
                     // back here: Record to update not found.
                     if (key.fromMe) {

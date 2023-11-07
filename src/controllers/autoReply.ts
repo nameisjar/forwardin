@@ -126,23 +126,28 @@ export async function sendAutoReply(sessionId: any, m: any) {
         const name = m.messages[0].pushName;
         const messageText =
             msg.message?.conversation || msg.message?.extendedTextMessage?.text || '';
-        const matchingAutoReply = await prisma.autoReply.findFirst({
-            where: {
-                requests: {
-                    has: messageText,
-                },
-                status: true,
-                device: { sessions: { some: { id: sessionId } } },
-            },
-        });
 
-        if (
-            matchingAutoReply &&
-            (matchingAutoReply.recipients.includes(recipient.split('@')[0]) ||
-                matchingAutoReply.recipients.includes('*'))
-        ) {
-            const replyText = matchingAutoReply.response;
-            session.sendMessage(jid, { text: replyText.replace(/\{\{\$firstName\}\}/, name) });
+        logger.warn({ sessionId, m }, 'auto reply');
+
+        if (!m.messages[0].key.fromMe) {
+            const matchingAutoReply = await prisma.autoReply.findFirst({
+                where: {
+                    requests: {
+                        has: messageText,
+                    },
+                    status: true,
+                    device: { sessions: { some: { sessionId } } },
+                },
+            });
+
+            if (
+                matchingAutoReply &&
+                (matchingAutoReply.recipients.includes(recipient.split('@')[0]) ||
+                    matchingAutoReply.recipients.includes('*'))
+            ) {
+                const replyText = matchingAutoReply.response;
+                session.sendMessage(jid, { text: replyText.replace(/\{\{\$firstName\}\}/, name) });
+            }
         }
     } catch (error) {
         logger.error(error);
