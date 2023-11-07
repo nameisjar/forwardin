@@ -5,6 +5,8 @@ import logger from '../config/logger';
 import schedule from 'node-schedule';
 import { delay as delayMs } from '../utils/delay';
 
+// back here: registered success msg, fail, unsubscribe msg
+// back here: get recipients from contact labels or group
 export const createCampaign: RequestHandler = async (req, res) => {
     try {
         const {
@@ -159,6 +161,7 @@ export async function sendCampaign(sessionId: any, m: any) {
     }
 }
 
+// back here: get subscriberCount
 export const getAllCampaigns: RequestHandler = async (req, res) => {
     try {
         const deviceId = req.query.deviceId as string;
@@ -197,8 +200,15 @@ export const getAllCampaignMessagess: RequestHandler = async (req, res) => {
     }
 };
 
+// to do: campaign detail
+// to do: campaign message detail
+// back here: sent, received, read, replied filter
+// to do: CRUD campaign message template
+// to do: edit & delete campaigns
+
 const processedRecipients: (string | number)[] = [];
 
+// back here: send media
 schedule.scheduleJob('*', async () => {
     try {
         const pendingcampaignMessages = await prisma.campaignMessage.findMany({

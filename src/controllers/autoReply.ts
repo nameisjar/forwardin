@@ -3,6 +3,7 @@ import prisma from '../utils/db';
 import { getInstance, getJid } from '../whatsapp';
 import logger from '../config/logger';
 
+// back here: get recipients from contact labels or group
 export const createAutoReply: RequestHandler = async (req, res) => {
     try {
         const { name, deviceId, recipients, requests, response } = req.body;

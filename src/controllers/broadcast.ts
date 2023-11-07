@@ -5,6 +5,7 @@ import { getInstance, getJid } from '../whatsapp';
 import logger from '../config/logger';
 import { delay as delayMs } from '../utils/delay';
 
+// back here: get recipients from contact labels or group
 export const createBroadcast: RequestHandler = async (req, res) => {
     try {
         const { name, deviceId, recipients, message, schedule, delay } = req.body;
@@ -40,6 +41,7 @@ export const createBroadcast: RequestHandler = async (req, res) => {
     }
 };
 
+// back here: get status, sentCount, receivedCount, readCount, replyCount
 export const getAllBroadcasts: RequestHandler = async (req, res) => {
     try {
         const deviceId = req.query.deviceId as string;
@@ -63,8 +65,14 @@ export const getAllBroadcasts: RequestHandler = async (req, res) => {
     }
 };
 
+// to do: broadcast detail
+// back here: sent, received, read, replied filter
+// to do: CRUD broadcast message template
+// to do: edit & delete broadcasts
+
 const processedRecipients: (string | number)[] = [];
 
+// back here: send media
 schedule.scheduleJob('*', async () => {
     try {
         const pendingBroadcasts = await prisma.broadcast.findMany({
