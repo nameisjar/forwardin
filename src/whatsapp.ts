@@ -230,9 +230,10 @@ export async function createInstance(options: createInstanceOptions) {
         });
     }
 
-    // auto-reply
+    // back here: type notify not to get messsage you sent
     sock.ev.on('messages.upsert', async (message) => {
-        logger.debug(message);
+        logger.warn({ sessionId, message }, 'message upsert');
+
         sendAutoReply(sessionId, message);
         sendCampaign(sessionId, message);
     });

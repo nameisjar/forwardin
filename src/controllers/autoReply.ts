@@ -139,8 +139,6 @@ export async function sendAutoReply(sessionId: any, m: any) {
         const messageText =
             msg.message?.conversation || msg.message?.extendedTextMessage?.text || '';
 
-        logger.warn({ sessionId, m }, 'auto reply');
-
         if (!m.messages[0].key.fromMe) {
             const matchingAutoReply = await prisma.autoReply.findFirst({
                 where: {

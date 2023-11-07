@@ -123,7 +123,6 @@ export async function sendCampaign(sessionId: any, m: any) {
         const jid = getJid(recipient);
         const name = m.messages[0].pushName;
         // back here: Cannot read properties of null (reading 'conversation')
-        logger.warn({ sessionId, m }, 'send campaign');
         const messageText =
             msg.message?.conversation || msg.message?.extendedTextMessage?.text || '';
         const parts = messageText.split('#');
