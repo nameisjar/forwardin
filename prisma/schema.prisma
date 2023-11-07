@@ -16,7 +16,7 @@ model User {
   phone            String?           @unique @db.VarChar(20)
   email            String            @unique @db.VarChar(255)
   password         String            @db.VarChar(255)
-  accountApiKey    String            @unique @map("account_api_key") @db.VarChar(128)
+  accountApiKey    String?           @unique @map("account_api_key") @db.VarChar(128)
   googleId         String?           @unique @map("google_id") @db.VarChar(128)
   affiliationCode  String            @map("affiliation_code") @db.VarChar(128)
   emailOtpSecret   String?           @map("email_otp_secret") @db.VarChar(255)

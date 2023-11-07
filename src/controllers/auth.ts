@@ -501,13 +501,24 @@ export const loginRegisterByGoogle: RequestHandler = async (req, res) => {
             const lastName = nameParts.length > 1 ? nameParts[0].trim() : null;
             const firstName = lastName ? nameParts[1].trim() : nameParts[0].trim();
 
-            const existingUser = await prisma.user.findUnique({
+            const deletedUser = await prisma.user.findFirst({
+                where: { OR: [{ email }, { username }, { phone }], NOT: { deletedAt: null } },
+            });
+
+            // forbid deleted user
+            if (deletedUser) {
+                return res.status(401).json({ message: 'Account not found' });
+            }
+
+            const oAuthRegisteredUser = await prisma.user.findUnique({
                 where: { googleId },
             });
-            if (existingUser) {
-                const accessToken = generateAccessToken(existingUser);
-                const refreshToken = existingUser.refreshToken;
-                const id = existingUser.id;
+
+            // login
+            if (oAuthRegisteredUser) {
+                const accessToken = generateAccessToken(oAuthRegisteredUser);
+                const refreshToken = oAuthRegisteredUser.refreshToken;
+                const id = oAuthRegisteredUser.id;
 
                 return res.status(200).json({ accessToken, refreshToken, id });
             }
@@ -518,6 +529,7 @@ export const loginRegisterByGoogle: RequestHandler = async (req, res) => {
                 });
             }
 
+            // register user from start or connect existing user to google
             const newUser = await prisma.user.upsert({
                 where: { email },
                 create: {

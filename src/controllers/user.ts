@@ -74,6 +74,7 @@ export const deleteUser: RequestHandler = async (req, res) => {
                 id: userId,
             },
             data: {
+                accountApiKey: null,
                 deletedAt: new Date(),
             },
         });
