@@ -5,7 +5,9 @@ import { checkPrivilege } from '../middleware/auth';
 const router = express.Router();
 
 router.use(checkPrivilege('autoReply'));
-router.post('/', controller.createAutoReply);
+router.post('/', controller.createAutoReplies);
 router.get('/', controller.getAutoReplies);
+router.get('/:id', controller.getAutoReply);
+router.put('/:id', controller.updateAutoReply);
 
 export default router;

@@ -4,7 +4,7 @@ import { getInstance, getJid } from '../whatsapp';
 import logger from '../config/logger';
 
 // back here: get recipients from contact labels or group
-export const createAutoReply: RequestHandler = async (req, res) => {
+export const createAutoReplies: RequestHandler = async (req, res) => {
     try {
         const { name, deviceId, recipients, requests, response } = req.body;
 
@@ -56,39 +56,51 @@ export const getAutoReplies: RequestHandler = async (req, res) => {
     }
 };
 
-export const getAutoReplyTemplateById: RequestHandler = async (req, res) => {
-    const id = parseInt(req.params.id);
+export const getAutoReply: RequestHandler = async (req, res) => {
+    const id = req.params.id;
 
     try {
         const autoReply = await prisma.autoReply.findUnique({
-            where: { pkId: id },
+            where: { id },
         });
 
-        if (autoReply) {
-            res.json(autoReply);
-        } else {
-            res.status(404).json({ error: 'Auto reply not found' });
+        if (!autoReply) {
+            return res.status(404).json({ error: 'Auto reply not found' });
         }
+
+        res.json(autoReply);
     } catch (error) {
         logger.error(error);
         res.status(500).json({ message: 'Internal server error' });
     }
 };
 
-export const updateAutoReplyTemplate: RequestHandler = async (req, res) => {
-    const id = parseInt(req.params.id);
+export const updateAutoReply: RequestHandler = async (req, res) => {
+    const id = req.params.id;
 
     try {
-        const { requests, response, status, deviceId } = req.body;
+        const { name, deviceId, recipients, requests, response } = req.body;
+
+        const device = await prisma.device.findUnique({
+            where: { id: deviceId },
+        });
+
+        if (!device) {
+            return res.status(404).json({ message: 'Device not found' });
+        }
 
         const updatedAutoReply = await prisma.autoReply.update({
-            where: { pkId: id },
+            where: { id },
             data: {
-                requests,
+                name,
+                requests: {
+                    set: requests,
+                },
                 response,
-                status,
-                deviceId,
-                updatedAt: new Date(),
+                deviceId: device.pkId,
+                recipients: {
+                    set: recipients,
+                },
             },
         });
 
@@ -99,7 +111,7 @@ export const updateAutoReplyTemplate: RequestHandler = async (req, res) => {
     }
 };
 
-export const deleteAutoReplyTemplate: RequestHandler = async (req, res) => {
+export const deleteAutoReply: RequestHandler = async (req, res) => {
     const id = parseInt(req.params.id);
 
     try {
