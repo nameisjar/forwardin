@@ -122,7 +122,9 @@ export async function sendCampaign(sessionId: any, m: any) {
         const recipient = m.messages[0].key.remoteJid;
         const jid = getJid(recipient);
         const name = m.messages[0].pushName;
-        const messageText = msg.message.conversation || msg.message.extendedTextMessage?.text || '';
+        // back here: Cannot read properties of null (reading 'conversation')
+        const messageText =
+            msg.message?.conversation || msg.message?.extendedTextMessage?.text || '';
         const parts = messageText.split('#');
         const prefix = parts[0] + '#' + parts[1] + '#';
         const matchingCampaign = await prisma.campaign.findFirst({

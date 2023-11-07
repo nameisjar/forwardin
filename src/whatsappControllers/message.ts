@@ -103,9 +103,9 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                                         id: message.key.id!,
                                         to: jidNormalizedUser(message.key.remoteJid!),
                                         message:
-                                            data.message.conversation ||
-                                            data.message.extendedTextMessage?.text ||
-                                            data.message.imageMessage?.caption ||
+                                            data.message?.conversation ||
+                                            data.message?.extendedTextMessage?.text ||
+                                            data.message?.imageMessage?.caption ||
                                             '',
                                         schedule: new Date(),
                                         status,
@@ -118,9 +118,9 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                                     data: {
                                         from: jidNormalizedUser(message.key.remoteJid!),
                                         message:
-                                            data.message.conversation ||
-                                            data.message.extendedTextMessage?.text ||
-                                            data.message.imageMessage?.caption ||
+                                            data.message?.conversation ||
+                                            data.message?.extendedTextMessage?.text ||
+                                            data.message?.imageMessage?.caption ||
                                             '',
                                         receivedAt: new Date(data.messageTimestamp * 1000),
                                         sessionId,
@@ -206,6 +206,8 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                             break;
                     }
 
+                    // back here: An operation failed because it depends on one or more records that were required but not found.
+                    // back here: Record to update not found.
                     if (key.fromMe) {
                         await tx.outgoingMessage.update({
                             where: {

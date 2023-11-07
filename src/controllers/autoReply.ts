@@ -115,6 +115,7 @@ export const deleteAutoReplyTemplate: RequestHandler = async (req, res) => {
 };
 
 // back here: handle custom variables
+// back here: if there's same request keyword
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export async function sendAutoReply(sessionId: any, m: any) {
     try {
@@ -123,13 +124,15 @@ export async function sendAutoReply(sessionId: any, m: any) {
         const recipient = m.messages[0].key.remoteJid;
         const jid = getJid(recipient);
         const name = m.messages[0].pushName;
-        const messageText = msg.message.conversation || msg.message.extendedTextMessage?.text || '';
+        const messageText =
+            msg.message?.conversation || msg.message?.extendedTextMessage?.text || '';
         const matchingAutoReply = await prisma.autoReply.findFirst({
             where: {
                 requests: {
                     has: messageText,
                 },
                 status: true,
+                device: { sessions: { some: { id: sessionId } } },
             },
         });
 
