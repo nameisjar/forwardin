@@ -126,6 +126,7 @@ export const login: RequestHandler = async (req, res) => {
         const user = await prisma.user.findFirst({
             where: {
                 OR: [{ email: identifier }, { username: identifier }, { phone: identifier }],
+                deletedAt: null,
             },
         });
 

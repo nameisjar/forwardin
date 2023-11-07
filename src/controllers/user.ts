@@ -43,6 +43,7 @@ export const getUserProfile: RequestHandler = async (req, res) => {
     }
 };
 
+// delete user > delete device > logout session! > delete contact? > delete group > delete cs > delete subscription > delete transaction
 export const deleteUser: RequestHandler = async (req, res) => {
     try {
         const userId = req.params.userId;
@@ -61,21 +62,21 @@ export const deleteUser: RequestHandler = async (req, res) => {
             return res.status(404).json({ message: 'User not found' });
         }
 
-        await prisma.user.delete({
+        // await prisma.user.delete({
+        //     where: {
+        //         id: userId,
+        //     },
+        // });
+
+        // soft delete
+        await prisma.user.update({
             where: {
                 id: userId,
             },
+            data: {
+                deletedAt: new Date(),
+            },
         });
-
-        // soft delete
-        // await prisma.user.update({
-        //     where: {
-        //         pkId: userId,
-        //     },
-        //     data: {
-        //         deletedAt: new Date(),
-        //     },
-        // });
 
         return res.status(200).json({ message: 'User deleted successfully' });
     } catch (error) {

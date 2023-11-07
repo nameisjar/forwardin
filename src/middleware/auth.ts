@@ -156,7 +156,6 @@ export function checkPrivilege(controller: string): RequestHandler {
         });
 
         if (hasRequiredPrivilege) {
-            console.log(userRoles);
             next();
         } else {
             res.status(403).json({

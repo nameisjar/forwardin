@@ -2,7 +2,7 @@
 import type { BaileysEventEmitter } from '@whiskeysockets/baileys';
 // import type { PrismaClient } from '@prisma/client';
 // import { setLogger, setPrisma } from './shared';
-import * as handlers from './handlers';
+import * as handlers from './whatsappControllers';
 
 // type initStoreOptions = {
 //     /** Prisma client instance */

@@ -1,6 +1,6 @@
 import { RequestHandler } from 'express';
 import prisma from '../utils/db';
-import { getInstance, getJid } from '../instance';
+import { getInstance, getJid } from '../whatsapp';
 import logger from '../config/logger';
 
 export const createAutoReply: RequestHandler = async (req, res) => {
@@ -128,7 +128,7 @@ export async function sendAutoReply(sessionId: any, m: any) {
                     has: messageText,
                 },
                 recipients: {
-                    has: recipient.split('@')[0],
+                    has: recipient.split('@')[0] || '*',
                 },
                 status: true,
             },

@@ -4,7 +4,7 @@ import routes from './routes';
 import logger from './config/logger';
 import pinoHttp from 'pino-http';
 import prisma from './utils/db';
-import { init } from './instance';
+import { init } from './whatsapp';
 import bodyParser from 'body-parser';
 import { initSocketServer } from './socket';
 import http from 'http';

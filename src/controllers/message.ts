@@ -1,5 +1,5 @@
 import { RequestHandler } from 'express';
-import { getInstance, verifyJid, sendButtonMessage, sendMediaFile, getJid } from '../instance';
+import { getInstance, verifyJid, sendButtonMessage, sendMediaFile, getJid } from '../whatsapp';
 import logger from '../config/logger';
 import prisma, { serializePrisma } from '../utils/db';
 import { delay as delayMs } from '../utils/delay';

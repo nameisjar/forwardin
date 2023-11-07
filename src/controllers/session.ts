@@ -5,7 +5,7 @@ import {
     getInstance,
     getInstanceStatus,
     verifyInstance,
-} from '../instance';
+} from '../whatsapp';
 import prisma from '../utils/db';
 import { generateUuid } from '../utils/keyGenerator';
 import logger from '../config/logger';

@@ -1,7 +1,7 @@
 import { RequestHandler } from 'express';
 import prisma from '../utils/db';
 import schedule from 'node-schedule';
-import { getInstance, getJid } from '../instance';
+import { getInstance, getJid } from '../whatsapp';
 import logger from '../config/logger';
 import { delay as delayMs } from '../utils/delay';
 
