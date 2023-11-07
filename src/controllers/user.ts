@@ -43,7 +43,7 @@ export const getUserProfile: RequestHandler = async (req, res) => {
     }
 };
 
-// delete user > delete device > logout session! > delete contact? > delete group > delete cs > delete subscription > delete transaction
+// back here: delete user > delete device > logout session! > delete contact? > delete group > delete cs > delete subscription > delete transaction
 export const deleteUser: RequestHandler = async (req, res) => {
     try {
         const userId = req.params.userId;

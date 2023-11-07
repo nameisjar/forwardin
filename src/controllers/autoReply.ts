@@ -113,6 +113,7 @@ export const deleteAutoReplyTemplate: RequestHandler = async (req, res) => {
     }
 };
 
+// back here: handle custom variables
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export async function sendAutoReply(sessionId: any, m: any) {
     try {
@@ -127,13 +128,15 @@ export async function sendAutoReply(sessionId: any, m: any) {
                 requests: {
                     has: messageText,
                 },
-                recipients: {
-                    has: recipient.split('@')[0] || '*',
-                },
                 status: true,
             },
         });
-        if (matchingAutoReply) {
+
+        if (
+            matchingAutoReply &&
+            (matchingAutoReply.recipients.includes(recipient.split('@')[0]) ||
+                matchingAutoReply.recipients.includes('*'))
+        ) {
             const replyText = matchingAutoReply.response;
             session.sendMessage(jid, { text: replyText.replace(/\{\{\$firstName\}\}/, name) });
         }

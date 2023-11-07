@@ -147,7 +147,7 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
         }
     };
 
-    // back here: update status if delivered, read and the timestamp
+    // back here: update the timestamp
     const update: BaileysEventHandler<'messages.update'> = async (updates) => {
         for (const { update, key } of updates) {
             try {
