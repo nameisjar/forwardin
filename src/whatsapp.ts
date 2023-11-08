@@ -276,21 +276,17 @@ export async function deleteInstance(sessionId: string) {
 }
 
 export async function verifyJid(session: Instance, jid: string, type: string = 'number') {
-    if (type === 'image') {
+    if (type != 'group') {
         if (jid.includes('@g.us')) return true;
-        const [imageResult] = await session.onWhatsApp(jid);
-        if (imageResult && imageResult.exists) return true;
-        throw new Error(`No account exists for jid: ${jid}`);
-    } else if (type === 'number') {
-        const [numberResult] = await session.onWhatsApp(jid);
-        if (numberResult && numberResult.exists) return true;
+        const [result] = await session.onWhatsApp(jid);
+        if (result && result.exists) return true;
         throw new Error(`No account exists for jid: ${jid}`);
     } else if (type === 'group') {
         const groupMeta = await session.groupMetadata(jid);
         if (groupMeta && groupMeta.id) return true;
         throw new Error('Error fetching group metadata');
     } else {
-        throw new Error('Invalid type specified');
+        throw new Error('Invalid message type specified');
     }
 }
 
@@ -304,10 +300,15 @@ export function getJid(jid: string) {
 export async function sendMediaFile(
     session: Instance,
     recipients: string[],
-    file: { mimetype: any; buffer: unknown; originalname: string | undefined },
+    file: {
+        mimetype: any;
+        buffer: unknown;
+        newName: string | undefined;
+        originalName: string | undefined;
+        url: string | undefined;
+    },
     type: string,
     caption = '',
-    filename: string | undefined,
 ) {
     const results: { index: number; result?: proto.WebMessageInfo }[] = [];
     const errors: { index: number; error: string }[] = [];
@@ -317,27 +318,26 @@ export async function sendMediaFile(
         try {
             await verifyJid(session, getJid(recipient), type);
 
-            let messsage: any;
+            let message: any;
 
             if (type === 'video') {
-                messsage = {
+                message = {
                     video: file.buffer,
                     caption: caption,
-                    fileName: filename,
+                    fileName: file.newName,
                 };
             } else {
-                messsage = {
+                message = {
                     mimetype: file.mimetype,
-                    [type]: file.buffer,
+                    [type]: { url: file.url },
                     caption: caption,
+                    fileName: file.newName,
                 };
-
-                if (filename) {
-                    messsage['fileName'] = filename;
-                }
             }
 
-            const result = await session.sendMessage(getJid(recipient), messsage);
+            logger.warn(message);
+
+            const result = await session.sendMessage(getJid(recipient), message);
             results.push({ index, result });
         } catch (error: unknown) {
             const message =
