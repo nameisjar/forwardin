@@ -19,8 +19,6 @@ import { useSession } from './utils/useSession';
 // import { join } from 'path';
 import { Store } from './store';
 import { processButton } from './utils/processBtn';
-import { sendAutoReply } from './controllers/autoReply';
-import { sendCampaign } from './controllers/campaign';
 import { getSocketIO } from './socket';
 import { Server } from 'socket.io';
 
@@ -229,14 +227,6 @@ export async function createInstance(options: createInstanceOptions) {
             await sock.readMessages([message.key]);
         });
     }
-
-    // back here: type notify not to get messsage you sent
-    sock.ev.on('messages.upsert', async (message) => {
-        logger.warn({ sessionId, message }, 'message upsert');
-
-        sendAutoReply(sessionId, message);
-        sendCampaign(sessionId, message);
-    });
 
     // Debug events
     // sock.ev.on('messaging-history.set', (data) => dump('messaging-history.set', data));

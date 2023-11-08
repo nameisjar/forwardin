@@ -114,17 +114,19 @@ export const createCampaignMessage: RequestHandler = async (req, res) => {
     }
 };
 
+// back here: prevent regis twice
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-export async function sendCampaign(sessionId: any, m: any) {
+export async function sendCampaign(sessionId: any, data: any) {
     try {
         const session = getInstance(sessionId)!;
-        const msg = m.messages[0];
-        const recipient = m.messages[0].key.remoteJid;
+        const recipient = data.key.remoteJid;
         const jid = getJid(recipient);
-        const name = m.messages[0].pushName;
-        // back here: Cannot read properties of null (reading 'conversation')
+        const name = data.pushName;
         const messageText =
-            msg.message?.conversation || msg.message?.extendedTextMessage?.text || '';
+            data.message?.conversation ||
+            data.message?.extendedTextMessage?.text ||
+            data.message?.imageMessage?.caption ||
+            '';
         const parts = messageText.split('#');
         const prefix = parts[0] + '#' + parts[1] + '#';
         const matchingCampaign = await prisma.campaign.findFirst({
@@ -133,12 +135,16 @@ export async function sendCampaign(sessionId: any, m: any) {
                     mode: 'insensitive',
                     contains: prefix,
                 },
+                device: { sessions: { some: { sessionId } } },
             },
             include: { group: { select: { pkId: true } } },
         });
         if (matchingCampaign) {
             const replyText = matchingCampaign.messageRegistered;
+            // back here: send non-text message
             session.sendMessage(jid, { text: replyText.replace(/\{\{\$firstName\}\}/, name) });
+            logger.warn(matchingCampaign, 'campaign response sent successfully');
+
             await prisma.$transaction(async (transaction) => {
                 const contact = await transaction.contact.create({
                     data: {

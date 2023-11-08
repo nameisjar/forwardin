@@ -10,6 +10,8 @@ import { jidNormalizedUser } from '@whiskeysockets/baileys';
 import logger from '../config/logger';
 import prisma, { transformPrisma } from '../utils/db';
 import { BaileysEventHandler } from '../types';
+import { sendAutoReply } from '../controllers/autoReply';
+import { sendCampaign } from '../controllers/campaign';
 
 const getKeyAuthor = (key: WAMessageKey | undefined | null) =>
     (key?.fromMe ? 'me' : key?.participant || key?.remoteJid) || '';
@@ -45,100 +47,99 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
             case 'notify':
                 for (const message of messages) {
                     try {
-                        const jid = jidNormalizedUser(message.key.remoteJid!);
-                        const data = transformPrisma(message);
-                        logger.debug(data);
+                        if (!message.broadcast) {
+                            const jid = jidNormalizedUser(message.key.remoteJid!);
+                            // back here: what's transformPrisma() for?
+                            const data = transformPrisma(message);
 
-                        await prisma.message.upsert({
-                            select: { pkId: true },
-                            create: { ...data, remoteJid: jid, id: message.key.id!, sessionId },
-                            update: { ...data },
-                            where: {
-                                sessionId_remoteJid_id: {
-                                    remoteJid: jid,
-                                    id: message.key.id!,
-                                    sessionId,
-                                },
-                            },
-                        });
-
-                        const contact = await prisma.contact.findFirst({
-                            where: {
-                                phone: jidNormalizedUser(message.key.remoteJid!).split('@')[0],
-                                contactDevices: {
-                                    some: { device: { sessions: { some: { sessionId } } } },
-                                },
-                            },
-                        });
-
-                        if (data.message && !data.message.protocolMessage) {
-                            if (message.key.fromMe) {
-                                let status;
-
-                                switch (data.status) {
-                                    case 0:
-                                        status = 'error';
-                                        break;
-                                    case 1:
-                                        status = 'pending';
-                                        break;
-                                    case 2:
-                                        status = 'server_ack';
-                                        break;
-                                    case 3:
-                                        status = 'delivery_ack';
-                                        break;
-                                    case 4:
-                                        status = 'read';
-                                        break;
-                                    case 5:
-                                        status = 'played';
-                                        break;
-                                    default:
-                                        status = 'pending';
-                                        break;
-                                }
-                                await prisma.outgoingMessage.create({
-                                    data: {
+                            await prisma.message.upsert({
+                                select: { pkId: true },
+                                create: { ...data, remoteJid: jid, id: message.key.id!, sessionId },
+                                update: { ...data },
+                                where: {
+                                    sessionId_remoteJid_id: {
+                                        remoteJid: jid,
                                         id: message.key.id!,
-                                        to: jidNormalizedUser(message.key.remoteJid!),
-                                        message:
-                                            data.message?.conversation ||
-                                            data.message?.extendedTextMessage?.text ||
-                                            data.message?.imageMessage?.caption ||
-                                            '',
-                                        schedule: new Date(),
-                                        status,
                                         sessionId,
-                                        contactId: contact?.pkId || null,
                                     },
-                                });
-                            } else {
-                                await prisma.incomingMessage.create({
-                                    data: {
-                                        from: jidNormalizedUser(message.key.remoteJid!),
-                                        message:
-                                            data.message?.conversation ||
-                                            data.message?.extendedTextMessage?.text ||
-                                            data.message?.imageMessage?.caption ||
-                                            '',
-                                        receivedAt: new Date(data.messageTimestamp * 1000),
-                                        sessionId,
-                                        contactId: contact?.pkId || null,
+                                },
+                            });
+
+                            const contact = await prisma.contact.findFirst({
+                                where: {
+                                    phone: jidNormalizedUser(message.key.remoteJid!).split('@')[0],
+                                    contactDevices: {
+                                        some: { device: { sessions: { some: { sessionId } } } },
                                     },
-                                });
+                                },
+                            });
+
+                            if (data.message && !data.message.protocolMessage) {
+                                if (message.key.fromMe) {
+                                    logger.warn({ sessionId, data }, 'outgoing messages');
+                                    let status;
+
+                                    switch (data.status) {
+                                        case 0:
+                                            status = 'error';
+                                            break;
+                                        case 1:
+                                            status = 'pending';
+                                            break;
+                                        case 2:
+                                            status = 'server_ack';
+                                            break;
+                                        case 3:
+                                            status = 'delivery_ack';
+                                            break;
+                                        case 4:
+                                            status = 'read';
+                                            break;
+                                        case 5:
+                                            status = 'played';
+                                            break;
+                                        default:
+                                            status = 'pending';
+                                            break;
+                                    }
+                                    await prisma.outgoingMessage.create({
+                                        data: {
+                                            id: message.key.id!,
+                                            to: jidNormalizedUser(message.key.remoteJid!),
+                                            message: data.message,
+                                            schedule: new Date(),
+                                            status,
+                                            sessionId,
+                                            contactId: contact?.pkId || null,
+                                        },
+                                    });
+                                } else {
+                                    logger.warn({ sessionId, data }, 'incoming messages');
+                                    sendAutoReply(sessionId, message);
+                                    sendCampaign(sessionId, message);
+
+                                    await prisma.incomingMessage.create({
+                                        data: {
+                                            from: jidNormalizedUser(message.key.remoteJid!),
+                                            message: data.message,
+                                            receivedAt: new Date(data.messageTimestamp * 1000),
+                                            sessionId,
+                                            contactId: contact?.pkId || null,
+                                        },
+                                    });
+                                }
                             }
+                            //   const chatExists = (await prisma.chat.count({ where: { id: jid, sessionId } })) > 0;
+                            //   if (type === 'notify' && !chatExists) {
+                            //     event.emit('chats.upsert', [
+                            //       {
+                            //         id: jid,
+                            //         conversationTimestamp: toNumber(message.messageTimestamp),
+                            //         unreadCount: 1,
+                            //       },
+                            //     ]);
+                            //   }
                         }
-                        //   const chatExists = (await prisma.chat.count({ where: { id: jid, sessionId } })) > 0;
-                        //   if (type === 'notify' && !chatExists) {
-                        //     event.emit('chats.upsert', [
-                        //       {
-                        //         id: jid,
-                        //         conversationTimestamp: toNumber(message.messageTimestamp),
-                        //         unreadCount: 1,
-                        //       },
-                        //     ]);
-                        //   }
                     } catch (e) {
                         logger.error(e, 'An error occured during message upsert');
                     }
@@ -151,78 +152,80 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
     const update: BaileysEventHandler<'messages.update'> = async (updates) => {
         for (const { update, key } of updates) {
             try {
-                await prisma.$transaction(async (tx) => {
-                    const prevData = await tx.message.findFirst({
-                        where: { id: key.id!, remoteJid: key.remoteJid!, sessionId },
-                    });
-                    if (!prevData) {
-                        return logger.info({ update }, 'Got update for non existent message');
-                    }
+                if (key.remoteJid != 'status@broadcast') {
+                    await prisma.$transaction(async (tx) => {
+                        const prevMessages = await tx.message.findFirst({
+                            where: { id: key.id!, remoteJid: key.remoteJid!, sessionId },
+                        });
+                        const prevOutMessages = await tx.outgoingMessage.findFirst({
+                            where: { id: key.id!, to: key.remoteJid!, sessionId },
+                        });
+                        if (!prevMessages || !prevOutMessages) {
+                            return logger.info({ update }, 'Got update for non existent message');
+                        }
 
-                    const data = { ...prevData, ...update } as proto.IWebMessageInfo;
-                    await tx.message.delete({
-                        select: { pkId: true },
-                        where: {
-                            sessionId_remoteJid_id: {
-                                id: key.id!,
-                                remoteJid: key.remoteJid!,
-                                sessionId,
-                            },
-                        },
-                    });
-                    await tx.message.create({
-                        select: { pkId: true },
-                        data: {
-                            ...transformPrisma(data),
-                            id: data.key.id!,
-                            remoteJid: data.key.remoteJid!,
-                            sessionId,
-                        },
-                    });
-
-                    let status;
-
-                    switch (update.status) {
-                        case 0:
-                            status = 'error';
-                            break;
-                        case 1:
-                            status = 'pending';
-                            break;
-                        case 2:
-                            status = 'server_ack';
-                            break;
-                        case 3:
-                            status = 'delivery_ack';
-                            break;
-                        case 4:
-                            status = 'read';
-                            break;
-                        case 5:
-                            status = 'played';
-                            break;
-                        default:
-                            status = 'pending';
-                            break;
-                    }
-
-                    logger.warn({ sessionId, key }, 'update status');
-
-                    // back here: An operation failed because it depends on one or more records that were required but not found.
-                    // back here: Record to update not found.
-                    if (key.fromMe) {
-                        await tx.outgoingMessage.update({
+                        const data = { ...prevMessages, ...update } as proto.IWebMessageInfo;
+                        await tx.message.delete({
+                            select: { pkId: true },
                             where: {
-                                sessionId_to_id: {
+                                sessionId_remoteJid_id: {
                                     id: key.id!,
-                                    to: key.remoteJid!,
+                                    remoteJid: key.remoteJid!,
                                     sessionId,
                                 },
                             },
-                            data: { status },
                         });
-                    }
-                });
+                        await tx.message.create({
+                            select: { pkId: true },
+                            data: {
+                                ...transformPrisma(data),
+                                id: data.key.id!,
+                                remoteJid: data.key.remoteJid!,
+                                sessionId,
+                            },
+                        });
+
+                        let status;
+
+                        switch (update.status) {
+                            case 0:
+                                status = 'error';
+                                break;
+                            case 1:
+                                status = 'pending';
+                                break;
+                            case 2:
+                                status = 'server_ack';
+                                break;
+                            case 3:
+                                status = 'delivery_ack';
+                                break;
+                            case 4:
+                                status = 'read';
+                                break;
+                            case 5:
+                                status = 'played';
+                                break;
+                            default:
+                                status = 'pending';
+                                break;
+                        }
+
+                        if (key.fromMe) {
+                            logger.warn({ sessionId, updates }, 'update outgoing message status');
+                            await tx.outgoingMessage.update({
+                                where: {
+                                    sessionId_to_id: {
+                                        id: key.id!,
+                                        to: key.remoteJid!,
+                                        sessionId,
+                                    },
+                                },
+                                data: { status },
+                            });
+                        }
+                    });
+                }
             } catch (e) {
                 logger.error(e, 'An error occured during message update');
             }
