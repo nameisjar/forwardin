@@ -11,7 +11,7 @@ import logger from '../config/logger';
 import prisma, { transformPrisma } from '../utils/db';
 import { BaileysEventHandler } from '../types';
 import { sendAutoReply } from '../controllers/autoReply';
-import { sendCampaign } from '../controllers/campaign';
+import { sendCampaignReply } from '../controllers/campaign';
 
 const getKeyAuthor = (key: WAMessageKey | undefined | null) =>
     (key?.fromMe ? 'me' : key?.participant || key?.remoteJid) || '';
@@ -116,7 +116,7 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                                 } else {
                                     logger.warn({ sessionId, data }, 'incoming messages');
                                     sendAutoReply(sessionId, message);
-                                    sendCampaign(sessionId, message);
+                                    sendCampaignReply(sessionId, message);
 
                                     await prisma.incomingMessage.create({
                                         data: {

@@ -310,6 +310,7 @@ model Broadcast {
   pkId       Int      @id @default(autoincrement())
   id         String   @unique @default(uuid()) @db.Uuid
   name       String   @db.VarChar(128)
+  status     Boolean  @default(true)
   recipients String[]
   message    String   @db.VarChar(255)
   schedule   DateTime
@@ -336,21 +337,26 @@ model AutoReply {
 }
 
 model Campaign {
-  pkId                Int               @id @default(autoincrement())
-  id                  String            @unique @default(uuid()) @db.Uuid
-  name                String            @db.VarChar(128)
-  syntaxRegistration  String            @map("syntax_registration") @db.VarChar(255)
-  registrationMessage String            @map("registration_message")
-  messageRegistered   String            @map("message_registered")
-  recipients          String[]
-  isSent              Boolean           @default(false)
-  groupId             Int               @map("group_id")
-  deviceId            Int               @map("device_id")
-  group               Group             @relation(fields: [groupId], references: [pkId], onDelete: Cascade)
-  device              Device            @relation(fields: [deviceId], references: [pkId], onDelete: Cascade)
-  CampaignMessage     CampaignMessage[]
-  createdAt           DateTime          @default(now()) @map("created_at")
-  updatedAt           DateTime          @default(now()) @map("updated_at")
+  pkId                 Int               @id @default(autoincrement())
+  id                   String            @unique @default(uuid()) @db.Uuid
+  name                 String            @db.VarChar(128)
+  status               Boolean           @default(true)
+  registrationSyntax   String            @unique @map("registration_syntax") @db.VarChar(128)
+  unregistrationSyntax String            @unique @map("unregistration_syntax") @db.VarChar(128)
+  registrationMessage  String            @map("registration_message") @db.VarChar(255)
+  messageRegistered    String            @map("message_registered") @db.VarChar(255)
+  messageFailed        String            @map("message_failed") @db.VarChar(255)
+  messageUnregistered  String            @map("message_unregistered") @db.VarChar(255)
+  recipients           String[]
+  isSent               Boolean           @default(false)
+  schedule             DateTime
+  groupId              Int               @map("group_id")
+  deviceId             Int               @map("device_id")
+  group                Group             @relation(fields: [groupId], references: [pkId], onDelete: Cascade)
+  device               Device            @relation(fields: [deviceId], references: [pkId], onDelete: Cascade)
+  CampaignMessage      CampaignMessage[]
+  createdAt            DateTime          @default(now()) @map("created_at")
+  updatedAt            DateTime          @default(now()) @map("updated_at")
 }
 
 model CampaignMessage {

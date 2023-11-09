@@ -68,6 +68,7 @@ type createInstanceOptions = {
     socketConfig?: SocketConfig;
 };
 
+// back here: adjust SocketConfig such as turn off always online
 export async function createInstance(options: createInstanceOptions) {
     const {
         sessionId,
@@ -373,6 +374,8 @@ export async function sendButtonMessage(
         throw error;
     }
 }
+
+// to do: send list messages
 
 // export async function dump(fileName: string, data: any) {
 //     const path = join(__dirname, '..', 'debug', `${fileName}.json`);

@@ -41,7 +41,7 @@ export const createBroadcast: RequestHandler = async (req, res) => {
     }
 };
 
-// back here: get status, sentCount, receivedCount, readCount, replyCount
+// back here: get sentCount, receivedCount, readCount, replyCount
 export const getAllBroadcasts: RequestHandler = async (req, res) => {
     try {
         const deviceId = req.query.deviceId as string;
@@ -55,7 +55,14 @@ export const getAllBroadcasts: RequestHandler = async (req, res) => {
                     id: deviceId,
                 },
             },
-            include: { device: true },
+            select: {
+                id: true,
+                name: true,
+                status: true,
+                device: { select: { name: true } },
+                createdAt: true,
+                updatedAt: true,
+            },
         });
 
         res.status(200).json(broadcasts);
@@ -66,12 +73,124 @@ export const getAllBroadcasts: RequestHandler = async (req, res) => {
 };
 
 // to do: broadcast detail
+export const getBroadcast: RequestHandler = async (req, res) => {
+    try {
+        const broadcastId = req.params.broadcastId;
+
+        const broadcast = await prisma.broadcast.findUnique({
+            where: { id: broadcastId },
+            select: {
+                id: true,
+                name: true,
+                status: true,
+                recipients: true,
+                device: { select: { name: true } },
+                schedule: true,
+                message: true,
+            },
+        });
+
+        if (!broadcast) {
+            return res.status(404).json('Broadcast not found');
+        }
+
+        res.status(200).json(broadcast);
+    } catch (error) {
+        logger.error(error);
+    }
+};
+
 // back here: sent, received, read, replied filter
+export const getOutgoingBroadcasts: RequestHandler = async (req, res) => {
+    try {
+        const broadcastId = req.params.broadcastId;
+        const status = req.query.status as string;
+
+        const broadcast = await prisma.broadcast.findUnique({
+            where: { id: broadcastId },
+            select: { pkId: true },
+        });
+
+        if (!broadcast) {
+            return res.status(404).json('Broadcast not found');
+        }
+
+        const outgoingBroadcasts = await prisma.outgoingMessage.findMany({
+            where: {
+                id: { contains: `BC_${broadcast.pkId}` },
+                status,
+            },
+            select: {
+                contact: {
+                    select: {
+                        firstName: true,
+                        lastName: true,
+                        phone: true,
+                        ContactLabel: { select: { label: { select: { name: true } } } },
+                    },
+                },
+                createdAt: true,
+            },
+        });
+
+        res.status(200).json({ outgoingBroadcasts });
+    } catch (error) {
+        logger.error(error);
+    }
+};
+
+export const getBrodcastReplies: RequestHandler = async (req, res) => {
+    try {
+        const broadcastId = req.params.broadcastId;
+
+        const broadcast = await prisma.broadcast.findUnique({
+            select: { recipients: true, createdAt: true },
+            where: { id: broadcastId },
+        });
+
+        if (!broadcast) {
+            return res.status(404).json('Broadcast not found');
+        }
+
+        const broadcastReplies = [];
+
+        for (const recipient of broadcast.recipients) {
+            const incomingMessages = await prisma.incomingMessage.findFirst({
+                where: {
+                    from: `${recipient}@s.whatsapp.net`,
+                    updatedAt: {
+                        gte: broadcast.createdAt,
+                    },
+                },
+                orderBy: {
+                    updatedAt: 'desc',
+                },
+                select: {
+                    contact: {
+                        select: {
+                            firstName: true,
+                            lastName: true,
+                            phone: true,
+                            ContactLabel: { select: { label: { select: { name: true } } } },
+                        },
+                    },
+                    createdAt: true,
+                },
+            });
+            if (incomingMessages) {
+                broadcastReplies.push(incomingMessages);
+            }
+        }
+        res.status(200).json({ broadcastReplies });
+    } catch (error) {
+        logger.error(error);
+    }
+};
+
 // to do: CRUD broadcast message template
 // to do: edit & delete broadcasts
 
 const processedRecipients: (string | number)[] = [];
-
 // back here: send media
 schedule.scheduleJob('*', async () => {
     try {
@@ -100,7 +219,11 @@ schedule.scheduleJob('*', async () => {
                 }
 
                 const jid = getJid(recipient);
-                await session.sendMessage(jid, { text: broadcast.message });
+                await session.sendMessage(
+                    jid,
+                    { text: broadcast.message },
+                    { messageId: `BC_${broadcast.pkId}_${Date.now()}` },
+                );
                 processedRecipients.push(recipient);
                 logger.info(
                     { message: 'Broadcast has just been processed', recipient },
