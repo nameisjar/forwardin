@@ -389,27 +389,8 @@ model BusinessHour {
   satEnd   Int?   @map("sat_end")
   sunStart Int?   @map("sun_start")
   sunEnd   Int?   @map("sun_end")
-  
-}
-
-model BusinessHour {
-  pkId     Int      @id @default(autoincrement())
-  id       String   @unique @default(uuid()) @db.Uuid
-  message  String
-  monday   TimeRange
-  tuesday  TimeRange
-  wednesday  TimeRange
-  thursday  TimeRange
-  friday  TimeRange
-  saturday  TimeRange
-  sunday  TimeRange
   deviceId Int    @unique
   device   Device @relation(fields: [deviceId], references: [pkId], onDelete: Cascade)
-}
-
-model TimeRange {
-  start Int
-  end   Int
 }
 
 model Order {
