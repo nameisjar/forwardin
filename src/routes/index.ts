@@ -14,6 +14,7 @@ import menuRoutes from './menus';
 import subsPlanRoutes from './subscriptionPlans';
 import privilegeRoutes from './privileges';
 import customerServiceRoutes from './customerServices';
+import businessHourRoutes from './businessHours';
 import authMiddleware from '../middleware/auth';
 
 const router = Router();
@@ -30,6 +31,7 @@ router.use('/contacts', authMiddleware, contactRoutes);
 router.use('/groups', authMiddleware, groupRoutes);
 router.use('/messages', authMiddleware, messageRoutes);
 router.use('/payment', paymentRoutes);
+router.use('/business-hours', authMiddleware, businessHourRoutes);
 router.use('/auto-replies', authMiddleware, autoReplyRoutes);
 router.use('/broadcasts', authMiddleware, broadcastRoutes);
 router.use('/campaigns', authMiddleware, campaignRoutes);

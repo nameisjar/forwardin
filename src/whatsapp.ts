@@ -68,7 +68,6 @@ type createInstanceOptions = {
     socketConfig?: SocketConfig;
 };
 
-// back here: adjust SocketConfig such as turn off always online
 export async function createInstance(options: createInstanceOptions) {
     const {
         sessionId,
@@ -167,6 +166,7 @@ export async function createInstance(options: createInstanceOptions) {
     const handleConnectionUpdate = SSE ? handleSSEConnectionUpdate : handleNormalConnectionUpdate;
 
     const { state, saveCreds } = await useSession(sessionId, deviceId);
+    // back here: adjust SocketConfig such as turn off always online
     const sock = makeWASocket({
         printQRInTerminal: process.env.NODE_ENV === 'development' ? true : false,
         browser: ['Forwardin', 'Chrome', '10.0'],
@@ -176,6 +176,7 @@ export async function createInstance(options: createInstanceOptions) {
             keys: makeCacheableSignalKeyStore(state.keys, logger),
         },
         logger,
+        markOnlineOnConnect: false,
 
         getMessage: async (key) => {
             const data = await prisma.message.findFirst({

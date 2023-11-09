@@ -165,9 +165,7 @@ model Device {
   status          String            @default("close") @map("status") @db.VarChar(20)
   createdAt       DateTime          @default(now()) @map("created_at")
   updatedAt       DateTime          @default(now()) @map("updated_at")
-  businessHourId  Int?              @map("business_hour_id")
   userId          Int
-  businessHour    BusinessHour?     @relation(fields: [businessHourId], references: [pkId], onDelete: SetNull)
   user            User              @relation(fields: [userId], references: [pkId], onDelete: Cascade)
   sessions        Session[]
   autoReplies     AutoReply[]
@@ -177,6 +175,7 @@ model Device {
   DeviceLabel     DeviceLabel[]
   Broadcast       Broadcast[]
   CustomerService CustomerService[]
+  BusinessHour    BusinessHour[]
 }
 
 model Session {
@@ -373,24 +372,44 @@ model CampaignMessage {
 }
 
 model BusinessHour {
+  pkId     Int    @id @default(autoincrement())
+  id       String @unique @default(uuid()) @db.Uuid
+  message  String
+  monStart Int?   @map("mon_start")
+  monEnd   Int?   @map("mon_end")
+  tueStart Int?   @map("tue_start")
+  tueEnd   Int?   @map("tue_end")
+  wedStart Int?   @map("wed_start")
+  wedEnd   Int?   @map("wed_end")
+  thuStart Int?   @map("thu_start")
+  thuEnd   Int?   @map("thu_end")
+  friStart Int?   @map("fri_start")
+  friEnd   Int?   @map("fri_end")
+  satStart Int?   @map("sat_start")
+  satEnd   Int?   @map("sat_end")
+  sunStart Int?   @map("sun_start")
+  sunEnd   Int?   @map("sun_end")
+  
+}
+
+model BusinessHour {
   pkId     Int      @id @default(autoincrement())
   id       String   @unique @default(uuid()) @db.Uuid
   message  String
-  monStart DateTime @map("mon_start")
-  monEnd   DateTime @map("mon_end")
-  tueStart DateTime @map("tue_start")
-  tueEnd   DateTime @map("tue_end")
-  wedStart DateTime @map("wed_start")
-  wedEnd   DateTime @map("wed_end")
-  thuStart DateTime @map("thu_start")
-  thuEnd   DateTime @map("thu_end")
-  friStart DateTime @map("fri_start")
-  friEnd   DateTime @map("fri_end")
-  satStart DateTime @map("sat_start")
-  satEnd   DateTime @map("sat_end")
-  sunStart DateTime @map("sun_start")
-  sunEnd   DateTime @map("sun_end")
-  devices  Device[]
+  monday   TimeRange
+  tuesday  TimeRange
+  wednesday  TimeRange
+  thursday  TimeRange
+  friday  TimeRange
+  saturday  TimeRange
+  sunday  TimeRange
+  deviceId Int    @unique
+  device   Device @relation(fields: [deviceId], references: [pkId], onDelete: Cascade)
+}
+
+model TimeRange {
+  start Int
+  end   Int
 }
 
 model Order {
