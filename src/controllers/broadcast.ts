@@ -192,6 +192,7 @@ export const getBrodcastReplies: RequestHandler = async (req, res) => {
 
 const processedRecipients: (string | number)[] = [];
 // back here: send media
+// back here: fix timed out error
 schedule.scheduleJob('*', async () => {
     try {
         const pendingBroadcasts = await prisma.broadcast.findMany({

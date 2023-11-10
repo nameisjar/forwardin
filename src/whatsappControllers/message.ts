@@ -132,6 +132,7 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
 
                                     const outputFilePath = `${dir}/${outgoingMessage.id}.jpg`;
 
+                                    // back here: handle doc too
                                     if (data.message.imageMessage) {
                                         const buffer = (await downloadMediaMessage(
                                             message,

@@ -134,7 +134,7 @@ export const updateAutoReply: RequestHandler = async (req, res) => {
     const id = req.params.id;
 
     try {
-        const { name, deviceId, recipients, requests, response } = req.body;
+        const { name, deviceId, recipients, requests, response, status } = req.body;
 
         const device = await prisma.device.findUnique({
             where: { id: deviceId },
@@ -152,6 +152,7 @@ export const updateAutoReply: RequestHandler = async (req, res) => {
                     set: requests,
                 },
                 response,
+                status,
                 deviceId: device.pkId,
                 recipients: {
                     set: recipients,
