@@ -153,73 +153,71 @@ export async function sendOutsideBusinessHourMessage(sessionId: any, data: any) 
             },
         });
 
-        if (businessHourRecord) {
-            const repliedBusinessHour = await prisma.outgoingMessage.findFirst({
-                where: {
-                    id: { contains: `BH_${businessHourRecord?.pkId}` },
-                    to: jid,
-                    sessionId,
-                },
-            });
+        const businessHours: BusinessHours = {
+            mon: {
+                start: businessHourRecord?.monStart ?? null,
+                end: businessHourRecord?.monEnd ?? null,
+            },
+            tue: {
+                start: businessHourRecord?.tueStart ?? null,
+                end: businessHourRecord?.tueEnd ?? null,
+            },
+            wed: {
+                start: businessHourRecord?.wedStart ?? null,
+                end: businessHourRecord?.wedEnd ?? null,
+            },
+            thu: {
+                start: businessHourRecord?.thuStart ?? null,
+                end: businessHourRecord?.thuEnd ?? null,
+            },
+            fri: {
+                start: businessHourRecord?.friStart ?? null,
+                end: businessHourRecord?.friEnd ?? null,
+            },
+            sat: {
+                start: businessHourRecord?.satStart ?? null,
+                end: businessHourRecord?.satEnd ?? null,
+            },
+            sun: {
+                start: businessHourRecord?.sunStart ?? null,
+                end: businessHourRecord?.sunEnd ?? null,
+            },
+        };
 
-            const businessHours: BusinessHours = {
-                mon: {
-                    start: businessHourRecord.monStart ?? null,
-                    end: businessHourRecord.monEnd ?? null,
-                },
-                tue: {
-                    start: businessHourRecord.tueStart ?? null,
-                    end: businessHourRecord.tueEnd ?? null,
-                },
-                wed: {
-                    start: businessHourRecord.wedStart ?? null,
-                    end: businessHourRecord.wedEnd ?? null,
-                },
-                thu: {
-                    start: businessHourRecord.thuStart ?? null,
-                    end: businessHourRecord.thuEnd ?? null,
-                },
-                fri: {
-                    start: businessHourRecord.friStart ?? null,
-                    end: businessHourRecord.friEnd ?? null,
-                },
-                sat: {
-                    start: businessHourRecord.satStart ?? null,
-                    end: businessHourRecord.satEnd ?? null,
-                },
-                sun: {
-                    start: businessHourRecord.sunStart ?? null,
-                    end: businessHourRecord.sunEnd ?? null,
-                },
-            };
+        const repliedBusinessHour = await prisma.outgoingMessage.findFirst({
+            where: {
+                id: { contains: `BH_${businessHourRecord?.pkId}` },
+                to: jid,
+                sessionId,
+            },
+        });
 
-            const outsideBusinessHours = isOutsideBusinessHours(
-                timestamp,
-                businessHours,
-                businessHourRecord.timeZone,
-            );
+        const outsideBusinessHours = isOutsideBusinessHours(
+            timestamp,
+            businessHours,
+            businessHourRecord?.timeZone ?? 'Etc/UTC',
+        );
 
-            if (outsideBusinessHours) {
-                if (!repliedBusinessHour) {
-                    const replyText = businessHourRecord.message;
+        if (outsideBusinessHours) {
+            if (!repliedBusinessHour) {
+                const replyText = businessHourRecord!.message;
 
-                    // back here: complete the provided variables
-                    const variables = {
-                        name: name,
-                        firstName: name,
-                    };
+                // back here: complete the provided variables
+                const variables = {
+                    name: name,
+                    firstName: name,
+                };
 
-                    // back here: send non-text message
-                    // session.readMessages([data.key]);
-                    session.sendMessage(
-                        jid,
-                        { text: replaceVariables(replyText, variables) },
-                        { quoted: data, messageId: `BH_${businessHourRecord.pkId}_${Date.now()}` },
-                    );
-                }
-            } else {
-                sendAutoReply(sessionId, data);
+                // back here: send non-text message
+                // session.readMessages([data.key]);
+                session.sendMessage(
+                    jid,
+                    { text: replaceVariables(replyText, variables) },
+                    { quoted: data, messageId: `BH_${businessHourRecord!.pkId}_${Date.now()}` },
+                );
             }
+        } else {
+            sendAutoReply(sessionId, data);
         }
     } catch (error) {
         logger.error(error);
