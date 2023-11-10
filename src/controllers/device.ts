@@ -123,7 +123,7 @@ export const getDevice: RequestHandler = async (req, res) => {
                 id: deviceId,
             },
             include: {
-                sessions: true,
+                sessions: { where: { id: { contains: 'config' } } },
                 DeviceLabel: {
                     select: {
                         label: {
@@ -266,17 +266,22 @@ export const deleteDevices: RequestHandler = async (req, res) => {
                 },
             });
 
-            await prisma.label.deleteMany({
+            await prisma.contact.deleteMany({
                 where: {
-                    NOT: {
-                        DeviceLabel: {
-                            some: {
-                                deviceId: { not: deletedDevice.pkId },
+                    contactDevices: { some: { device: { id: deviceId } } },
+                },
+            }),
+                await prisma.label.deleteMany({
+                    where: {
+                        NOT: {
+                            DeviceLabel: {
+                                some: {
+                                    deviceId: { not: deletedDevice.pkId },
+                                },
                             },
                         },
                     },
-                },
-            });
+                });
 
             return { success: true };
         });
