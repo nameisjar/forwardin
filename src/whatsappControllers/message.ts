@@ -6,12 +6,13 @@ import type {
     WAMessageKey,
 } from '@whiskeysockets/baileys';
 // import { jidNormalizedUser, toNumber } from '@whiskeysockets/baileys';
-import { jidNormalizedUser } from '@whiskeysockets/baileys';
+import { downloadMediaMessage, jidNormalizedUser } from '@whiskeysockets/baileys';
 import logger from '../config/logger';
 import prisma, { transformPrisma } from '../utils/db';
 import { BaileysEventHandler } from '../types';
 import { sendCampaignReply } from '../controllers/campaign';
 import { sendOutsideBusinessHourMessage } from '../controllers/businessHour';
+import fs from 'fs';
 
 const getKeyAuthor = (key: WAMessageKey | undefined | null) =>
     (key?.fromMe ? 'me' : key?.participant || key?.remoteJid) || '';
@@ -51,6 +52,11 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                             const jid = jidNormalizedUser(message.key.remoteJid!);
                             // back here: what's transformPrisma() for?
                             const data = transformPrisma(message);
+                            const messageText =
+                                data.message?.conversation ||
+                                data.message?.extendedTextMessage?.text ||
+                                data.message?.imageMessage?.caption ||
+                                '';
 
                             await prisma.message.upsert({
                                 select: { pkId: true },
@@ -102,31 +108,90 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                                             status = 'pending';
                                             break;
                                     }
-                                    await prisma.outgoingMessage.create({
+
+                                    const outgoingMessage = await prisma.outgoingMessage.create({
                                         data: {
                                             id: message.key.id!,
                                             to: jidNormalizedUser(message.key.remoteJid!),
-                                            message: data.message,
+                                            message: messageText,
                                             schedule: new Date(),
                                             status,
                                             sessionId,
                                             contactId: contact?.pkId || null,
                                         },
                                     });
+
+                                    const dir = '.tmp/uploads';
+                                    if (!fs.existsSync(dir)) {
+                                        try {
+                                            fs.mkdirSync(dir, { recursive: true });
+                                        } catch (err) {
+                                            console.error('Error creating directory:', err);
+                                        }
+                                    }
+
+                                    const outputFilePath = `${dir}/${outgoingMessage.id}.jpg`;
+
+                                    if (data.message.imageMessage) {
+                                        const buffer = (await downloadMediaMessage(
+                                            message,
+                                            'buffer',
+                                            {},
+                                        )) as Buffer;
+
+                                        fs.writeFile(outputFilePath, buffer, (err: any) => {
+                                            if (err) throw err;
+                                            logger.warn('save img');
+                                        });
+
+                                        await prisma.outgoingMessage.update({
+                                            where: { id: outgoingMessage.id },
+                                            data: { mediaPath: outputFilePath },
+                                        });
+                                    }
                                 } else {
                                     logger.warn({ sessionId, data }, 'incoming messages');
                                     sendOutsideBusinessHourMessage(sessionId, message);
                                     sendCampaignReply(sessionId, message);
 
-                                    await prisma.incomingMessage.create({
+                                    const incomingMessage = await prisma.incomingMessage.create({
                                         data: {
+                                            id: message.key.id!,
                                             from: jidNormalizedUser(message.key.remoteJid!),
-                                            message: data.message,
+                                            message: messageText,
                                             receivedAt: new Date(data.messageTimestamp * 1000),
                                             sessionId,
                                             contactId: contact?.pkId || null,
                                         },
                                     });
+
+                                    const dir = '.tmp/downloads';
+                                    if (!fs.existsSync(dir)) {
+                                        try {
+                                            fs.mkdirSync(dir, { recursive: true });
+                                        } catch (err) {
+                                            console.error('Error creating directory:', err);
+                                        }
+                                    }
+
+                                    const outputFilePath = `${dir}/${incomingMessage.id}.jpg`;
+
+                                    if (data.message.imageMessage) {
+                                        const buffer = (await downloadMediaMessage(
+                                            message,
+                                            'buffer',
+                                            {},
+                                        )) as Buffer;
+
+                                        fs.writeFile(outputFilePath, buffer, (err: any) => {
+                                            if (err) throw err;
+                                            logger.warn('save img');
+                                        });
+                                        await prisma.incomingMessage.update({
+                                            where: { id: incomingMessage.id },
+                                            data: { mediaPath: outputFilePath },
+                                        });
+                                    }
                                 }
                             }
                             //   const chatExists = (await prisma.chat.count({ where: { id: jid, sessionId } })) > 0;

@@ -123,7 +123,7 @@ export const getDevice: RequestHandler = async (req, res) => {
                 id: deviceId,
             },
             include: {
-                sessions: { where: { id: { contains: 'config' } } },
+                sessions: { where: { id: { contains: 'config' } }, select: { sessionId: true } },
                 DeviceLabel: {
                     select: {
                         label: {
@@ -133,6 +133,10 @@ export const getDevice: RequestHandler = async (req, res) => {
                 },
             },
         });
+
+        if (!device) {
+            return res.status(404).json({ message: 'Device not found' });
+        }
 
         res.status(200).json(device);
     } catch (error) {

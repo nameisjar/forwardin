@@ -280,7 +280,8 @@ model OutgoingMessage {
   pkId      Int      @id @default(autoincrement())
   id        String   @unique
   to        String
-  message   Json?
+  message   String?
+  mediaPath String?
   schedule  DateTime
   status    String   @db.VarChar(20)
   createdAt DateTime @default(now()) @map("created_at")
@@ -294,9 +295,10 @@ model OutgoingMessage {
 
 model IncomingMessage {
   pkId       Int      @id @default(autoincrement())
-  id         String   @unique @default(uuid()) @db.Uuid
+  id         String   @unique
   from       String
-  message    Json?
+  message   String
+  mediaPath  String?
   receivedAt DateTime @map("received_at")
   createdAt  DateTime @default(now()) @map("created_at")
   updatedAt  DateTime @default(now()) @map("updated_at")

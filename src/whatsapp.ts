@@ -332,13 +332,12 @@ export async function sendMediaFile(
             } else {
                 message = {
                     mimetype: file.mimetype,
-                    [type]: { url: file.url },
+                    // [type]: { url: file.url },
+                    [type]: file.buffer,
                     caption: caption,
                     fileName: file.newName,
                 };
             }
-
-            logger.warn(message);
 
             const result = await session.sendMessage(getJid(recipient), message);
             results.push({ index, result });
