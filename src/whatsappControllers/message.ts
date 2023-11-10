@@ -10,7 +10,6 @@ import { jidNormalizedUser } from '@whiskeysockets/baileys';
 import logger from '../config/logger';
 import prisma, { transformPrisma } from '../utils/db';
 import { BaileysEventHandler } from '../types';
-import { sendAutoReply } from '../controllers/autoReply';
 import { sendCampaignReply } from '../controllers/campaign';
 import { sendOutsideBusinessHourMessage } from '../controllers/businessHour';
 
@@ -117,7 +116,6 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                                 } else {
                                     logger.warn({ sessionId, data }, 'incoming messages');
                                     sendOutsideBusinessHourMessage(sessionId, message);
-                                    sendAutoReply(sessionId, message);
                                     sendCampaignReply(sessionId, message);
 
                                     await prisma.incomingMessage.create({

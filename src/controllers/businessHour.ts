@@ -3,6 +3,9 @@ import prisma from '../utils/db';
 import { getInstance, getJid } from '../whatsapp';
 import logger from '../config/logger';
 import { replaceVariables } from '../utils/variableHelper';
+import { format, parseISO } from 'date-fns';
+import { utcToZonedTime } from 'date-fns-tz';
+import { sendAutoReply } from './autoReply';
 
 export const createBusinessHour: RequestHandler = async (req, res) => {
     const {
@@ -22,6 +25,7 @@ export const createBusinessHour: RequestHandler = async (req, res) => {
         sunStart,
         sunEnd,
         deviceId,
+        timeZone,
     } = req.body;
     try {
         const device = await prisma.device.findUnique({
@@ -48,6 +52,7 @@ export const createBusinessHour: RequestHandler = async (req, res) => {
                 satEnd,
                 sunStart,
                 sunEnd,
+                timeZone,
                 deviceId: device.pkId,
             },
         });
@@ -85,20 +90,13 @@ export const getAllBusinessHours: RequestHandler = async (req, res) => {
 
 function getDayOfWeek(timestamp: number) {
     const date = new Date(timestamp * 1000);
-    const daysOfWeek = [
-        'sunday',
-        'monday',
-        'tuesday',
-        'wednesday',
-        'thursday',
-        'friday',
-        'saturday',
-    ];
+    const daysOfWeek = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
     return daysOfWeek[date.getDay()];
 }
 
-function getMessageTime(timestamp: number): Date {
-    return new Date(timestamp * 1000);
+function convertToBusinessTimeZone(timestamp: number, timeZone: string): Date {
+    const userTime = parseISO(format(new Date(timestamp * 1000), "yyyy-MM-dd'T'HH:mm:ssxxx"));
+    return utcToZonedTime(userTime, timeZone);
 }
 
 type BusinessHours = {
@@ -111,21 +109,32 @@ type BusinessHours = {
     sun: { start: number | null; end: number | null };
 };
 
-function isOutsideBusinessHours(timestamp: number, businessHours: BusinessHours): boolean {
+function isOutsideBusinessHours(
+    timestamp: number,
+    businessHours: BusinessHours,
+    timeZone: string,
+): boolean {
     if (!businessHours) {
         return false;
     }
 
     const dayOfWeek = getDayOfWeek(timestamp);
-    const messageTime = getMessageTime(timestamp);
+    const messageTime = convertToBusinessTimeZone(timestamp, timeZone);
 
-    const dayKey = `${dayOfWeek.substring(0, 3).toLowerCase()}`;
+    const dayKey = `${dayOfWeek.toLowerCase()}`;
     const day = businessHours[dayKey as keyof BusinessHours];
 
+    // start && end are null == available a whole day
     const startMinutes = day.start !== null ? day.start * 60 : 0;
-    const endMinutes = day.end !== null ? day.end * 60 : 24 * 60; // 24 hours if end is null
+    const endMinutes = day.end !== null ? day.end * 60 : 24 * 60;
     const messageMinutes = messageTime.getHours() * 60 + messageTime.getMinutes();
 
+    logger.warn(
+        { timeZone, dayOfWeek, startMinutes, endMinutes, messageMinutes },
+        'business hours',
+    );
+
+    // start = 24 || end = 0 == non available a whole day
     return messageMinutes < startMinutes || messageMinutes > endMinutes;
 }
 
@@ -144,64 +153,73 @@ export async function sendOutsideBusinessHourMessage(sessionId: any, data: any) 
             },
         });
 
-        const repliedBusinessHour = await prisma.outgoingMessage.findFirst({
-            where: {
-                id: { contains: `BH_${businessHourRecord?.pkId}` },
-                to: jid,
-                sessionId,
-            },
-        });
+        if (businessHourRecord) {
+            const repliedBusinessHour = await prisma.outgoingMessage.findFirst({
+                where: {
+                    id: { contains: `BH_${businessHourRecord?.pkId}` },
+                    to: jid,
+                    sessionId,
+                },
+            });
 
-        const businessHours: BusinessHours = {
-            mon: {
-                start: businessHourRecord?.monStart ?? null,
-                end: businessHourRecord?.monEnd ?? null,
-            },
-            tue: {
-                start: businessHourRecord?.tueStart ?? null,
-                end: businessHourRecord?.tueEnd ?? null,
-            },
-            wed: {
-                start: businessHourRecord?.wedStart ?? null,
-                end: businessHourRecord?.wedEnd ?? null,
-            },
-            thu: {
-                start: businessHourRecord?.thuStart ?? null,
-                end: businessHourRecord?.thuEnd ?? null,
-            },
-            fri: {
-                start: businessHourRecord?.friStart ?? null,
-                end: businessHourRecord?.friEnd ?? null,
-            },
-            sat: {
-                start: businessHourRecord?.satStart ?? null,
-                end: businessHourRecord?.satEnd ?? null,
-            },
-            sun: {
-                start: businessHourRecord?.sunStart ?? null,
-                end: businessHourRecord?.sunEnd ?? null,
-            },
-        };
-
-        const outsideBusinessHours = isOutsideBusinessHours(timestamp, businessHours);
-
-        if (outsideBusinessHours && !repliedBusinessHour) {
-            const replyText = businessHourRecord!.message;
-
-            // back here: complete the provided variables
-            const variables = {
-                name: name,
-                firstName: name,
+            const businessHours: BusinessHours = {
+                mon: {
+                    start: businessHourRecord.monStart ?? null,
+                    end: businessHourRecord.monEnd ?? null,
+                },
+                tue: {
+                    start: businessHourRecord.tueStart ?? null,
+                    end: businessHourRecord.tueEnd ?? null,
+                },
+                wed: {
+                    start: businessHourRecord.wedStart ?? null,
+                    end: businessHourRecord.wedEnd ?? null,
+                },
+                thu: {
+                    start: businessHourRecord.thuStart ?? null,
+                    end: businessHourRecord.thuEnd ?? null,
+                },
+                fri: {
+                    start: businessHourRecord.friStart ?? null,
+                    end: businessHourRecord.friEnd ?? null,
+                },
+                sat: {
+                    start: businessHourRecord.satStart ?? null,
+                    end: businessHourRecord.satEnd ?? null,
+                },
+                sun: {
+                    start: businessHourRecord.sunStart ?? null,
+                    end: businessHourRecord.sunEnd ?? null,
+                },
             };
 
-            // back here: send non-text message
-            // session.readMessages([data.key]);
-            session.sendMessage(
-                jid,
-                { text: replaceVariables(replyText, variables) },
-                { quoted: data, messageId: `BH_${businessHourRecord?.pkId}_${Date.now()}` },
+            const outsideBusinessHours = isOutsideBusinessHours(
+                timestamp,
+                businessHours,
+                businessHourRecord.timeZone,
             );
-            logger.warn(outsideBusinessHours, 'outside business hours response sent successfully');
+
+            if (outsideBusinessHours) {
+                if (!repliedBusinessHour) {
+                    const replyText = businessHourRecord.message;
+
+                    // back here: complete the provided variables
+                    const variables = {
+                        name: name,
+                        firstName: name,
+                    };
+
+                    // back here: send non-text message
+                    // session.readMessages([data.key]);
+                    session.sendMessage(
+                        jid,
+                        { text: replaceVariables(replyText, variables) },
+                        { quoted: data, messageId: `BH_${businessHourRecord.pkId}_${Date.now()}` },
+                    );
+                }
+            } else {
+                sendAutoReply(sessionId, data);
+            }
         }
     } catch (error) {
         logger.error(error);

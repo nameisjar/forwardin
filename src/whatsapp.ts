@@ -211,6 +211,7 @@ export async function createInstance(options: createInstanceOptions) {
         if (connection === 'close') handleConnectionClose();
         handleConnectionUpdate();
 
+        // back here: Record to update not found
         const device = await prisma.device.update({
             where: { pkId: deviceId },
             data: { status: connection, updatedAt: new Date() },
