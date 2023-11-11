@@ -1,4 +1,4 @@
-import { Router, Request, Response } from 'express';
+import express, { Router, Request, Response } from 'express';
 import authRoutes from './auth';
 import deviceRoutes from './devices';
 import userRoutes from './users';
@@ -39,5 +39,6 @@ router.use('/menus', authMiddleware, menuRoutes);
 router.use('/privileges', authMiddleware, privilegeRoutes);
 router.use('/subscription-plans', authMiddleware, subsPlanRoutes);
 router.use('/customer-services', customerServiceRoutes);
+router.use('/.tmp', express.static('.tmp'));
 
 export default router;
