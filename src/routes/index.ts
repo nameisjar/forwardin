@@ -39,6 +39,6 @@ router.use('/menus', authMiddleware, menuRoutes);
 router.use('/privileges', authMiddleware, privilegeRoutes);
 router.use('/subscription-plans', authMiddleware, subsPlanRoutes);
 router.use('/customer-services', customerServiceRoutes);
-router.use('/.tmp', express.static('.tmp'));
+router.use('/images', express.static('images'));
 
 export default router;

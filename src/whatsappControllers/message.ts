@@ -121,7 +121,7 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                                         },
                                     });
 
-                                    const dir = '.tmp/uploads';
+                                    const dir = 'images/uploads';
                                     if (!fs.existsSync(dir)) {
                                         try {
                                             fs.mkdirSync(dir, { recursive: true });
@@ -166,7 +166,7 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                                         },
                                     });
 
-                                    const dir = '.tmp/downloads';
+                                    const dir = 'images/downloads';
                                     if (!fs.existsSync(dir)) {
                                         try {
                                             fs.mkdirSync(dir, { recursive: true });
