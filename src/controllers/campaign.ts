@@ -63,6 +63,15 @@ export const createCampaign: RequestHandler = async (req, res) => {
                             groupId: group.pkId,
                             deviceId: device.pkId,
                         },
+                        include: {
+                            device: {
+                                select: {
+                                    contactDevices: {
+                                        select: { contact: { select: { phone: true } } },
+                                    },
+                                },
+                            },
+                        },
                     });
                     return campaign;
                 },
@@ -71,7 +80,12 @@ export const createCampaign: RequestHandler = async (req, res) => {
                     timeout: 15000, // default: 5000
                 },
             );
-            for (const recipient of campaign.recipients) {
+
+            const newRecipients = campaign.recipients.includes('all')
+                ? campaign.device.contactDevices.map((c) => c.contact.phone)
+                : campaign.recipients;
+
+            for (const recipient of newRecipients) {
                 const jid = getJid(recipient);
                 // await verifyJid(session, jid, type);
 
@@ -385,6 +399,7 @@ export const getOutgoingCampaigns: RequestHandler = async (req, res) => {
                         firstName: true,
                         lastName: true,
                         phone: true,
+                        colorCode: true,
                         ContactLabel: { select: { label: { select: { name: true } } } },
                     },
                 },
@@ -429,6 +444,7 @@ export const getCampaignReplies: RequestHandler = async (req, res) => {
                             firstName: true,
                             lastName: true,
                             phone: true,
+                            colorCode: true,
                             ContactLabel: { select: { label: { select: { name: true } } } },
                         },
                     },

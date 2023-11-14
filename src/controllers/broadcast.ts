@@ -126,6 +126,7 @@ export const getOutgoingBroadcasts: RequestHandler = async (req, res) => {
                         firstName: true,
                         lastName: true,
                         phone: true,
+                        colorCode: true,
                         ContactLabel: { select: { label: { select: { name: true } } } },
                     },
                 },
@@ -170,6 +171,7 @@ export const getBrodcastReplies: RequestHandler = async (req, res) => {
                             firstName: true,
                             lastName: true,
                             phone: true,
+                            colorCode: true,
                             ContactLabel: { select: { label: { select: { name: true } } } },
                         },
                     },
@@ -200,14 +202,25 @@ schedule.scheduleJob('*', async () => {
                 },
                 isSent: false,
             },
-            include: { device: { select: { sessions: { select: { sessionId: true } } } } },
+            include: {
+                device: {
+                    select: {
+                        sessions: { select: { sessionId: true } },
+                        contactDevices: { select: { contact: { select: { phone: true } } } },
+                    },
+                },
+            },
         });
 
         for (const broadcast of pendingBroadcasts) {
             const session = getInstance(broadcast.device.sessions[0].sessionId)!;
-            for (let i = 0; i < broadcast.recipients.length; i++) {
-                const recipient = broadcast.recipients[i];
-                const isLastRecipient = i === broadcast.recipients.length - 1;
+            const recipients = broadcast.recipients.includes('all')
+                ? broadcast.device.contactDevices.map((c) => c.contact.phone)
+                : broadcast.recipients;
+
+            for (let i = 0; i < recipients.length; i++) {
+                const recipient = recipients[i];
+                const isLastRecipient = i === recipients.length - 1;
 
                 if (processedRecipients.includes(recipient)) {
                     logger.info(
@@ -219,13 +232,11 @@ schedule.scheduleJob('*', async () => {
 
                 const jid = getJid(recipient);
 
-                logger.warn('Before sending message');
                 await session.sendMessage(
                     jid,
                     { text: broadcast.message },
                     { messageId: `BC_${broadcast.pkId}_${Date.now()}` },
                 );
-                logger.warn('After sending message');
 
                 processedRecipients.push(recipient);
                 logger.info(
