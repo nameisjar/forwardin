@@ -140,8 +140,14 @@ export const login: RequestHandler = async (req, res) => {
         }
 
         const accessToken = generateAccessToken(user);
-        const refreshToken = user.refreshToken;
+        // const refreshToken = user.refreshToken;
+        const refreshToken = generateRefreshToken(user);
         const id = user.id;
+
+        await prisma.user.update({
+            where: { pkId: user.pkId },
+            data: { refreshToken },
+        });
 
         return res.status(200).json({ accessToken, refreshToken, id, role: user.privilegeId });
     } catch (error) {
@@ -517,9 +523,14 @@ export const loginRegisterByGoogle: RequestHandler = async (req, res) => {
             // login
             if (oAuthRegisteredUser) {
                 const accessToken = generateAccessToken(oAuthRegisteredUser);
-                const refreshToken = oAuthRegisteredUser.refreshToken;
+                // const refreshToken = oAuthRegisteredUser.refreshToken;
+                const refreshToken = generateRefreshToken(oAuthRegisteredUser);
                 const id = oAuthRegisteredUser.id;
 
+                await prisma.user.update({
+                    where: { pkId: oAuthRegisteredUser.pkId },
+                    data: { refreshToken },
+                });
                 return res.status(200).json({ accessToken, refreshToken, id });
             }
 

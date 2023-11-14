@@ -7,7 +7,6 @@ import { delay as delayMs } from '../utils/delay';
 import { replaceVariables } from '../utils/variableHelper';
 
 // back here: registered success msg, fail, unsubscribe msg
-// back here: get recipients from contact labels or group
 export const createCampaign: RequestHandler = async (req, res) => {
     try {
         const {
@@ -81,6 +80,7 @@ export const createCampaign: RequestHandler = async (req, res) => {
                 },
             );
 
+            // back here: handle contact labels recipient, group recipient
             const newRecipients = campaign.recipients.includes('all')
                 ? campaign.device.contactDevices.map((c) => c.contact.phone)
                 : campaign.recipients;
@@ -378,7 +378,6 @@ export const getCampaign: RequestHandler = async (req, res) => {
     }
 };
 
-// back here: sent, received, read, replied filter
 export const getOutgoingCampaigns: RequestHandler = async (req, res) => {
     try {
         const campaignId = req.params.campaignId;
@@ -496,6 +495,7 @@ schedule.scheduleJob('*', async () => {
             },
         });
 
+        // back here: handle contact labels recipient, group recipient
         for (const campaignMessage of pendingcampaignMessages) {
             const session = getInstance(campaignMessage.Campaign.device.sessions[0].sessionId)!;
             for (let i = 0; i < campaignMessage.Campaign.group.contactGroups.length; i++) {

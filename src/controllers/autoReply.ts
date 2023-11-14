@@ -208,6 +208,7 @@ export async function sendAutoReply(sessionId: any, data: any) {
             },
         });
 
+        // back here: refactor utlizing prisma AND, OR
         if (
             matchingAutoReply &&
             (matchingAutoReply.recipients.includes(phoneNumber) ||
