@@ -379,7 +379,7 @@ export const getOutgoingCampaigns: RequestHandler = async (req, res) => {
                 id: { contains: `CP_${campaign.pkId}` },
                 status,
             },
-            select: {
+            include: {
                 contact: {
                     select: {
                         firstName: true,
@@ -388,7 +388,6 @@ export const getOutgoingCampaigns: RequestHandler = async (req, res) => {
                         ContactLabel: { select: { label: { select: { name: true } } } },
                     },
                 },
-                createdAt: true,
             },
         });
 
@@ -424,7 +423,7 @@ export const getCampaignReplies: RequestHandler = async (req, res) => {
                 orderBy: {
                     updatedAt: 'desc',
                 },
-                select: {
+                include: {
                     contact: {
                         select: {
                             firstName: true,
@@ -433,7 +432,6 @@ export const getCampaignReplies: RequestHandler = async (req, res) => {
                             ContactLabel: { select: { label: { select: { name: true } } } },
                         },
                     },
-                    createdAt: true,
                 },
             });
             if (incomingMessages) {

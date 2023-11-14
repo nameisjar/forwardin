@@ -120,7 +120,7 @@ export const getOutgoingBroadcasts: RequestHandler = async (req, res) => {
                 id: { contains: `BC_${broadcast.pkId}` },
                 status,
             },
-            select: {
+            include: {
                 contact: {
                     select: {
                         firstName: true,
@@ -129,7 +129,6 @@ export const getOutgoingBroadcasts: RequestHandler = async (req, res) => {
                         ContactLabel: { select: { label: { select: { name: true } } } },
                     },
                 },
-                createdAt: true,
             },
         });
 
@@ -165,7 +164,7 @@ export const getBrodcastReplies: RequestHandler = async (req, res) => {
                 orderBy: {
                     updatedAt: 'desc',
                 },
-                select: {
+                include: {
                     contact: {
                         select: {
                             firstName: true,
@@ -174,7 +173,6 @@ export const getBrodcastReplies: RequestHandler = async (req, res) => {
                             ContactLabel: { select: { label: { select: { name: true } } } },
                         },
                     },
-                    createdAt: true,
                 },
             });
             if (incomingMessages) {
