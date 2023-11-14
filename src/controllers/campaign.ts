@@ -496,7 +496,15 @@ schedule.scheduleJob('*', async () => {
                 }
 
                 const jid = getJid(recipient.contact.phone);
-                await session.sendMessage(jid, { text: campaignMessage.message });
+
+                logger.warn('Before sending message');
+                await session.sendMessage(
+                    jid,
+                    { text: campaignMessage.message },
+                    { messageId: `CP_${campaignMessage.pkId}_${Date.now()}` },
+                );
+                logger.warn('After sending message');
+
                 processedRecipients.push(recipient.contact.phone);
                 logger.info(
                     {

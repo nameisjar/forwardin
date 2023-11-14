@@ -220,11 +220,15 @@ schedule.scheduleJob('*', async () => {
                 }
 
                 const jid = getJid(recipient);
+
+                logger.warn('Before sending message');
                 await session.sendMessage(
                     jid,
                     { text: broadcast.message },
                     { messageId: `BC_${broadcast.pkId}_${Date.now()}` },
                 );
+                logger.warn('After sending message');
+
                 processedRecipients.push(recipient);
                 logger.info(
                     { message: 'Broadcast has just been processed', recipient },
