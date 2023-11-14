@@ -191,6 +191,11 @@ export async function sendCampaignReply(sessionId: any, data: any) {
                             },
                             {
                                 recipients: {
+                                    has: 'all',
+                                },
+                            },
+                            {
+                                recipients: {
                                     has: phoneNumber,
                                 },
                             },
