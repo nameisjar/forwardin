@@ -126,7 +126,7 @@ export const sendDocumentMessages: RequestHandler = async (req, res) => {
                 url: req.file?.path,
             };
 
-            logger.warn(fileData);
+            // logger.warn(fileData);
             const fileType = 'document';
             const caption = req.body.caption || '';
             const delay = req.body.delay || 1000;

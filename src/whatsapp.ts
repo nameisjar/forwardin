@@ -21,6 +21,7 @@ import { Store } from './store';
 import { processButton } from './utils/processBtn';
 import { getSocketIO } from './socket';
 import { Server } from 'socket.io';
+import fs from 'fs';
 
 type Instance = WASocket & {
     destroy: () => Promise<void>;
@@ -80,8 +81,11 @@ export async function createInstance(options: createInstanceOptions) {
     const configID = `${SESSION_CONFIG_ID}-${sessionId}`;
     let connectionState: Partial<ConnectionState> = { connection: 'close' };
 
+    // back here: delete temporary folders
     const destroy = async (logout = true) => {
         try {
+            const subDirectoryPath = `media/${sessionId}`;
+
             await Promise.all([
                 logout && sock.logout(),
                 // prisma.chat.deleteMany({ where: { sessionId } }),
@@ -95,6 +99,13 @@ export async function createInstance(options: createInstanceOptions) {
                 prisma.incomingMessage.deleteMany({ where: { sessionId } }),
                 prisma.outgoingMessage.deleteMany({ where: { sessionId } }),
                 prisma.session.deleteMany({ where: { sessionId } }),
+                fs.rm(subDirectoryPath, { recursive: true }, (err) => {
+                    if (err) {
+                        console.error(`Error deleting sub-directory: ${err}`);
+                    } else {
+                        console.log(`Sub-directory ${subDirectoryPath} is deleted successfully.`);
+                    }
+                }),
             ]);
         } catch (e) {
             logger.error(e, 'An error occured during session destroy');
@@ -327,7 +338,7 @@ export async function sendMediaFile(
                 message = {
                     video: file.buffer,
                     caption: caption,
-                    fileName: file.newName,
+                    fileName: file.newName ?? file.originalName,
                 };
             } else {
                 message = {
@@ -335,7 +346,7 @@ export async function sendMediaFile(
                     // [type]: { url: file.url },
                     [type]: file.buffer,
                     caption: caption,
-                    fileName: file.newName,
+                    fileName: file.newName ?? file.originalName,
                 };
             }
 

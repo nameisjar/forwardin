@@ -81,6 +81,15 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                             });
 
                             if (data.message && !data.message.protocolMessage) {
+                                const dir = `media/${sessionId}`;
+                                if (!fs.existsSync(dir)) {
+                                    try {
+                                        fs.mkdirSync(dir, { recursive: true });
+                                    } catch (err) {
+                                        console.error('Error creating directory:', err);
+                                    }
+                                }
+
                                 if (message.key.fromMe) {
                                     logger.warn({ sessionId, data }, 'outgoing messages');
                                     let status;
@@ -121,19 +130,18 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                                         },
                                     });
 
-                                    const dir = 'images/uploads';
-                                    if (!fs.existsSync(dir)) {
-                                        try {
-                                            fs.mkdirSync(dir, { recursive: true });
-                                        } catch (err) {
-                                            console.error('Error creating directory:', err);
-                                        }
-                                    }
-
-                                    const outputFilePath = `${dir}/${outgoingMessage.id}.jpg`;
-
-                                    // back here: handle doc too
                                     if (data.message.imageMessage) {
+                                        const outputFilePath = data.message.imageMessage.fileName
+                                            ? `${dir}/${
+                                                  outgoingMessage.id
+                                              }.${data.message.imageMessage.fileName
+                                                  .split('.')
+                                                  .pop()}`
+                                            : `${dir}/${
+                                                  outgoingMessage.id
+                                              }.${data.message.imageMessage.mimetype
+                                                  .split('/')
+                                                  .pop()}`;
                                         const buffer = (await downloadMediaMessage(
                                             message,
                                             'buffer',
@@ -143,6 +151,33 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                                         fs.writeFile(outputFilePath, buffer, (err: any) => {
                                             if (err) throw err;
                                             logger.warn('save img');
+                                        });
+
+                                        await prisma.outgoingMessage.update({
+                                            where: { id: outgoingMessage.id },
+                                            data: { mediaPath: outputFilePath },
+                                        });
+                                    } else if (data.message.documentMessage) {
+                                        const outputFilePath = data.message.documentMessage.fileName
+                                            ? `${dir}/${
+                                                  outgoingMessage.id
+                                              }.${data.message.documentMessage.fileName
+                                                  .split('.')
+                                                  .pop()}`
+                                            : `${dir}/${
+                                                  outgoingMessage.id
+                                              }.${data.message.documentMessage.mimetype
+                                                  .split('/')
+                                                  .pop()}`;
+                                        const buffer = (await downloadMediaMessage(
+                                            message,
+                                            'buffer',
+                                            {},
+                                        )) as Buffer;
+
+                                        fs.writeFile(outputFilePath, buffer, (err: any) => {
+                                            if (err) throw err;
+                                            logger.warn('save doc');
                                         });
 
                                         await prisma.outgoingMessage.update({
@@ -166,18 +201,18 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                                         },
                                     });
 
-                                    const dir = 'images/downloads';
-                                    if (!fs.existsSync(dir)) {
-                                        try {
-                                            fs.mkdirSync(dir, { recursive: true });
-                                        } catch (err) {
-                                            console.error('Error creating directory:', err);
-                                        }
-                                    }
-
-                                    const outputFilePath = `${dir}/${incomingMessage.id}.jpg`;
-
                                     if (data.message.imageMessage) {
+                                        const outputFilePath = data.message.imageMessage.fileName
+                                            ? `${dir}/${
+                                                  incomingMessage.id
+                                              }.${data.message.imageMessage.fileName
+                                                  .split('.')
+                                                  .pop()}`
+                                            : `${dir}/${
+                                                  incomingMessage.id
+                                              }.${data.message.imageMessage.mimetype
+                                                  .split('/')
+                                                  .pop()}`;
                                         const buffer = (await downloadMediaMessage(
                                             message,
                                             'buffer',
@@ -188,6 +223,33 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                                             if (err) throw err;
                                             logger.warn('save img');
                                         });
+                                        await prisma.incomingMessage.update({
+                                            where: { id: incomingMessage.id },
+                                            data: { mediaPath: outputFilePath },
+                                        });
+                                    } else if (data.message.documentMessage) {
+                                        const outputFilePath = data.message.documentMessage.fileName
+                                            ? `${dir}/${
+                                                  incomingMessage.id
+                                              }.${data.message.documentMessage.fileName
+                                                  .split('.')
+                                                  .pop()}`
+                                            : `${dir}/${
+                                                  incomingMessage.id
+                                              }.${data.message.documentMessage.mimetype
+                                                  .split('/')
+                                                  .pop()}`;
+                                        const buffer = (await downloadMediaMessage(
+                                            message,
+                                            'buffer',
+                                            {},
+                                        )) as Buffer;
+
+                                        fs.writeFile(outputFilePath, buffer, (err: any) => {
+                                            if (err) throw err;
+                                            logger.warn('save doc');
+                                        });
+
                                         await prisma.incomingMessage.update({
                                             where: { id: incomingMessage.id },
                                             data: { mediaPath: outputFilePath },

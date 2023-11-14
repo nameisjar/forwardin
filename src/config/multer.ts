@@ -6,7 +6,7 @@ import multer from 'multer';
 const storage = multer.memoryStorage();
 
 // using url
-// const dir = 'images/uploads';
+// const dir = 'public/uploads';
 // if (!fs.existsSync(dir)) {
 //     try {
 //         fs.mkdirSync(dir, { recursive: true });
