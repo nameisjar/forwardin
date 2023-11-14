@@ -71,11 +71,32 @@ export const createContact: RequestHandler = async (req, res) => {
                 where: {
                     id: deviceId,
                 },
+                include: { sessions: { select: { sessionId: true } } },
             });
 
             if (!existingDevice) {
                 throw new Error('Device not found');
             }
+
+            await transaction.outgoingMessage.updateMany({
+                where: {
+                    to: phone + '@s.whatsapp.net',
+                    sessionId: existingDevice.sessions[0].sessionId,
+                },
+                data: {
+                    contactId: createdContact.pkId,
+                },
+            });
+
+            await transaction.incomingMessage.updateMany({
+                where: {
+                    from: phone + '@s.whatsapp.net',
+                    sessionId: existingDevice.sessions[0].sessionId,
+                },
+                data: {
+                    contactId: createdContact.pkId,
+                },
+            });
 
             await transaction.contactDevice.create({
                 data: {
