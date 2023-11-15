@@ -349,15 +349,14 @@ model Campaign {
   messageFailed        String            @map("message_failed") @db.VarChar(255)
   messageUnregistered  String            @map("message_unregistered") @db.VarChar(255)
   recipients           String[]
-  isSent               Boolean           @default(false)
-  schedule             DateTime
   delay                Int
-  @map("message_failed") @db.VarChar(255)
-  messageUnregistered  String            @map("message_unregistered") @db.VarChar(255)
-  recipients           String[]
   isSent               Boolean           @default(false)
   schedule             DateTime
-     CampaignMessage[]
+  groupId              Int               @map("group_id")
+  deviceId             Int               @map("device_id")
+  group                Group             @relation(fields: [groupId], references: [pkId], onDelete: Cascade)
+  device               Device            @relation(fields: [deviceId], references: [pkId], onDelete: Cascade)
+  CampaignMessage      CampaignMessage[]
   createdAt            DateTime          @default(now()) @map("created_at")
   updatedAt            DateTime          @default(now()) @map("updated_at")
 }
