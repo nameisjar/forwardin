@@ -246,7 +246,7 @@ model ContactGroup {
   id        String  @unique @default(uuid()) @db.Uuid
   contactId Int
   groupId   Int
-  contact   Contact @relation(fields: [contactId], references: [pkId])
+  contact   Contact @relation(fields: [contactId], references: [pkId], onDelete: Cascade)
   group     Group   @relation(fields: [groupId], references: [pkId], onDelete: Cascade)
 
   @@unique([contactId, groupId])
