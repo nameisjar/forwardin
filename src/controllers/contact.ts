@@ -164,21 +164,29 @@ export const getContactLabels: RequestHandler = async (req, res) => {
     const pkId = req.authenticatedUser.pkId;
 
     try {
-        const labels = await prisma.contact.findMany({
-            where: { contactDevices: { some: { device: { userId: pkId } } } },
-            select: {
+        // const labels = await prisma.contact.findMany({
+        //     where: { contactDevices: { some: { device: { userId: pkId } } } },
+        //     select: {
+        //         ContactLabel: {
+        //             select: {
+        //                 label: {
+        //                     select: { name: true },
+        //                 },
+        //             },
+        //         },
+        //     },
+        // });
+        // const newLabels = labels.flatMap((item) => item.ContactLabel.map((obj) => obj.label.name));
+
+        const labels = await prisma.label.findMany({
+            where: {
                 ContactLabel: {
-                    select: {
-                        label: {
-                            select: { name: true },
-                        },
-                    },
+                    some: { contact: { contactDevices: { some: { device: { userId: pkId } } } } },
                 },
             },
         });
 
-        const newLabels = labels.flatMap((item) => item.ContactLabel.map((obj) => obj.label.name));
-        res.status(200).json(newLabels);
+        res.status(200).json(labels.map((label) => label.name));
     } catch (error) {
         logger.error(error);
         res.status(500).json({ message: 'Internal server error' });

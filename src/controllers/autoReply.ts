@@ -3,11 +3,25 @@ import prisma from '../utils/db';
 import { getInstance, getJid } from '../whatsapp';
 import logger from '../config/logger';
 import { replaceVariables } from '../utils/variableHelper';
+import { generateSlug } from '../utils/slug';
 
-// back here: get recipients from contact labels or group
 export const createAutoReplies: RequestHandler = async (req, res) => {
     try {
         const { name, deviceId, recipients, requests, response } = req.body;
+
+        if (
+            recipients.includes('all') &&
+            recipients.some((recipient: { startsWith: (arg0: string) => string }) =>
+                recipient.startsWith('label'),
+            )
+        ) {
+            return res
+                .status(400)
+                .json({
+                    message:
+                        "Recipients can't contain both all contacts and contact labels at the same input",
+                });
+        }
 
         const device = await prisma.device.findUnique({
             where: { id: deviceId },
@@ -36,14 +50,13 @@ export const createAutoReplies: RequestHandler = async (req, res) => {
     }
 };
 
-// back here: get recipients count
 export const getAutoReplies: RequestHandler = async (req, res) => {
     try {
         const deviceId = (req.query.deviceId as string) || undefined;
         const userId = req.authenticatedUser.pkId;
         const privilegeId = req.privilege.pkId;
 
-        const autoReplies = await prisma.autoReply.findMany({
+        const autoRepliesRaw = await prisma.autoReply.findMany({
             where: {
                 device: {
                     userId: privilegeId !== Number(process.env.SUPER_ADMIN_ID) ? userId : undefined,
@@ -56,11 +69,37 @@ export const getAutoReplies: RequestHandler = async (req, res) => {
                 name: true,
                 status: true,
                 recipients: true,
-                device: { select: { name: true } },
+                device: { select: { name: true, contactDevices: { select: { contact: true } } } },
                 createdAt: true,
                 updatedAt: true,
             },
         });
+
+        const autoReplies = [];
+        for (const autoReply of autoRepliesRaw) {
+            let numberOfRecipients = 0;
+            for (const recipient of autoReply.recipients) {
+                if (recipient.includes('all')) {
+                    numberOfRecipients += autoReply.device.contactDevices.length;
+                } else if (recipient.includes('label')) {
+                    const contactLabel = recipient.split('_')[1];
+                    const contactsCount = await prisma.contact.count({
+                        where: {
+                            ContactLabel: { some: { label: { slug: generateSlug(contactLabel) } } },
+                        },
+                    });
+                    numberOfRecipients += contactsCount;
+                } else {
+                    numberOfRecipients += 1;
+                }
+            }
+            const autoRepliesCount = {
+                ...autoReply,
+                recipientsCount: numberOfRecipients,
+            };
+
+            autoReplies.push(autoRepliesCount);
+        }
 
         res.json(autoReplies);
     } catch (error) {
@@ -182,7 +221,6 @@ export const deleteAutoReply: RequestHandler = async (req, res) => {
     }
 };
 
-// back here: handle custom variables
 // back here: if there's same request keyword
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export async function sendAutoReply(sessionId: any, data: any) {
@@ -200,20 +238,33 @@ export async function sendAutoReply(sessionId: any, data: any) {
 
         const matchingAutoReply = await prisma.autoReply.findFirst({
             where: {
-                requests: {
-                    has: messageText,
-                },
-                status: true,
-                device: { sessions: { some: { sessionId } } },
+                AND: [
+                    {
+                        requests: {
+                            has: messageText,
+                        },
+                        status: true,
+                        device: { sessions: { some: { sessionId } } },
+                    },
+                    {
+                        OR: [
+                            {
+                                recipients: { has: phoneNumber },
+                            },
+                            { recipients: { has: '*' } },
+                            {
+                                recipients: { has: 'all' },
+                                device: {
+                                    contactDevices: { some: { contact: { phone: phoneNumber } } },
+                                },
+                            },
+                        ],
+                    },
+                ],
             },
         });
 
-        // back here: refactor utlizing prisma AND, OR
-        if (
-            matchingAutoReply &&
-            (matchingAutoReply.recipients.includes(phoneNumber) ||
-                matchingAutoReply.recipients.includes('*'))
-        ) {
+        if (matchingAutoReply) {
             const replyText = matchingAutoReply.response;
 
             // back here: complete the provided variables

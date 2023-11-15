@@ -8,7 +8,6 @@ import { replaceVariables } from '../utils/variableHelper';
 import { generateSlug } from '../utils/slug';
 import { getRandomColor } from '../utils/profilePic';
 
-// back here: registered success msg, fail, unsubscribe msg
 export const createCampaign: RequestHandler = async (req, res) => {
     try {
         const {
@@ -24,6 +23,20 @@ export const createCampaign: RequestHandler = async (req, res) => {
             deviceId,
             delay = 5000,
         } = req.body;
+
+        if (
+            recipients.includes('all') &&
+            recipients.some((recipient: { startsWith: (arg0: string) => string }) =>
+                recipient.startsWith('label'),
+            )
+        ) {
+            return res
+                .status(400)
+                .json({
+                    message:
+                        "Recipients can't contain both all contacts and contact labels at the same input",
+                });
+        }
 
         const userId = req.authenticatedUser.pkId;
 
@@ -154,7 +167,6 @@ export async function sendCampaignReply(sessionId: any, data: any) {
                             },
                         ],
                     },
-                    // back here: fix filter recipients
                     {
                         OR: [
                             {
@@ -165,6 +177,9 @@ export async function sendCampaignReply(sessionId: any, data: any) {
                             {
                                 recipients: {
                                     has: 'all',
+                                },
+                                device: {
+                                    contactDevices: { some: { contact: { phone: phoneNumber } } },
                                 },
                             },
                             {
@@ -466,8 +481,6 @@ schedule.scheduleJob('*', async () => {
             },
         });
 
-        logger.warn(pendingcampaignMessages);
-
         for (const campaignMessage of pendingcampaignMessages) {
             const processedRecipients: (string | number)[] = [];
 
@@ -508,7 +521,6 @@ schedule.scheduleJob('*', async () => {
                 await delayMs(isLastRecipient ? 0 : campaignMessage.delay);
             }
 
-            // back here: fix isSent update
             await prisma.campaignMessage.update({
                 where: { id: campaignMessage.id },
                 data: {

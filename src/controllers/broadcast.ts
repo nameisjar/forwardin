@@ -10,6 +10,20 @@ export const createBroadcast: RequestHandler = async (req, res) => {
     try {
         const { name, deviceId, recipients, message, schedule, delay } = req.body;
 
+        if (
+            recipients.includes('all') &&
+            recipients.some((recipient: { startsWith: (arg0: string) => string }) =>
+                recipient.startsWith('label'),
+            )
+        ) {
+            return res
+                .status(400)
+                .json({
+                    message:
+                        "Recipients can't contain both all contacts and contact labels at the same input",
+                });
+        }
+
         const device = await prisma.device.findUnique({
             where: { id: deviceId },
             include: { sessions: { select: { sessionId: true } } },
