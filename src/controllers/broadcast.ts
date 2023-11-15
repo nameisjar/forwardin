@@ -189,7 +189,6 @@ export const getBrodcastReplies: RequestHandler = async (req, res) => {
 // to do: CRUD broadcast message template
 // to do: edit & delete broadcasts
 
-const processedRecipients: (string | number)[] = [];
 // back here: send media
 schedule.scheduleJob('*', async () => {
     try {
@@ -212,11 +211,21 @@ schedule.scheduleJob('*', async () => {
 
         // back here: handle contact labels recipient, group recipient
         for (const broadcast of pendingBroadcasts) {
+            const processedRecipients: (string | number)[] = [];
             const session = getInstance(broadcast.device.sessions[0].sessionId)!;
-
             const recipients: string[] = [];
             for (const recipient of broadcast.recipients) {
-                if (recipient.includes('label')) {
+                // all == all contacts
+                // label == contact labels
+                // can't use "all" and "label" at the same time
+                if (recipient.includes('all')) {
+                    const contacts = await prisma.contact.findMany({});
+                    contacts.map((c) => {
+                        if (!recipients.includes(c.phone)) {
+                            recipients.push(c.phone);
+                        }
+                    });
+                } else if (recipient.includes('label')) {
                     const contactLabel = recipient.split('_')[1];
 
                     const contacts = await prisma.contact.findMany({
@@ -225,7 +234,11 @@ schedule.scheduleJob('*', async () => {
                         },
                     });
 
-                    contacts.map((c) => recipients.push(c.phone));
+                    contacts.map((c) => {
+                        if (!recipients.includes(c.phone)) {
+                            recipients.push(c.phone);
+                        }
+                    });
                 } else if (recipient.includes('group')) {
                     const groupName = recipient.split('_')[1];
                     const group = await prisma.group.findFirst({
@@ -236,12 +249,9 @@ schedule.scheduleJob('*', async () => {
                             contactGroups: { select: { contact: { select: { phone: true } } } },
                         },
                     });
-                    group?.contactGroups.map((c) => recipients.push(c.contact.phone));
-                } else if (recipient.includes('all')) {
-                    const contacts = await prisma.contact.findMany({});
-                    contacts.map((c) => {
-                        if (!recipients.includes(c.phone)) {
-                            recipients.push(c.phone);
+                    group?.contactGroups.map((c) => {
+                        if (!recipients.includes(c.contact.phone)) {
+                            recipients.push(c.contact.phone);
                         }
                     });
                 } else {

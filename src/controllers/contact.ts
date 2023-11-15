@@ -120,7 +120,17 @@ export const getContacts: RequestHandler = async (req, res) => {
     try {
         let contacts;
         if (privilegeId == Number(process.env.SUPER_ADMIN_ID)) {
-            contacts = await prisma.contact.findMany();
+            contacts = await prisma.contact.findMany({
+                include: {
+                    ContactLabel: {
+                        select: {
+                            label: {
+                                select: { name: true },
+                            },
+                        },
+                    },
+                },
+            });
         } else {
             contacts = await prisma.contact.findMany({
                 where: {

@@ -5,6 +5,7 @@ import logger from '../config/logger';
 import schedule from 'node-schedule';
 import { delay as delayMs } from '../utils/delay';
 import { replaceVariables } from '../utils/variableHelper';
+import { generateSlug } from '../utils/slug';
 
 // back here: registered success msg, fail, unsubscribe msg
 export const createCampaign: RequestHandler = async (req, res) => {
@@ -80,10 +81,58 @@ export const createCampaign: RequestHandler = async (req, res) => {
                 },
             );
 
+            // back here: check existing syntax
+
             // back here: handle contact labels recipient, group recipient
-            const newRecipients = campaign.recipients.includes('all')
-                ? campaign.device.contactDevices.map((c) => c.contact.phone)
-                : campaign.recipients;
+            const newRecipients: string[] = [];
+            for (const recipient of campaign.recipients) {
+                // all == all contacts
+                // label == contact labels
+                // can't use "all" and "label" at the same time
+                if (recipient.includes('all')) {
+                    const contacts = await prisma.contact.findMany({});
+                    contacts.map((c) => {
+                        if (!newRecipients.includes(c.phone)) {
+                            newRecipients.push(c.phone);
+                        }
+                    });
+                } else if (recipient.includes('label')) {
+                    const contactLabel = recipient.split('_')[1];
+
+                    const contacts = await prisma.contact.findMany({
+                        where: {
+                            ContactLabel: { some: { label: { slug: generateSlug(contactLabel) } } },
+                        },
+                    });
+
+                    contacts.map((c) => {
+                        if (!newRecipients.includes(c.phone)) {
+                            newRecipients.push(c.phone);
+                        }
+                    });
+                } else if (recipient.includes('group')) {
+                    const groupName = recipient.split('_')[1];
+                    const group = await prisma.group.findFirst({
+                        where: {
+                            name: groupName,
+                        },
+                        include: {
+                            contactGroups: { select: { contact: { select: { phone: true } } } },
+                        },
+                    });
+                    group?.contactGroups.map((c) => {
+                        if (!newRecipients.includes(c.contact.phone)) {
+                            newRecipients.push(c.contact.phone);
+                        }
+                    });
+                } else {
+                    newRecipients.push(recipient);
+                }
+            }
+
+            // const newRecipients = campaign.recipients.includes('all')
+            //     ? campaign.device.contactDevices.map((c) => c.contact.phone)
+            //     : campaign.recipients;
 
             for (const recipient of newRecipients) {
                 const jid = getJid(recipient);
@@ -468,8 +517,6 @@ export const getCampaignReplies: RequestHandler = async (req, res) => {
 // to do: CRUD campaign message template
 // to do: edit & delete campaigns
 
-const processedRecipients: (string | number)[] = [];
-
 // to do: handle scheduled campaign
 // back here: send media
 schedule.scheduleJob('*', async () => {
@@ -495,8 +542,11 @@ schedule.scheduleJob('*', async () => {
             },
         });
 
-        // back here: handle contact labels recipient, group recipient
+        logger.warn(pendingcampaignMessages);
+
         for (const campaignMessage of pendingcampaignMessages) {
+            const processedRecipients: (string | number)[] = [];
+
             const session = getInstance(campaignMessage.Campaign.device.sessions[0].sessionId)!;
             for (let i = 0; i < campaignMessage.Campaign.group.contactGroups.length; i++) {
                 const recipient = campaignMessage.Campaign.group.contactGroups[i];
@@ -533,6 +583,8 @@ schedule.scheduleJob('*', async () => {
 
                 await delayMs(isLastRecipient ? 0 : campaignMessage.delay);
             }
+
+            // back here: fix isSent update
             await prisma.campaignMessage.update({
                 where: { id: campaignMessage.id },
                 data: {
