@@ -610,10 +610,16 @@ schedule.scheduleJob('*', async () => {
                 }
 
                 const jid = getJid(recipient);
+                // back here: complete the provided variables
+                const variables = {
+                    registrationSyntax: campaign.registrationSyntax,
+                    unregistrationSyntax: campaign.unregistrationSyntax,
+                    campaignName: campaign.name,
+                };
 
                 await session.sendMessage(
                     jid,
-                    { text: campaign.registrationMessage },
+                    { text: replaceVariables(campaign.registrationMessage, variables) },
                     { messageId: `CP_${campaign.pkId}_${Date.now()}` },
                 );
 
