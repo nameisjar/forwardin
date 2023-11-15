@@ -301,6 +301,6 @@ schedule.scheduleJob('*', async () => {
         }
         logger.debug('Broadcast job is running...');
     } catch (error) {
-        logger.error(error, 'Error processing scheduled broadcast messages');
+        logger.error(error, 'Error processing scheduled broadcasts');
     }
 });

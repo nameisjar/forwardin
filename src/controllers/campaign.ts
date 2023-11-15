@@ -36,8 +36,7 @@ export const createCampaign: RequestHandler = async (req, res) => {
         } else if (!device.sessions[0]) {
             return res.status(400).json({ message: 'Session not found' });
         } else {
-            const session = getInstance(device.sessions[0].sessionId)!;
-            const campaign = await prisma.$transaction(
+            await prisma.$transaction(
                 async (transaction) => {
                     const group = await transaction.group.create({
                         data: {
@@ -60,6 +59,7 @@ export const createCampaign: RequestHandler = async (req, res) => {
                             messageRegistered,
                             messageFailed,
                             messageUnregistered,
+                            delay,
                             groupId: group.pkId,
                             deviceId: device.pkId,
                         },
@@ -83,84 +83,6 @@ export const createCampaign: RequestHandler = async (req, res) => {
 
             // back here: check existing syntax
 
-            // back here: handle contact labels recipient, group recipient
-            const newRecipients: string[] = [];
-            for (const recipient of campaign.recipients) {
-                // all == all contacts
-                // label == contact labels
-                // can't use "all" and "label" at the same time
-                if (recipient.includes('all')) {
-                    const contacts = await prisma.contact.findMany({});
-                    contacts.map((c) => {
-                        if (!newRecipients.includes(c.phone)) {
-                            newRecipients.push(c.phone);
-                        }
-                    });
-                } else if (recipient.includes('label')) {
-                    const contactLabel = recipient.split('_')[1];
-
-                    const contacts = await prisma.contact.findMany({
-                        where: {
-                            ContactLabel: { some: { label: { slug: generateSlug(contactLabel) } } },
-                        },
-                    });
-
-                    contacts.map((c) => {
-                        if (!newRecipients.includes(c.phone)) {
-                            newRecipients.push(c.phone);
-                        }
-                    });
-                } else if (recipient.includes('group')) {
-                    const groupName = recipient.split('_')[1];
-                    const group = await prisma.group.findFirst({
-                        where: {
-                            name: groupName,
-                        },
-                        include: {
-                            contactGroups: { select: { contact: { select: { phone: true } } } },
-                        },
-                    });
-                    group?.contactGroups.map((c) => {
-                        if (!newRecipients.includes(c.contact.phone)) {
-                            newRecipients.push(c.contact.phone);
-                        }
-                    });
-                } else {
-                    newRecipients.push(recipient);
-                }
-            }
-
-            // const newRecipients = campaign.recipients.includes('all')
-            //     ? campaign.device.contactDevices.map((c) => c.contact.phone)
-            //     : campaign.recipients;
-
-            for (const recipient of newRecipients) {
-                const jid = getJid(recipient);
-                // await verifyJid(session, jid, type);
-
-                // back here: complete the provided variables
-                const variables = {
-                    registrationSyntax: campaign.registrationSyntax,
-                    unregistrationSyntax: campaign.unregistrationSyntax,
-                    campaignName: campaign.name,
-                };
-
-                await delayMs(delay);
-                await session.sendMessage(
-                    jid,
-                    {
-                        text: replaceVariables(campaign.registrationMessage, variables),
-                    },
-                    { messageId: `CP_${campaign.pkId}_${Date.now()}` },
-                );
-            }
-            await prisma.campaign.update({
-                where: { id: campaign.id },
-                data: {
-                    isSent: true,
-                    updatedAt: new Date(),
-                },
-            });
             res.status(201).json({ mmessage: 'Campaign created successfully' });
         }
     } catch (error) {
@@ -438,7 +360,7 @@ export const getOutgoingCampaigns: RequestHandler = async (req, res) => {
         });
 
         if (!campaign) {
-            return res.status(404).json('Broadcast not found');
+            return res.status(404).json('Campaign not found');
         }
 
         const outgoingCampaigns = await prisma.outgoingMessage.findMany({
@@ -569,7 +491,7 @@ schedule.scheduleJob('*', async () => {
                 await session.sendMessage(
                     jid,
                     { text: campaignMessage.message },
-                    { messageId: `CP_${campaignMessage.pkId}_${Date.now()}` },
+                    { messageId: `CPM_${campaignMessage.pkId}_${Date.now()}` },
                 );
 
                 processedRecipients.push(recipient.contact.phone);
@@ -593,8 +515,124 @@ schedule.scheduleJob('*', async () => {
                 },
             });
         }
-        logger.debug('Campaign job is running...');
+        logger.debug('Campaign message job is running...');
     } catch (error) {
         logger.error(error, 'Error processing scheduled campaign messages');
+    }
+});
+
+// back here: send media
+schedule.scheduleJob('*', async () => {
+    try {
+        const pendingCampaigns = await prisma.campaign.findMany({
+            where: {
+                schedule: {
+                    lte: new Date(),
+                },
+                isSent: false,
+            },
+            include: {
+                device: {
+                    select: {
+                        sessions: { select: { sessionId: true } },
+                        contactDevices: { select: { contact: { select: { phone: true } } } },
+                    },
+                },
+            },
+        });
+
+        // back here: handle contact labels recipient, group recipient
+        for (const campaign of pendingCampaigns) {
+            const processedRecipients: (string | number)[] = [];
+            const session = getInstance(campaign.device.sessions[0].sessionId)!;
+            const recipients: string[] = [];
+            for (const recipient of campaign.recipients) {
+                // all == all contacts
+                // label == contact labels
+                // can't use "all" and "label" at the same time
+                if (recipient.includes('all')) {
+                    const contacts = await prisma.contact.findMany({});
+                    contacts.map((c) => {
+                        if (!recipients.includes(c.phone)) {
+                            recipients.push(c.phone);
+                        }
+                    });
+                } else if (recipient.includes('label')) {
+                    const contactLabel = recipient.split('_')[1];
+
+                    const contacts = await prisma.contact.findMany({
+                        where: {
+                            ContactLabel: { some: { label: { slug: generateSlug(contactLabel) } } },
+                        },
+                    });
+
+                    contacts.map((c) => {
+                        if (!recipients.includes(c.phone)) {
+                            recipients.push(c.phone);
+                        }
+                    });
+                } else if (recipient.includes('group')) {
+                    const groupName = recipient.split('_')[1];
+                    const group = await prisma.group.findFirst({
+                        where: {
+                            name: groupName,
+                        },
+                        include: {
+                            contactGroups: { select: { contact: { select: { phone: true } } } },
+                        },
+                    });
+                    group?.contactGroups.map((c) => {
+                        if (!recipients.includes(c.contact.phone)) {
+                            recipients.push(c.contact.phone);
+                        }
+                    });
+                } else {
+                    recipients.push(recipient);
+                }
+            }
+
+            // const recipients = campaign.recipients.includes('all')
+            //     ? campaign.device.contactDevices.map((c) => c.contact.phone)
+            //     : campaign.recipients;
+
+            for (let i = 0; i < recipients.length; i++) {
+                const recipient = recipients[i];
+                const isLastRecipient = i === recipients.length - 1;
+
+                if (processedRecipients.includes(recipient)) {
+                    logger.info(
+                        { message: 'Campaign recipient has already been processed', recipient },
+                        'skip campaign',
+                    );
+                    continue;
+                }
+
+                const jid = getJid(recipient);
+
+                await session.sendMessage(
+                    jid,
+                    { text: campaign.registrationMessage },
+                    { messageId: `CP_${campaign.pkId}_${Date.now()}` },
+                );
+
+                processedRecipients.push(recipient);
+                logger.info(
+                    { message: 'Campaign has just been processed', recipient },
+                    'campaign sent',
+                );
+
+                await delayMs(isLastRecipient ? 0 : campaign.delay);
+            }
+            await prisma.campaign.update({
+                where: { id: campaign.id },
+                data: {
+                    isSent: true,
+                    updatedAt: new Date(),
+                },
+            });
+        }
+        logger.debug('Campaign job is running...');
+    } catch (error) {
+        logger.error(error, 'Error processing scheduled campaigns');
     }
 });

@@ -246,7 +246,7 @@ model ContactGroup {
   id        String  @unique @default(uuid()) @db.Uuid
   contactId Int
   groupId   Int
-  contact   Contact @relation(fields: [contactId], references: [pkId])
+  contact   Contact @relation(fields: [contactId], references: [pkId], onDelete: Cascade)
   group     Group   @relation(fields: [groupId], references: [pkId], onDelete: Cascade)
 
   @@unique([contactId, groupId])
@@ -297,7 +297,7 @@ model IncomingMessage {
   pkId       Int      @id @default(autoincrement())
   id         String   @unique
   from       String
-  message   String
+  message    String
   mediaPath  String?
   receivedAt DateTime @map("received_at")
   createdAt  DateTime @default(now()) @map("created_at")
@@ -351,11 +351,13 @@ model Campaign {
   recipients           String[]
   isSent               Boolean           @default(false)
   schedule             DateTime
-  groupId              Int               @map("group_id")
-  deviceId             Int               @map("device_id")
-  group                Group             @relation(fields: [groupId], references: [pkId], onDelete: Cascade)
-  device               Device            @relation(fields: [deviceId], references: [pkId], onDelete: Cascade)
-  CampaignMessage      CampaignMessage[]
+  delay                Int
+  @map("message_failed") @db.VarChar(255)
+  messageUnregistered  String            @map("message_unregistered") @db.VarChar(255)
+  recipients           String[]
+  isSent               Boolean           @default(false)
+  schedule             DateTime
+     CampaignMessage[]
   createdAt            DateTime          @default(now()) @map("created_at")
   updatedAt            DateTime          @default(now()) @map("updated_at")
 }
