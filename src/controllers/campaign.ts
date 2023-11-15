@@ -6,6 +6,7 @@ import schedule from 'node-schedule';
 import { delay as delayMs } from '../utils/delay';
 import { replaceVariables } from '../utils/variableHelper';
 import { generateSlug } from '../utils/slug';
+import { getRandomColor } from '../utils/profilePic';
 
 // back here: registered success msg, fail, unsubscribe msg
 export const createCampaign: RequestHandler = async (req, res) => {
@@ -153,6 +154,7 @@ export async function sendCampaignReply(sessionId: any, data: any) {
                             },
                         ],
                     },
+                    // back here: fix filter recipients
                     {
                         OR: [
                             {
@@ -227,9 +229,9 @@ export async function sendCampaignReply(sessionId: any, data: any) {
                         data: {
                             firstName: name,
                             phone: phoneNumber,
-                            email: '',
                             gender: '',
                             dob: new Date(),
+                            colorCode: getRandomColor(),
                         },
                     });
                     await transaction.contactGroup.create({
