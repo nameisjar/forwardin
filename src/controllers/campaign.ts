@@ -45,8 +45,6 @@ export const createCampaign: RequestHandler = async (req, res) => {
             },
         });
 
-        logger.warn(existingCampaign);
-
         if (existingCampaign) {
             return res
                 .status(400)
@@ -333,7 +331,7 @@ export const getAllCampaigns: RequestHandler = async (req, res) => {
     }
 };
 
-export const getAllCampaignMessagess: RequestHandler = async (req, res) => {
+export const getAllCampaignMessages: RequestHandler = async (req, res) => {
     try {
         const campaignId = req.params.campaignId;
 
@@ -400,7 +398,6 @@ export const getAllCampaignMessagess: RequestHandler = async (req, res) => {
     }
 };
 
-// to do: campaign detail
 export const getCampaign: RequestHandler = async (req, res) => {
     try {
         const campaignId = req.params.campaignId;
@@ -443,7 +440,7 @@ export const getOutgoingCampaigns: RequestHandler = async (req, res) => {
         });
 
         if (!campaign) {
-            return res.status(404).json('Campaign not found');
+            return res.status(404).json({ message: 'Campaign not found' });
         }
 
         const outgoingCampaigns = await prisma.outgoingMessage.findMany({
@@ -518,11 +515,314 @@ export const getCampaignReplies: RequestHandler = async (req, res) => {
     }
 };
 
-// to do: campaign message detail
-// to do: CRUD campaign message template
-// to do: edit & delete campaigns
+export const getCampaignMessage: RequestHandler = async (req, res) => {
+    try {
+        const campaignMessageId = req.params.campaignMessageId;
 
-// to do: handle scheduled campaign
+        const campaignMessage = await prisma.campaignMessage.findUnique({
+            where: { id: campaignMessageId },
+            select: {
+                id: true,
+                message: true,
+                schedule: true,
+                Campaign: {
+                    select: {
+                        device: { select: { name: true } },
+                        group: { select: { contactGroups: true } },
+                    },
+                },
+            },
+        });
+
+        if (!campaignMessage) {
+            return res.status(404).json({ message: 'Campaign message not found' });
+        }
+
+        res.status(200).json(campaignMessage);
+    } catch (error) {
+        logger.error(error);
+    }
+};
+
+export const getOutgoingCampaignMessages: RequestHandler = async (req, res) => {
+    try {
+        const campaignMessageId = req.params.campaignMessageId;
+        const status = req.query.status as string;
+
+        const campaignMessage = await prisma.campaignMessage.findUnique({
+            where: { id: campaignMessageId },
+            select: { pkId: true },
+        });
+
+        if (!campaignMessage) {
+            return res.status(404).json({ message: 'Campaign message not found' });
+        }
+
+        const outgoingCampaignMessages = await prisma.outgoingMessage.findMany({
+            where: {
+                id: { contains: `CPM_${campaignMessage.pkId}` },
+                status,
+            },
+            include: {
+                contact: {
+                    select: {
+                        firstName: true,
+                        lastName: true,
+                        phone: true,
+                        colorCode: true,
+                        ContactLabel: { select: { label: { select: { name: true } } } },
+                    },
+                },
+            },
+        });
+
+        res.status(200).json({ outgoingCampaignMessages });
+    } catch (error) {
+        logger.error(error);
+    }
+};
+
+export const getCampaignMessageReplies: RequestHandler = async (req, res) => {
+    try {
+        const campaignMessageId = req.params.campaignMessageId;
+
+        const campaignMessage = await prisma.campaignMessage.findUnique({
+            where: { id: campaignMessageId },
+            include: {
+                Campaign: {
+                    select: {
+                        group: {
+                            select: {
+                                contactGroups: { select: { contact: { select: { phone: true } } } },
+                            },
+                        },
+                    },
+                },
+            },
+        });
+
+        if (!campaignMessage) {
+            return res.status(404).json({ message: 'Campaign message not found' });
+        }
+
+        const campaignMessageReplies = [];
+
+        const recipients = campaignMessage.Campaign.group.contactGroups.map(
+            (cg) => cg.contact.phone,
+        );
+
+        for (const recipient of recipients) {
+            const incomingMessages = await prisma.incomingMessage.findFirst({
+                where: {
+                    from: `${recipient}@s.whatsapp.net`,
+                    updatedAt: {
+                        gte: campaignMessage.createdAt,
+                    },
+                },
+                orderBy: {
+                    updatedAt: 'desc',
+                },
+                include: {
+                    contact: {
+                        select: {
+                            firstName: true,
+                            lastName: true,
+                            phone: true,
+                            colorCode: true,
+                            ContactLabel: { select: { label: { select: { name: true } } } },
+                        },
+                    },
+                },
+            });
+            if (incomingMessages) {
+                campaignMessageReplies.push(incomingMessages);
+            }
+        }
+        res.status(200).json({ campaignMessageReplies });
+    } catch (error) {
+        logger.error(error);
+    }
+};
+
+export const updateCampaignMessage: RequestHandler = async (req, res) => {
+    const id = req.params.campaignMessageId;
+    try {
+        const { message, schedule, campaignId, delay } = req.body;
+
+        const campaign = await prisma.campaign.findUnique({
+            where: { id: campaignId },
+        });
+
+        if (!campaign) {
+            res.status(404).json({ message: { message: 'Campaign not found' } });
+        } else {
+            await prisma.campaignMessage.update({
+                where: { id, Campaign: { id: campaignId } },
+                data: {
+                    message,
+                    schedule,
+                    delay,
+                    campaignId: campaign.pkId,
+                    updatedAt: new Date(),
+                },
+            });
+
+            res.status(201).json({ message: 'Campaign message updated successfully' });
+        }
+    } catch (error) {
+        logger.error(error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};
+
+export const deleteCampaignMessages: RequestHandler = async (req, res) => {
+    const campaignMessageIds = req.body.campaignMessageIds;
+
+    try {
+        const groupPromises = campaignMessageIds.map(async (campaignMessageId: string) => {
+            await prisma.campaignMessage.delete({
+                where: { id: campaignMessageId },
+            });
+        });
+
+        // wait for all the Promises to settle (either resolve or reject)
+        await Promise.all(groupPromises);
+
+        res.status(200).json({ message: 'Campaign message(s) deleted successfully' });
+    } catch (error) {
+        logger.error(error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};
+
+// to do: CRUD campaign message template
+export const updateCampaign: RequestHandler = async (req, res) => {
+    const id = req.params.campaignId;
+    try {
+        const {
+            name,
+            schedule,
+            registrationSyntax,
+            unregistrationSyntax,
+            registrationMessage,
+            messageRegistered,
+            messageFailed,
+            messageUnregistered,
+            recipients,
+            deviceId,
+            delay = 5000,
+        } = req.body;
+
+        if (
+            recipients.includes('all') &&
+            recipients.some((recipient: { startsWith: (arg0: string) => string }) =>
+                recipient.startsWith('label'),
+            )
+        ) {
+            return res.status(400).json({
+                message:
+                    "Recipients can't contain both all contacts and contact labels at the same input",
+            });
+        }
+
+        const existingCampaign = await prisma.campaign.findFirst({
+            where: {
+                OR: [
+                    { registrationSyntax: { mode: 'insensitive', equals: registrationSyntax } },
+                    { unregistrationSyntax: { mode: 'insensitive', equals: unregistrationSyntax } },
+                ],
+            },
+        });
+
+        if (existingCampaign) {
+            return res
+                .status(400)
+                .json({ message: 'Campaign registration or unregistration syntax already used' });
+        }
+
+        const device = await prisma.device.findUnique({
+            where: { id: deviceId },
+            include: { sessions: { select: { sessionId: true } } },
+        });
+
+        if (!device) {
+            return res.status(401).json({ message: 'Device not found' });
+        }
+        if (!device.sessions[0]) {
+            return res.status(400).json({ message: 'Session not found' });
+        }
+        await prisma.$transaction(
+            async (transaction) => {
+                const campaign = await transaction.campaign.update({
+                    where: { id },
+                    data: {
+                        name,
+                        recipients: {
+                            set: recipients,
+                        },
+                        schedule,
+                        registrationSyntax: registrationSyntax.toUpperCase(),
+                        unregistrationSyntax: unregistrationSyntax.toUpperCase(),
+                        registrationMessage,
+                        messageRegistered,
+                        messageFailed,
+                        messageUnregistered,
+                        delay,
+                        deviceId: device.pkId,
+                        updatedAt: new Date(),
+                    },
+                    include: {
+                        device: {
+                            select: {
+                                contactDevices: {
+                                    select: { contact: { select: { phone: true } } },
+                                },
+                            },
+                        },
+                    },
+                });
+                await transaction.group.update({
+                    where: { pkId: campaign.groupId },
+                    data: {
+                        name: `CP_${name}`,
+                        updatedAt: new Date(),
+                    },
+                });
+                return campaign;
+            },
+            {
+                maxWait: 5000, // default: 2000
+                timeout: 15000, // default: 5000
+            },
+        );
+
+        res.status(201).json({ mmessage: 'Campaign updated successfully' });
+    } catch (error) {
+        logger.error(error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};
+
+export const deleteCampaigns: RequestHandler = async (req, res) => {
+    const campaignIds = req.body.campaignIds;
+
+    try {
+        const groupPromises = campaignIds.map(async (campaignId: string) => {
+            await prisma.campaign.delete({
+                where: { id: campaignId },
+            });
+        });
+
+        // wait for all the Promises to settle (either resolve or reject)
+        await Promise.all(groupPromises);
+
+        res.status(200).json({ message: 'Campaign(s) deleted successfully' });
+    } catch (error) {
+        logger.error(error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};
+
 // back here: send media
 schedule.scheduleJob('*', async () => {
     try {

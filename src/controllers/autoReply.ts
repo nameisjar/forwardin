@@ -196,6 +196,7 @@ export const updateAutoReply: RequestHandler = async (req, res) => {
                 recipients: {
                     set: recipients,
                 },
+                updatedAt: new Date(),
             },
         });
 
@@ -206,15 +207,20 @@ export const updateAutoReply: RequestHandler = async (req, res) => {
     }
 };
 
-export const deleteAutoReply: RequestHandler = async (req, res) => {
-    const id = parseInt(req.params.id);
+export const deleteAutoReplies: RequestHandler = async (req, res) => {
+    const autoReplyIds = req.body.autoReplyIds;
 
     try {
-        await prisma.autoReply.delete({
-            where: { pkId: id },
+        const groupPromises = autoReplyIds.map(async (autoReplyId: string) => {
+            await prisma.autoReply.delete({
+                where: { id: autoReplyId },
+            });
         });
 
-        res.status(204).end();
+        // wait for all the Promises to settle (either resolve or reject)
+        await Promise.all(groupPromises);
+
+        res.status(200).json({ message: 'Auto-rep(s) deleted successfully' });
     } catch (error) {
         logger.error(error);
         res.status(500).json({ message: 'Internal server error' });

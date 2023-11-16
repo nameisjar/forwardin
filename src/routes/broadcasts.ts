@@ -10,5 +10,7 @@ router.get('/', controller.getAllBroadcasts);
 router.get('/:broadcastId', controller.getBroadcast);
 router.get('/:broadcastId/outgoing', controller.getOutgoingBroadcasts);
 router.get('/:broadcastId/replies', controller.getBrodcastReplies);
+router.put('/:id', controller.updateBroadcast);
+router.delete('/', controller.deleteBroadcasts);
 
 export default router;

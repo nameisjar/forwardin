@@ -126,7 +126,6 @@ export const getAllBroadcasts: RequestHandler = async (req, res) => {
     }
 };
 
-// to do: broadcast detail
 export const getBroadcast: RequestHandler = async (req, res) => {
     try {
         const broadcastId = req.params.broadcastId;
@@ -241,7 +240,75 @@ export const getBrodcastReplies: RequestHandler = async (req, res) => {
 };
 
 // to do: CRUD broadcast message template
-// to do: edit & delete broadcasts
+export const updateBroadcast: RequestHandler = async (req, res) => {
+    const id = req.params.id;
+    try {
+        const { name, deviceId, recipients, message, schedule, delay } = req.body;
+
+        if (
+            recipients.includes('all') &&
+            recipients.some((recipient: { startsWith: (arg0: string) => string }) =>
+                recipient.startsWith('label'),
+            )
+        ) {
+            return res.status(400).json({
+                message:
+                    "Recipients can't contain both all contacts and contact labels at the same input",
+            });
+        }
+
+        const device = await prisma.device.findUnique({
+            where: { id: deviceId },
+            include: { sessions: { select: { sessionId: true } } },
+        });
+
+        if (!device) {
+            return res.status(401).json({ message: 'Device not found' });
+        }
+        if (!device.sessions[0]) {
+            return res.status(400).json({ message: 'Session not found' });
+        }
+
+        await prisma.broadcast.update({
+            where: { id },
+            data: {
+                name,
+                message,
+                schedule,
+                deviceId: device.pkId,
+                delay,
+                recipients: {
+                    set: recipients,
+                },
+                updatedAt: new Date(),
+            },
+        });
+        res.status(201).json({ message: 'Broadcast updated successfully' });
+    } catch (error) {
+        logger.error(error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};
+
+export const deleteBroadcasts: RequestHandler = async (req, res) => {
+    const broadcastIds = req.body.broadcastIds;
+
+    try {
+        const groupPromises = broadcastIds.map(async (broadcastId: string) => {
+            await prisma.broadcast.delete({
+                where: { id: broadcastId },
+            });
+        });
+
+        // wait for all the Promises to settle (either resolve or reject)
+        await Promise.all(groupPromises);
+
+        res.status(200).json({ message: 'Broadcast(s) deleted successfully' });
+    } catch (error) {
+        logger.error(error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};
 
 // back here: send media
 schedule.scheduleJob('*', async () => {
