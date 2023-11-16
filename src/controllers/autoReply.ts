@@ -15,12 +15,10 @@ export const createAutoReplies: RequestHandler = async (req, res) => {
                 recipient.startsWith('label'),
             )
         ) {
-            return res
-                .status(400)
-                .json({
-                    message:
-                        "Recipients can't contain both all contacts and contact labels at the same input",
-                });
+            return res.status(400).json({
+                message:
+                    "Recipients can't contain both all contacts and contact labels at the same input",
+            });
         }
 
         const device = await prisma.device.findUnique({

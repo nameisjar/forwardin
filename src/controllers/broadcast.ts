@@ -16,12 +16,10 @@ export const createBroadcast: RequestHandler = async (req, res) => {
                 recipient.startsWith('label'),
             )
         ) {
-            return res
-                .status(400)
-                .json({
-                    message:
-                        "Recipients can't contain both all contacts and contact labels at the same input",
-                });
+            return res.status(400).json({
+                message:
+                    "Recipients can't contain both all contacts and contact labels at the same input",
+            });
         }
 
         const device = await prisma.device.findUnique({
@@ -223,7 +221,7 @@ schedule.scheduleJob('*', async () => {
             },
         });
 
-        // back here: handle contact labels recipient, group recipient
+        // back here: fix processedRecipients
         for (const broadcast of pendingBroadcasts) {
             const processedRecipients: (string | number)[] = [];
             const session = getInstance(broadcast.device.sessions[0].sessionId)!;
@@ -233,7 +231,9 @@ schedule.scheduleJob('*', async () => {
                 // label == contact labels
                 // can't use "all" and "label" at the same time
                 if (recipient.includes('all')) {
-                    const contacts = await prisma.contact.findMany({});
+                    const contacts = await prisma.contact.findMany({
+                        where: { contactDevices: { some: { deviceId: broadcast.deviceId } } },
+                    });
                     contacts.map((c) => {
                         if (!recipients.includes(c.phone)) {
                             recipients.push(c.phone);
@@ -244,6 +244,7 @@ schedule.scheduleJob('*', async () => {
 
                     const contacts = await prisma.contact.findMany({
                         where: {
+                            contactDevices: { some: { deviceId: broadcast.deviceId } },
                             ContactLabel: { some: { label: { slug: generateSlug(contactLabel) } } },
                         },
                     });
@@ -257,6 +258,13 @@ schedule.scheduleJob('*', async () => {
                     const groupName = recipient.split('_')[1];
                     const group = await prisma.group.findFirst({
                         where: {
+                            contactGroups: {
+                                some: {
+                                    contact: {
+                                        contactDevices: { some: { deviceId: broadcast.deviceId } },
+                                    },
+                                },
+                            },
                             name: groupName,
                         },
                         include: {

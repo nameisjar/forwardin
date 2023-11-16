@@ -116,11 +116,21 @@ export const createContact: RequestHandler = async (req, res) => {
 export const getContacts: RequestHandler = async (req, res) => {
     const pkId = req.authenticatedUser.pkId;
     const privilegeId = req.privilege.pkId;
+    const deviceId = req.query.deviceId as string;
 
     try {
         let contacts;
         if (privilegeId == Number(process.env.SUPER_ADMIN_ID)) {
             contacts = await prisma.contact.findMany({
+                where: {
+                    contactDevices: {
+                        some: {
+                            device: {
+                                id: deviceId ?? undefined,
+                            },
+                        },
+                    },
+                },
                 include: {
                     ContactLabel: {
                         select: {
@@ -137,6 +147,7 @@ export const getContacts: RequestHandler = async (req, res) => {
                     contactDevices: {
                         some: {
                             device: {
+                                id: deviceId ?? undefined,
                                 userId: pkId,
                             },
                         },
