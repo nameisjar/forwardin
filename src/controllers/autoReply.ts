@@ -87,6 +87,8 @@ export const getAutoReplies: RequestHandler = async (req, res) => {
                         },
                     });
                     numberOfRecipients += contactsCount;
+                } else if (recipient.includes('*')) {
+                    numberOfRecipients = 999;
                 } else {
                     numberOfRecipients += 1;
                 }

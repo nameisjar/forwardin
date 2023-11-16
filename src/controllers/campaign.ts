@@ -36,6 +36,23 @@ export const createCampaign: RequestHandler = async (req, res) => {
             });
         }
 
+        const existingCampaign = await prisma.campaign.findFirst({
+            where: {
+                OR: [
+                    { registrationSyntax: { mode: 'insensitive', equals: registrationSyntax } },
+                    { unregistrationSyntax: { mode: 'insensitive', equals: unregistrationSyntax } },
+                ],
+            },
+        });
+
+        logger.warn(existingCampaign);
+
+        if (existingCampaign) {
+            return res
+                .status(400)
+                .json({ message: 'Campaign registration or unregistration syntax already used' });
+        }
+
         const userId = req.authenticatedUser.pkId;
 
         const device = await prisma.device.findUnique({
@@ -45,58 +62,56 @@ export const createCampaign: RequestHandler = async (req, res) => {
 
         if (!device) {
             return res.status(401).json({ message: 'Device not found' });
-        } else if (!device.sessions[0]) {
+        }
+        if (!device.sessions[0]) {
             return res.status(400).json({ message: 'Session not found' });
-        } else {
-            await prisma.$transaction(
-                async (transaction) => {
-                    const group = await transaction.group.create({
-                        data: {
-                            name: `CP_${name}`,
-                            isCampaign: true,
-                            user: { connect: { pkId: userId } },
-                        },
-                    });
+        }
+        await prisma.$transaction(
+            async (transaction) => {
+                const group = await transaction.group.create({
+                    data: {
+                        name: `CP_${name}`,
+                        isCampaign: true,
+                        user: { connect: { pkId: userId } },
+                    },
+                });
 
-                    const campaign = await transaction.campaign.create({
-                        data: {
-                            name,
-                            recipients: {
-                                set: recipients,
-                            },
-                            schedule,
-                            registrationSyntax: registrationSyntax.toUpperCase(),
-                            unregistrationSyntax: unregistrationSyntax.toUpperCase(),
-                            registrationMessage,
-                            messageRegistered,
-                            messageFailed,
-                            messageUnregistered,
-                            delay,
-                            groupId: group.pkId,
-                            deviceId: device.pkId,
+                const campaign = await transaction.campaign.create({
+                    data: {
+                        name,
+                        recipients: {
+                            set: recipients,
                         },
-                        include: {
-                            device: {
-                                select: {
-                                    contactDevices: {
-                                        select: { contact: { select: { phone: true } } },
-                                    },
+                        schedule,
+                        registrationSyntax: registrationSyntax.toUpperCase(),
+                        unregistrationSyntax: unregistrationSyntax.toUpperCase(),
+                        registrationMessage,
+                        messageRegistered,
+                        messageFailed,
+                        messageUnregistered,
+                        delay,
+                        groupId: group.pkId,
+                        deviceId: device.pkId,
+                    },
+                    include: {
+                        device: {
+                            select: {
+                                contactDevices: {
+                                    select: { contact: { select: { phone: true } } },
                                 },
                             },
                         },
-                    });
-                    return campaign;
-                },
-                {
-                    maxWait: 5000, // default: 2000
-                    timeout: 15000, // default: 5000
-                },
-            );
+                    },
+                });
+                return campaign;
+            },
+            {
+                maxWait: 5000, // default: 2000
+                timeout: 15000, // default: 5000
+            },
+        );
 
-            // back here: check existing syntax
-
-            res.status(201).json({ mmessage: 'Campaign created successfully' });
-        }
+        res.status(201).json({ mmessage: 'Campaign created successfully' });
     } catch (error) {
         logger.error(error);
         res.status(500).json({ message: 'Internal server error' });
@@ -285,7 +300,6 @@ export async function sendCampaignReply(sessionId: any, data: any) {
     }
 }
 
-// back here: get subscriberCount
 export const getAllCampaigns: RequestHandler = async (req, res) => {
     try {
         const deviceId = req.query.deviceId as string;
@@ -296,7 +310,8 @@ export const getAllCampaigns: RequestHandler = async (req, res) => {
             where: {
                 device: {
                     userId: privilegeId !== Number(process.env.SUPER_ADMIN_ID) ? userId : undefined,
-                    id: deviceId,
+                    id: deviceId ?? undefined,
+                    user: { pkId: userId },
                 },
             },
             select: {
@@ -308,6 +323,7 @@ export const getAllCampaigns: RequestHandler = async (req, res) => {
                 device: { select: { name: true } },
                 createdAt: true,
                 updatedAt: true,
+                group: { select: { _count: { select: { contactGroups: true } } } },
             },
         });
 
@@ -318,14 +334,65 @@ export const getAllCampaigns: RequestHandler = async (req, res) => {
     }
 };
 
-// back here: get sentCount, receivedCount, readCount, replyCount
 export const getAllCampaignMessagess: RequestHandler = async (req, res) => {
     try {
         const campaignId = req.params.campaignId;
 
         const campaignMessages = await prisma.campaignMessage.findMany({
             where: { Campaign: { id: campaignId } },
+            include: {
+                Campaign: {
+                    select: {
+                        group: {
+                            select: {
+                                contactGroups: { select: { contact: { select: { phone: true } } } },
+                            },
+                        },
+                    },
+                },
+            },
         });
+
+        const newCampaignMessages = [];
+        for (const cpm of campaignMessages) {
+            const sentCount = await prisma.outgoingMessage.count({
+                where: { id: { contains: `CPM_${cpm.pkId}` }, status: 'server_ack' },
+            });
+            const receivedCount = await prisma.outgoingMessage.count({
+                where: { id: { contains: `CPM_${cpm.pkId}` }, status: 'delivery_ack' },
+            });
+            const readCount = await prisma.outgoingMessage.count({
+                where: { id: { contains: `CPM_${cpm.pkId}` }, status: 'read' },
+            });
+
+            // const recipients = await getRecipients(cpm);
+            const recipients = cpm.Campaign.group.contactGroups;
+
+            const uniqueRecipients = new Set();
+            for (const recipient of recipients) {
+                const incomingMessagesCount = await prisma.incomingMessage.count({
+                    where: {
+                        from: `${recipient.contact.phone}@s.whatsapp.net`,
+                        updatedAt: {
+                            gte: cpm.createdAt,
+                        },
+                    },
+                });
+
+                if (incomingMessagesCount > 0) {
+                    uniqueRecipients.add(recipient);
+                }
+            }
+            const uniqueRecipientsCount = uniqueRecipients.size;
+
+            newCampaignMessages.push({
+                ...cpm,
+                sentCount: sentCount,
+                receivedCount: receivedCount,
+                readCount: readCount,
+                repliesCount: uniqueRecipientsCount,
+            });
+        }
 
         res.status(200).json(campaignMessages);
     } catch (error) {
@@ -547,7 +614,9 @@ schedule.scheduleJob('*', async () => {
                 device: {
                     select: {
                         sessions: { select: { sessionId: true } },
-                        contactDevices: { select: { contact: { select: { phone: true } } } },
+                        contactDevices: {
+                            select: { contact: { select: { firstName: true, phone: true } } },
+                        },
                     },
                 },
             },
@@ -635,6 +704,7 @@ schedule.scheduleJob('*', async () => {
                     registrationSyntax: campaign.registrationSyntax,
                     unregistrationSyntax: campaign.unregistrationSyntax,
                     campaignName: campaign.name,
+                    firstName: campaign.device.contactDevices[0].contact.firstName,
                 };
 
                 await session.sendMessage(

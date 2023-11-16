@@ -4,7 +4,7 @@ import schedule from 'node-schedule';
 import { getInstance, getJid } from '../whatsapp';
 import logger from '../config/logger';
 import { delay as delayMs } from '../utils/delay';
-import { generateSlug } from '../utils/slug';
+import { getRecipients } from '../utils/recipients';
 
 export const createBroadcast: RequestHandler = async (req, res) => {
     try {
@@ -53,7 +53,6 @@ export const createBroadcast: RequestHandler = async (req, res) => {
     }
 };
 
-// back here: get sentCount, receivedCount, readCount, replyCount
 export const getAllBroadcasts: RequestHandler = async (req, res) => {
     try {
         const deviceId = req.query.deviceId as string;
@@ -68,16 +67,59 @@ export const getAllBroadcasts: RequestHandler = async (req, res) => {
                 },
             },
             select: {
+                pkId: true,
                 id: true,
                 name: true,
                 status: true,
+                recipients: true,
+                deviceId: true,
                 device: { select: { name: true } },
                 createdAt: true,
                 updatedAt: true,
             },
         });
 
-        res.status(200).json(broadcasts);
+        const newBroadcasts = [];
+        for (const bc of broadcasts) {
+            const sentCount = await prisma.outgoingMessage.count({
+                where: { id: { contains: `BC_${bc.pkId}` }, status: 'server_ack' },
+            });
+            const receivedCount = await prisma.outgoingMessage.count({
+                where: { id: { contains: `BC_${bc.pkId}` }, status: 'delivery_ack' },
+            });
+            const readCount = await prisma.outgoingMessage.count({
+                where: { id: { contains: `BC_${bc.pkId}` }, status: 'read' },
+            });
+
+            const recipients = await getRecipients(bc);
+
+            const uniqueRecipients = new Set();
+            for (const recipient of recipients) {
+                const incomingMessagesCount = await prisma.incomingMessage.count({
+                    where: {
+                        from: `${recipient}@s.whatsapp.net`,
+                        updatedAt: {
+                            gte: bc.createdAt,
+                        },
+                    },
+                });
+
+                if (incomingMessagesCount > 0) {
+                    uniqueRecipients.add(recipient);
+                }
+            }
+            const uniqueRecipientsCount = uniqueRecipients.size;
+
+            newBroadcasts.push({
+                ...bc,
+                sentCount: sentCount,
+                receivedCount: receivedCount,
+                readCount: readCount,
+                repliesCount: uniqueRecipientsCount,
+            });
+        }
+
+        res.status(200).json(newBroadcasts);
     } catch (error) {
         logger.error(error);
         res.status(500).json({ message: 'Internal server error' });
@@ -225,61 +267,9 @@ schedule.scheduleJob('*', async () => {
         for (const broadcast of pendingBroadcasts) {
             const processedRecipients: (string | number)[] = [];
             const session = getInstance(broadcast.device.sessions[0].sessionId)!;
-            const recipients: string[] = [];
-            for (const recipient of broadcast.recipients) {
-                // all == all contacts
-                // label == contact labels
-                // can't use "all" and "label" at the same time
-                if (recipient.includes('all')) {
-                    const contacts = await prisma.contact.findMany({
-                        where: { contactDevices: { some: { deviceId: broadcast.deviceId } } },
-                    });
-                    contacts.map((c) => {
-                        if (!recipients.includes(c.phone)) {
-                            recipients.push(c.phone);
-                        }
-                    });
-                } else if (recipient.includes('label')) {
-                    const contactLabel = recipient.split('_')[1];
 
-                    const contacts = await prisma.contact.findMany({
-                        where: {
-                            contactDevices: { some: { deviceId: broadcast.deviceId } },
-                            ContactLabel: { some: { label: { slug: generateSlug(contactLabel) } } },
-                        },
-                    });
-
-                    contacts.map((c) => {
-                        if (!recipients.includes(c.phone)) {
-                            recipients.push(c.phone);
-                        }
-                    });
-                } else if (recipient.includes('group')) {
-                    const groupName = recipient.split('_')[1];
-                    const group = await prisma.group.findFirst({
-                        where: {
-                            contactGroups: {
-                                some: {
-                                    contact: {
-                                        contactDevices: { some: { deviceId: broadcast.deviceId } },
-                                    },
-                                },
-                            },
-                            name: groupName,
-                        },
-                        include: {
-                            contactGroups: { select: { contact: { select: { phone: true } } } },
-                        },
-                    });
-                    group?.contactGroups.map((c) => {
-                        if (!recipients.includes(c.contact.phone)) {
-                            recipients.push(c.contact.phone);
-                        }
-                    });
-                } else {
-                    recipients.push(recipient);
-                }
-            }
+            // get recipients util
+            const recipients = await getRecipients(broadcast);
 
             // const recipients = broadcast.recipients.includes('all')
             //     ? broadcast.device.contactDevices.map((c) => c.contact.phone)
