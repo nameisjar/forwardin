@@ -322,7 +322,7 @@ export const getAllCampaigns: RequestHandler = async (req, res) => {
                 device: { select: { name: true } },
                 createdAt: true,
                 updatedAt: true,
-                group: { select: { _count: { select: { contactGroups: true } } } },
+                // group: { select: { _count: { select: { contactGroups: true } } } },
             },
         });
 
@@ -417,6 +417,8 @@ export const getCampaign: RequestHandler = async (req, res) => {
                 messageRegistered: true,
                 messageFailed: true,
                 messageUnregistered: true,
+                device: { select: { name: true } },
+                // group: { select: { _count: { select: { contactGroups: true } } } },
             },
         });
 
