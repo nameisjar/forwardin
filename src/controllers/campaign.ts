@@ -311,7 +311,6 @@ export const getAllCampaigns: RequestHandler = async (req, res) => {
                 device: {
                     userId: privilegeId !== Number(process.env.SUPER_ADMIN_ID) ? userId : undefined,
                     id: deviceId ?? undefined,
-                    user: { pkId: userId },
                 },
             },
             select: {
