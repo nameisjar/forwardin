@@ -294,7 +294,7 @@ export async function sendAutoReply(sessionId: any, data: any) {
                 firstName:
                     matchingAutoReply.device.contactDevices.filter(
                         (cd) => cd.contact.phone == phoneNumber,
-                    )[0]?.contact.phone ?? name,
+                    )[0]?.contact.firstName ?? name,
                 lastName:
                     matchingAutoReply.device.contactDevices.filter(
                         (cd) => cd.contact.phone == phoneNumber,
