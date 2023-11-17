@@ -317,6 +317,7 @@ model Broadcast {
   schedule   DateTime
   delay      Int
   isSent     Boolean  @default(false)
+  mediaPath  String?
   deviceId   Int
   device     Device   @relation(fields: [deviceId], references: [pkId], onDelete: Cascade)
   createdAt  DateTime @default(now()) @map("created_at")
@@ -331,6 +332,7 @@ model AutoReply {
   response   String   @db.VarChar(255)
   status     Boolean  @default(true)
   recipients String[]
+  mediaPath  String?
   createdAt  DateTime @default(now()) @map("created_at")
   updatedAt  DateTime @default(now()) @map("updated_at")
   deviceId   Int
@@ -352,6 +354,7 @@ model Campaign {
   delay                Int
   isSent               Boolean           @default(false)
   schedule             DateTime
+  mediaPath            String?
   groupId              Int               @map("group_id")
   deviceId             Int               @map("device_id")
   group                Group             @relation(fields: [groupId], references: [pkId], onDelete: Cascade)
@@ -369,6 +372,7 @@ model CampaignMessage {
   delay      Int
   isSent     Boolean  @default(false)
   schedule   DateTime @map("schedule")
+  mediaPath  String?
   Campaign   Campaign @relation(fields: [campaignId], references: [pkId], onDelete: Cascade)
   createdAt  DateTime @default(now()) @map("created_at")
   updatedAt  DateTime @default(now()) @map("updated_at")

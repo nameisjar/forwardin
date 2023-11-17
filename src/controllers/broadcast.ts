@@ -1,53 +1,62 @@
 import { RequestHandler } from 'express';
 import prisma from '../utils/db';
 import schedule from 'node-schedule';
-import { getInstance, getJid } from '../whatsapp';
+import { getInstance, getJid, sendMediaFile } from '../whatsapp';
 import logger from '../config/logger';
 import { delay as delayMs } from '../utils/delay';
 import { getRecipients } from '../utils/recipients';
 import { replaceVariables } from '../utils/variableHelper';
+import { diskUpload } from '../config/multer';
 
 export const createBroadcast: RequestHandler = async (req, res) => {
     try {
-        const { name, deviceId, recipients, message, schedule, delay } = req.body;
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        diskUpload.single('media')(req, res, async (err: any) => {
+            if (err) {
+                return res.status(400).json({ message: 'Error uploading file' });
+            }
+            const { name, deviceId, recipients, message, schedule } = req.body;
+            const delay = Number(req.body.delay) ?? 5000;
 
-        if (
-            recipients.includes('all') &&
-            recipients.some((recipient: { startsWith: (arg0: string) => string }) =>
-                recipient.startsWith('label'),
-            )
-        ) {
-            return res.status(400).json({
-                message:
-                    "Recipients can't contain both all contacts and contact labels at the same input",
+            if (
+                recipients.includes('all') &&
+                recipients.some((recipient: { startsWith: (arg0: string) => string }) =>
+                    recipient.startsWith('label'),
+                )
+            ) {
+                return res.status(400).json({
+                    message:
+                        "Recipients can't contain both all contacts and contact labels at the same input",
+                });
+            }
+
+            const device = await prisma.device.findUnique({
+                where: { id: deviceId },
+                include: { sessions: { select: { sessionId: true } } },
             });
-        }
 
-        const device = await prisma.device.findUnique({
-            where: { id: deviceId },
-            include: { sessions: { select: { sessionId: true } } },
-        });
+            if (!device) {
+                return res.status(401).json({ message: 'Device not found' });
+            }
+            if (!device.sessions[0]) {
+                return res.status(400).json({ message: 'Session not found' });
+            }
 
-        if (!device) {
-            return res.status(401).json({ message: 'Device not found' });
-        }
-        if (!device.sessions[0]) {
-            return res.status(400).json({ message: 'Session not found' });
-        }
-
-        await prisma.broadcast.create({
-            data: {
-                name,
-                message,
-                schedule,
-                deviceId: device.pkId,
-                delay,
-                recipients: {
-                    set: recipients,
+            await prisma.broadcast.create({
+                data: {
+                    name,
+                    message,
+                    schedule,
+                    deviceId: device.pkId,
+                    delay,
+                    recipients: {
+                        set: recipients,
+                    },
+                    mediaPath: req.file?.path,
                 },
-            },
+            });
+            res.status(201).json({ message: 'Broadcast created successfully' });
         });
-        res.status(201).json({ message: 'Broadcast created successfully' });
     } catch (error) {
         logger.error(error);
         res.status(500).json({ message: 'Internal server error' });
@@ -244,7 +253,7 @@ export const getBrodcastReplies: RequestHandler = async (req, res) => {
 export const updateBroadcast: RequestHandler = async (req, res) => {
     const id = req.params.id;
     try {
-        const { name, deviceId, recipients, message, schedule, delay } = req.body;
+        const { name, deviceId, recipients, message, schedule, delay = 5000 } = req.body;
 
         if (
             recipients.includes('all') &&
@@ -311,7 +320,6 @@ export const deleteBroadcasts: RequestHandler = async (req, res) => {
     }
 };
 
-// back here: send media
 schedule.scheduleJob('*', async () => {
     try {
         const pendingBroadcasts = await prisma.broadcast.findMany({
@@ -364,11 +372,28 @@ schedule.scheduleJob('*', async () => {
                     email: broadcast.device.contactDevices[0].contact.email ?? undefined,
                 };
 
-                await session.sendMessage(
-                    jid,
-                    { text: replaceVariables(broadcast.message, variables) },
-                    { messageId: `BC_${broadcast.pkId}_${Date.now()}` },
-                );
+                if (broadcast.mediaPath) {
+                    await sendMediaFile(
+                        session,
+                        [jid],
+                        {
+                            url: broadcast.mediaPath,
+                            newName: broadcast.mediaPath.split('\\').pop(),
+                        },
+                        ['jpg', 'png', 'jpeg'].includes(broadcast.mediaPath.split('.').pop() || '')
+                            ? 'image'
+                            : 'document',
+                        replaceVariables(broadcast.message, variables),
+                        null,
+                        `BC_${broadcast.pkId}_${Date.now()}`,
+                    );
+                } else {
+                    await session.sendMessage(
+                        jid,
+                        { text: replaceVariables(broadcast.message, variables) },
+                        { messageId: `BC_${broadcast.pkId}_${Date.now()}` },
+                    );
+                }
 
                 processedRecipients.push(recipient);
                 logger.info(

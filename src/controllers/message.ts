@@ -4,7 +4,7 @@ import logger from '../config/logger';
 import prisma, { serializePrisma } from '../utils/db';
 import { delay as delayMs } from '../utils/delay';
 import { proto } from '@whiskeysockets/baileys';
-import upload from '../config/multer';
+import { memoryUpload } from '../config/multer';
 
 export const sendMessages: RequestHandler = async (req, res) => {
     try {
@@ -51,7 +51,7 @@ export const sendImageMessages: RequestHandler = async (req, res) => {
     try {
         const session = getInstance(req.params.sessionId)!;
 
-        upload.single('image')(req, res, async (err) => {
+        memoryUpload.single('image')(req, res, async (err) => {
             if (err) {
                 const message = 'An error occurred during file upload';
                 logger.error(err, message);
@@ -74,7 +74,7 @@ export const sendImageMessages: RequestHandler = async (req, res) => {
 
             const fileType = 'image';
             const caption = req.body.caption || '';
-            const delay = req.body.delay || 1000;
+            const delay = req.body.delay || 5000;
 
             const startTime = new Date().getTime();
             if (recipients.length > 0) await delayMs(delay);
@@ -105,7 +105,7 @@ export const sendDocumentMessages: RequestHandler = async (req, res) => {
     try {
         const session = getInstance(req.params.sessionId)!;
 
-        upload.single('document')(req, res, async (err) => {
+        memoryUpload.single('document')(req, res, async (err) => {
             if (err) {
                 const message = 'An error occurred during file upload';
                 logger.error(err, message);
@@ -129,7 +129,7 @@ export const sendDocumentMessages: RequestHandler = async (req, res) => {
             // logger.warn(fileData);
             const fileType = 'document';
             const caption = req.body.caption || '';
-            const delay = req.body.delay || 1000;
+            const delay = req.body.delay || 5000;
 
             const startTime = new Date().getTime();
             if (recipients.length > 0) await delayMs(delay);

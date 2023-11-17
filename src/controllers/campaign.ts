@@ -1,115 +1,129 @@
 import { RequestHandler } from 'express';
 import prisma from '../utils/db';
-import { getInstance, getJid } from '../whatsapp';
+import { getInstance, getJid, sendMediaFile } from '../whatsapp';
 import logger from '../config/logger';
 import schedule from 'node-schedule';
 import { delay as delayMs } from '../utils/delay';
 import { replaceVariables } from '../utils/variableHelper';
 import { generateSlug } from '../utils/slug';
 import { getRandomColor } from '../utils/profilePic';
+import { diskUpload } from '../config/multer';
 
 export const createCampaign: RequestHandler = async (req, res) => {
     try {
-        const {
-            name,
-            schedule,
-            registrationSyntax,
-            unregistrationSyntax,
-            registrationMessage,
-            messageRegistered,
-            messageFailed,
-            messageUnregistered,
-            recipients,
-            deviceId,
-            delay = 5000,
-        } = req.body;
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        diskUpload.single('media')(req, res, async (err: any) => {
+            if (err) {
+                return res.status(400).json({ message: 'Error uploading file' });
+            }
+            const {
+                name,
+                schedule,
+                registrationSyntax,
+                unregistrationSyntax,
+                registrationMessage,
+                messageRegistered,
+                messageFailed,
+                messageUnregistered,
+                recipients,
+                deviceId,
+            } = req.body;
 
-        if (
-            recipients.includes('all') &&
-            recipients.some((recipient: { startsWith: (arg0: string) => string }) =>
-                recipient.startsWith('label'),
-            )
-        ) {
-            return res.status(400).json({
-                message:
-                    "Recipients can't contain both all contacts and contact labels at the same input",
-            });
-        }
+            const delay = Number(req.body.delay) || 5000;
 
-        const existingCampaign = await prisma.campaign.findFirst({
-            where: {
-                OR: [
-                    { registrationSyntax: { mode: 'insensitive', equals: registrationSyntax } },
-                    { unregistrationSyntax: { mode: 'insensitive', equals: unregistrationSyntax } },
-                ],
-            },
-        });
-
-        if (existingCampaign) {
-            return res
-                .status(400)
-                .json({ message: 'Campaign registration or unregistration syntax already used' });
-        }
-
-        const userId = req.authenticatedUser.pkId;
-
-        const device = await prisma.device.findUnique({
-            where: { id: deviceId },
-            include: { sessions: { select: { sessionId: true } } },
-        });
-
-        if (!device) {
-            return res.status(401).json({ message: 'Device not found' });
-        }
-        if (!device.sessions[0]) {
-            return res.status(400).json({ message: 'Session not found' });
-        }
-        await prisma.$transaction(
-            async (transaction) => {
-                const group = await transaction.group.create({
-                    data: {
-                        name: `CP_${name}`,
-                        isCampaign: true,
-                        user: { connect: { pkId: userId } },
-                    },
+            if (
+                recipients.includes('all') &&
+                recipients.some((recipient: { startsWith: (arg0: string) => string }) =>
+                    recipient.startsWith('label'),
+                )
+            ) {
+                return res.status(400).json({
+                    message:
+                        "Recipients can't contain both all contacts and contact labels at the same input",
                 });
+            }
 
-                const campaign = await transaction.campaign.create({
-                    data: {
-                        name,
-                        recipients: {
-                            set: recipients,
+            const existingCampaign = await prisma.campaign.findFirst({
+                where: {
+                    OR: [
+                        { registrationSyntax: { mode: 'insensitive', equals: registrationSyntax } },
+                        {
+                            unregistrationSyntax: {
+                                mode: 'insensitive',
+                                equals: unregistrationSyntax,
+                            },
                         },
-                        schedule,
-                        registrationSyntax: registrationSyntax.toUpperCase(),
-                        unregistrationSyntax: unregistrationSyntax.toUpperCase(),
-                        registrationMessage,
-                        messageRegistered,
-                        messageFailed,
-                        messageUnregistered,
-                        delay,
-                        groupId: group.pkId,
-                        deviceId: device.pkId,
-                    },
-                    include: {
-                        device: {
-                            select: {
-                                contactDevices: {
-                                    select: { contact: { select: { phone: true } } },
+                    ],
+                },
+            });
+
+            if (existingCampaign) {
+                return res.status(400).json({
+                    message: 'Campaign registration or unregistration syntax already used',
+                });
+            }
+
+            const userId = req.authenticatedUser.pkId;
+
+            const device = await prisma.device.findUnique({
+                where: { id: deviceId },
+                include: { sessions: { select: { sessionId: true } } },
+            });
+
+            if (!device) {
+                return res.status(401).json({ message: 'Device not found' });
+            }
+            if (!device.sessions[0]) {
+                return res.status(400).json({ message: 'Session not found' });
+            }
+            await prisma.$transaction(
+                async (transaction) => {
+                    const group = await transaction.group.create({
+                        data: {
+                            name: `CP_${name}`,
+                            isCampaign: true,
+                            user: { connect: { pkId: userId } },
+                        },
+                    });
+
+                    const campaign = await transaction.campaign.create({
+                        data: {
+                            name,
+                            recipients: {
+                                set: recipients,
+                            },
+                            schedule,
+                            registrationSyntax: registrationSyntax.toUpperCase(),
+                            unregistrationSyntax: unregistrationSyntax.toUpperCase(),
+                            registrationMessage,
+                            messageRegistered,
+                            messageFailed,
+                            messageUnregistered,
+                            delay,
+                            mediaPath: req.file?.path,
+                            groupId: group.pkId,
+                            deviceId: device.pkId,
+                        },
+                        include: {
+                            device: {
+                                select: {
+                                    contactDevices: {
+                                        select: { contact: { select: { phone: true } } },
+                                    },
                                 },
                             },
                         },
-                    },
-                });
-                return campaign;
-            },
-            {
-                maxWait: 5000, // default: 2000
-                timeout: 15000, // default: 5000
-            },
-        );
+                    });
+                    return campaign;
+                },
+                {
+                    maxWait: 5000, // default: 2000
+                    timeout: 15000, // default: 5000
+                },
+            );
 
-        res.status(201).json({ mmessage: 'Campaign created successfully' });
+            res.status(201).json({ message: 'Campaign created successfully' });
+        });
     } catch (error) {
         logger.error(error);
         res.status(500).json({ message: 'Internal server error' });
@@ -118,26 +132,35 @@ export const createCampaign: RequestHandler = async (req, res) => {
 
 export const createCampaignMessage: RequestHandler = async (req, res) => {
     try {
-        const { message, schedule, campaignId, delay } = req.body;
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        diskUpload.single('media')(req, res, async (err: any) => {
+            if (err) {
+                return res.status(400).json({ message: 'Error uploading file' });
+            }
+            const { message, schedule, campaignId } = req.body;
 
-        const campaign = await prisma.campaign.findUnique({
-            where: { id: campaignId },
-        });
+            const delay = Number(req.body.delay) || 5000;
 
-        if (!campaign) {
-            res.status(404).json({ message: { message: 'Campaign not found' } });
-        } else {
-            await prisma.campaignMessage.create({
-                data: {
-                    message,
-                    schedule,
-                    delay,
-                    campaignId: campaign.pkId,
-                },
+            const campaign = await prisma.campaign.findUnique({
+                where: { id: campaignId },
             });
 
-            res.status(201).json({ message: 'Campaign message created successfully' });
-        }
+            if (!campaign) {
+                res.status(404).json({ message: { message: 'Campaign not found' } });
+            } else {
+                await prisma.campaignMessage.create({
+                    data: {
+                        message,
+                        schedule,
+                        delay,
+                        mediaPath: req.file?.path,
+                        campaignId: campaign.pkId,
+                    },
+                });
+
+                res.status(201).json({ message: 'Campaign message created successfully' });
+            }
+        });
     } catch (error) {
         logger.error(error);
         res.status(500).json({ message: 'Internal server error' });
@@ -242,13 +265,30 @@ export async function sendCampaignReply(sessionId: any, data: any) {
                 replyText = matchingCampaign.messageRegistered;
             }
 
-            // back here: send non-text message
             session.readMessages([data.key]);
+            // if (matchingCampaign.mediaPath) {
+            //     await sendMediaFile(
+            //         session,
+            //         [jid],
+            //         {
+            //             url: matchingCampaign.mediaPath,
+            //             newName: matchingCampaign.mediaPath.split('\\').pop(),
+            //         },
+            //         ['jpg', 'png', 'jpeg'].includes(
+            //             matchingCampaign.mediaPath.split('.').pop() || '',
+            //         )
+            //             ? 'image'
+            //             : 'document',
+            //         replaceVariables(replyText, variables),
+            //         data,
+            //     );
+            // } else {
             session.sendMessage(
                 jid,
                 { text: replaceVariables(replyText, variables) },
                 { quoted: data },
             );
+            // }
             logger.warn(matchingCampaign, 'campaign response sent successfully');
 
             await prisma.$transaction(async (transaction) => {
@@ -825,7 +865,6 @@ export const deleteCampaigns: RequestHandler = async (req, res) => {
     }
 };
 
-// back here: send media
 schedule.scheduleJob('*', async () => {
     try {
         const pendingcampaignMessages = await prisma.campaignMessage.findMany({
@@ -890,11 +929,30 @@ schedule.scheduleJob('*', async () => {
                         undefined,
                 };
 
-                await session.sendMessage(
-                    jid,
-                    { text: replaceVariables(campaignMessage.message, variables) },
-                    { messageId: `CPM_${campaignMessage.pkId}_${Date.now()}` },
-                );
+                if (campaignMessage.mediaPath) {
+                    await sendMediaFile(
+                        session,
+                        [jid],
+                        {
+                            url: campaignMessage.mediaPath,
+                            newName: campaignMessage.mediaPath.split('\\').pop(),
+                        },
+                        ['jpg', 'png', 'jpeg'].includes(
+                            campaignMessage.mediaPath.split('.').pop() || '',
+                        )
+                            ? 'image'
+                            : 'document',
+                        replaceVariables(campaignMessage.message, variables),
+                        null,
+                        `CPM_${campaignMessage.pkId}_${Date.now()}`,
+                    );
+                } else {
+                    await session.sendMessage(
+                        jid,
+                        { text: replaceVariables(campaignMessage.message, variables) },
+                        { messageId: `CPM_${campaignMessage.pkId}_${Date.now()}` },
+                    );
+                }
 
                 processedRecipients.push(recipient.contact.phone);
                 logger.info(
@@ -922,7 +980,6 @@ schedule.scheduleJob('*', async () => {
     }
 });
 
-// back here: send media
 schedule.scheduleJob('*', async () => {
     try {
         const pendingCampaigns = await prisma.campaign.findMany({
@@ -1031,11 +1088,28 @@ schedule.scheduleJob('*', async () => {
                     email: campaign.device.contactDevices[0].contact.email ?? undefined,
                 };
 
-                await session.sendMessage(
-                    jid,
-                    { text: replaceVariables(campaign.registrationMessage, variables) },
-                    { messageId: `CP_${campaign.pkId}_${Date.now()}` },
-                );
+                if (campaign.mediaPath) {
+                    await sendMediaFile(
+                        session,
+                        [jid],
+                        {
+                            url: campaign.mediaPath,
+                            newName: campaign.mediaPath.split('\\').pop(),
+                        },
+                        ['jpg', 'png', 'jpeg'].includes(campaign.mediaPath.split('.').pop() || '')
+                            ? 'image'
+                            : 'document',
+                        replaceVariables(campaign.registrationMessage, variables),
+                        null,
+                        `CP_${campaign.pkId}_${Date.now()}`,
+                    );
+                } else {
+                    await session.sendMessage(
+                        jid,
+                        { text: replaceVariables(campaign.registrationMessage, variables) },
+                        { messageId: `CP_${campaign.pkId}_${Date.now()}` },
+                    );
+                }
 
                 processedRecipients.push(recipient);
                 logger.info(

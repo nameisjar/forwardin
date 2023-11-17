@@ -315,14 +315,16 @@ export async function sendMediaFile(
     session: Instance,
     recipients: string[],
     file: {
-        mimetype: any;
-        buffer: unknown;
-        newName: string | undefined;
-        originalName: string | undefined;
+        mimetype?: any;
+        buffer?: unknown;
+        newName?: string | undefined;
+        originalName?: string | undefined;
         url: string | undefined;
     },
     type: string,
     caption = '',
+    data?: any,
+    messageId?: any,
 ) {
     const results: { index: number; result?: proto.WebMessageInfo }[] = [];
     const errors: { index: number; error: string }[] = [];
@@ -343,14 +345,16 @@ export async function sendMediaFile(
             } else {
                 message = {
                     mimetype: file.mimetype,
-                    // [type]: { url: file.url },
-                    [type]: file.buffer,
+                    [type]: file.buffer ?? { url: file.url },
                     caption: caption,
                     fileName: file.newName ?? file.originalName,
                 };
             }
 
-            const result = await session.sendMessage(getJid(recipient), message);
+            const result = await session.sendMessage(getJid(recipient), message, {
+                quoted: data,
+                messageId,
+            });
             results.push({ index, result });
         } catch (error: unknown) {
             const message =

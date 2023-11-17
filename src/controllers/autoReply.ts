@@ -1,56 +1,64 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { RequestHandler } from 'express';
 import prisma from '../utils/db';
-import { getInstance, getJid } from '../whatsapp';
+import { getInstance, getJid, sendMediaFile } from '../whatsapp';
 import logger from '../config/logger';
 import { replaceVariables } from '../utils/variableHelper';
 import { generateSlug } from '../utils/slug';
+import { diskUpload } from '../config/multer';
 
 export const createAutoReplies: RequestHandler = async (req, res) => {
     try {
-        const { name, deviceId, recipients, requests, response } = req.body;
+        diskUpload.single('media')(req, res, async (err: any) => {
+            if (err) {
+                return res.status(400).json({ message: 'Error uploading file' });
+            }
+            const { name, deviceId, recipients, requests, response } = req.body;
 
-        if (
-            recipients.includes('all') &&
-            recipients.some((recipient: { startsWith: (arg0: string) => string }) =>
-                recipient.startsWith('label'),
-            )
-        ) {
-            return res.status(400).json({
-                message:
-                    "Recipients can't contain both all contacts and contact labels at the same input",
+            if (
+                recipients.includes('all') &&
+                recipients.some((recipient: { startsWith: (arg0: string) => string }) =>
+                    recipient.startsWith('label'),
+                )
+            ) {
+                return res.status(400).json({
+                    message:
+                        "Recipients can't contain both all contacts and contact labels at the same input",
+                });
+            }
+
+            const device = await prisma.device.findUnique({
+                where: { id: deviceId },
             });
-        }
 
-        const device = await prisma.device.findUnique({
-            where: { id: deviceId },
-        });
+            if (!device) {
+                return res.status(404).json({ message: 'Device not found' });
+            }
 
-        if (!device) {
-            return res.status(404).json({ message: 'Device not found' });
-        }
+            const existingRequest = await prisma.autoReply.findFirst({
+                where: { requests: { hasSome: requests }, deviceId: device.pkId },
+            });
 
-        const existingRequest = await prisma.autoReply.findFirst({
-            where: { requests: { hasSome: requests }, deviceId: device.pkId },
-        });
+            if (existingRequest) {
+                return res.status(400).json({ message: 'Request keywords already defined' });
+            }
 
-        if (existingRequest) {
-            return res.status(400).json({ message: 'Request keywords already defined' });
-        }
-
-        const autoReply = await prisma.autoReply.create({
-            data: {
-                name,
-                requests: {
-                    set: requests,
+            const autoReply = await prisma.autoReply.create({
+                data: {
+                    name,
+                    requests: {
+                        set: requests,
+                    },
+                    response,
+                    deviceId: device.pkId,
+                    recipients: {
+                        set: recipients,
+                    },
+                    mediaPath: req.file?.path,
                 },
-                response,
-                deviceId: device.pkId,
-                recipients: {
-                    set: recipients,
-                },
-            },
+            });
+            res.status(201).json(autoReply);
         });
-        res.status(201).json(autoReply);
     } catch (error) {
         logger.error(error);
         res.status(500).json({ message: 'Internal server error' });
@@ -289,13 +297,30 @@ export async function sendAutoReply(sessionId: any, data: any) {
                 email: matchingAutoReply.device.contactDevices[0].contact.email ?? undefined,
             };
 
-            // back here: send non-text message
             session.readMessages([data.key]);
-            session.sendMessage(
-                jid,
-                { text: replaceVariables(replyText, variables) },
-                { quoted: data },
-            );
+            if (matchingAutoReply.mediaPath) {
+                await sendMediaFile(
+                    session,
+                    [jid],
+                    {
+                        url: matchingAutoReply.mediaPath,
+                        newName: matchingAutoReply.mediaPath.split('\\').pop(),
+                    },
+                    ['jpg', 'png', 'jpeg'].includes(
+                        matchingAutoReply.mediaPath.split('.').pop() || '',
+                    )
+                        ? 'image'
+                        : 'document',
+                    replaceVariables(replyText, variables),
+                    data,
+                );
+            } else {
+                session.sendMessage(
+                    jid,
+                    { text: replaceVariables(replyText, variables) },
+                    { quoted: data },
+                );
+            }
             logger.warn(matchingAutoReply, 'auto reply response sent successfully');
         }
     } catch (error) {

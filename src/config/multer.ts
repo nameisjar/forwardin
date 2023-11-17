@@ -1,29 +1,30 @@
 import multer from 'multer';
-// import path from 'path';
-// import fs from 'fs';
+import path from 'path';
+import fs from 'fs';
 
 // using buffer
-const storage = multer.memoryStorage();
+const memoryStorage = multer.memoryStorage();
 
 // using url
-// const dir = 'public/uploads';
-// if (!fs.existsSync(dir)) {
-//     try {
-//         fs.mkdirSync(dir, { recursive: true });
-//     } catch (err) {
-//         console.error('Error creating directory:', err);
-//     }
-// }
+const dir = '.tmp';
+if (!fs.existsSync(dir)) {
+    try {
+        fs.mkdirSync(dir, { recursive: true });
+    } catch (err) {
+        console.error('Error creating directory:', err);
+    }
+}
 
-// const storage = multer.diskStorage({
-//     destination: (req, file, cb) => {
-//         cb(null, dir);
-//     },
-//     filename: (req, file, cb) => {
-//         const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
-//         cb(null, file.fieldname + '-' + uniqueSuffix + path.extname(file.originalname));
-//     },
-// });
-const upload = multer({ storage: storage });
+const diskStorage = multer.diskStorage({
+    destination: (req, file, cb) => {
+        cb(null, dir);
+    },
+    filename: (req, file, cb) => {
+        const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
+        cb(null, file.fieldname + '-' + uniqueSuffix + path.extname(file.originalname));
+    },
+});
+const memoryUpload = multer({ storage: memoryStorage });
+const diskUpload = multer({ storage: diskStorage });
 
-export default upload;
+export { memoryUpload, diskUpload };
