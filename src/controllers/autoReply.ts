@@ -131,7 +131,14 @@ export const getAutoReply: RequestHandler = async (req, res) => {
     try {
         const autoReply = await prisma.autoReply.findUnique({
             where: { id },
-            select: { id: true, name: true, recipients: true, requests: true, response: true },
+            select: {
+                id: true,
+                name: true,
+                recipients: true,
+                requests: true,
+                mediaPath: true,
+                response: true,
+            },
         });
 
         if (!autoReply) {

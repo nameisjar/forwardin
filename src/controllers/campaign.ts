@@ -464,6 +464,7 @@ export const getCampaign: RequestHandler = async (req, res) => {
                 name: true,
                 schedule: true,
                 recipients: true,
+                mediaPath: true,
                 registrationMessage: true,
                 unregistrationSyntax: true,
                 messageRegistered: true,
@@ -578,6 +579,7 @@ export const getCampaignMessage: RequestHandler = async (req, res) => {
             where: { id: campaignMessageId },
             select: {
                 id: true,
+                mediaPath: true,
                 message: true,
                 schedule: true,
                 Campaign: {

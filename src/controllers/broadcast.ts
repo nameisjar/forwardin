@@ -149,6 +149,7 @@ export const getBroadcast: RequestHandler = async (req, res) => {
                 recipients: true,
                 device: { select: { name: true } },
                 schedule: true,
+                mediaPath: true,
                 message: true,
             },
         });
