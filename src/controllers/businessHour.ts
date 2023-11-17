@@ -151,6 +151,7 @@ export async function sendOutsideBusinessHourMessage(sessionId: any, data: any) 
             where: {
                 device: { sessions: { some: { sessionId } } },
             },
+            include: { device: { select: { contactDevices: { select: { contact: true } } } } },
         });
 
         const businessHours: BusinessHours = {
@@ -202,10 +203,14 @@ export async function sendOutsideBusinessHourMessage(sessionId: any, data: any) 
             if (!repliedBusinessHour) {
                 const replyText = businessHourRecord!.message;
 
-                // back here: complete the provided variables
                 const variables = {
-                    name: name,
-                    firstName: name,
+                    firstName:
+                        businessHourRecord?.device.contactDevices[0].contact.firstName ?? name,
+                    lastName:
+                        businessHourRecord?.device.contactDevices[0].contact.lastName ?? undefined,
+                    phoneNumber:
+                        businessHourRecord?.device.contactDevices[0].contact.phone ?? undefined,
+                    email: businessHourRecord?.device.contactDevices[0].contact.email ?? undefined,
                 };
 
                 // back here: send non-text message

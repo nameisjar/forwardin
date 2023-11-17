@@ -5,6 +5,7 @@ import { getInstance, getJid } from '../whatsapp';
 import logger from '../config/logger';
 import { delay as delayMs } from '../utils/delay';
 import { getRecipients } from '../utils/recipients';
+import { replaceVariables } from '../utils/variableHelper';
 
 export const createBroadcast: RequestHandler = async (req, res) => {
     try {
@@ -324,7 +325,7 @@ schedule.scheduleJob('*', async () => {
                 device: {
                     select: {
                         sessions: { select: { sessionId: true } },
-                        contactDevices: { select: { contact: { select: { phone: true } } } },
+                        contactDevices: { select: { contact: true } },
                     },
                 },
             },
@@ -356,9 +357,16 @@ schedule.scheduleJob('*', async () => {
 
                 const jid = getJid(recipient);
 
+                const variables = {
+                    firstName: broadcast.device.contactDevices[0].contact.firstName ?? name,
+                    lastName: broadcast.device.contactDevices[0].contact.lastName ?? undefined,
+                    phoneNumber: broadcast.device.contactDevices[0].contact.phone ?? undefined,
+                    email: broadcast.device.contactDevices[0].contact.email ?? undefined,
+                };
+
                 await session.sendMessage(
                     jid,
-                    { text: broadcast.message },
+                    { text: replaceVariables(broadcast.message, variables) },
                     { messageId: `BC_${broadcast.pkId}_${Date.now()}` },
                 );
 

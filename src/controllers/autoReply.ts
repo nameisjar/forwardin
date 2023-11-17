@@ -28,6 +28,15 @@ export const createAutoReplies: RequestHandler = async (req, res) => {
         if (!device) {
             return res.status(404).json({ message: 'Device not found' });
         }
+
+        const existingRequest = await prisma.autoReply.findFirst({
+            where: { requests: { hasSome: requests }, deviceId: device.pkId },
+        });
+
+        if (existingRequest) {
+            return res.status(400).json({ message: 'Request keywords already defined' });
+        }
+
         const autoReply = await prisma.autoReply.create({
             data: {
                 name,
@@ -227,7 +236,6 @@ export const deleteAutoReplies: RequestHandler = async (req, res) => {
     }
 };
 
-// back here: if there's same request keyword
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export async function sendAutoReply(sessionId: any, data: any) {
     try {
@@ -268,15 +276,17 @@ export async function sendAutoReply(sessionId: any, data: any) {
                     },
                 ],
             },
+            include: { device: { select: { contactDevices: { select: { contact: true } } } } },
         });
 
         if (matchingAutoReply) {
             const replyText = matchingAutoReply.response;
 
-            // back here: complete the provided variables
             const variables = {
-                name: name,
-                firstName: name,
+                firstName: matchingAutoReply.device.contactDevices[0].contact.firstName ?? name,
+                lastName: matchingAutoReply.device.contactDevices[0].contact.lastName ?? undefined,
+                phoneNumber: matchingAutoReply.device.contactDevices[0].contact.phone ?? undefined,
+                email: matchingAutoReply.device.contactDevices[0].contact.email ?? undefined,
             };
 
             // back here: send non-text message

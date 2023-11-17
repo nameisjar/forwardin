@@ -1,5 +1,5 @@
 type TemplateVariables = {
-    [key: string]: string;
+    [key: string]: string | undefined;
 };
 
 export function replaceVariables(template: string, variables: TemplateVariables) {

@@ -210,6 +210,7 @@ export async function sendCampaignReply(sessionId: any, data: any) {
                         contactGroups: { select: { contact: { select: { phone: true } } } },
                     },
                 },
+                device: { select: { contactDevices: { select: { contact: true } } } },
             },
         });
 
@@ -222,23 +223,24 @@ export async function sendCampaignReply(sessionId: any, data: any) {
 
         if (matchingCampaign) {
             let replyText: string;
+            const variables = {
+                registrationSyntax: matchingCampaign.registrationSyntax,
+                unregistrationSyntax: matchingCampaign.unregistrationSyntax,
+                campaignName: matchingCampaign.name,
+                firstName: matchingCampaign.device.contactDevices[0].contact.firstName ?? name,
+                lastName: matchingCampaign.device.contactDevices[0].contact.lastName ?? undefined,
+                phoneNumber: matchingCampaign.device.contactDevices[0].contact.phone ?? undefined,
+                email: matchingCampaign.device.contactDevices[0].contact.email ?? undefined,
+            };
             if (wantToUnreg && isMember) {
                 replyText = matchingCampaign.messageUnregistered;
             } else if (!wantToUnreg && isMember) {
                 replyText = matchingCampaign.messageFailed;
             } else if (wantToUnreg && !isMember) {
-                replyText = `Hai, ${name}! Mohon registrasi terlebih dulu pakai format: ${matchingCampaign.registrationSyntax}`;
+                replyText = `Hai, ${variables.firstName}! Mohon registrasi terlebih dulu pakai format: ${matchingCampaign.registrationSyntax}`;
             } else {
                 replyText = matchingCampaign.messageRegistered;
             }
-
-            // back here: complete the provided variables
-            const variables = {
-                registrationSyntax: matchingCampaign.registrationSyntax,
-                unregistrationSyntax: matchingCampaign.unregistrationSyntax,
-                name: name,
-                campaignName: matchingCampaign.name,
-            };
 
             // back here: send non-text message
             session.readMessages([data.key]);
@@ -836,7 +838,12 @@ schedule.scheduleJob('*', async () => {
             include: {
                 Campaign: {
                     select: {
-                        device: { select: { sessions: { select: { sessionId: true } } } },
+                        device: {
+                            select: {
+                                sessions: { select: { sessionId: true } },
+                                contactDevices: { select: { contact: true } },
+                            },
+                        },
                         group: {
                             select: {
                                 contactGroups: { select: { contact: { select: { phone: true } } } },
@@ -869,9 +876,23 @@ schedule.scheduleJob('*', async () => {
 
                 const jid = getJid(recipient.contact.phone);
 
+                const variables = {
+                    firstName:
+                        campaignMessage.Campaign.device.contactDevices[0].contact.firstName ?? name,
+                    lastName:
+                        campaignMessage.Campaign.device.contactDevices[0].contact.lastName ??
+                        undefined,
+                    phoneNumber:
+                        campaignMessage.Campaign.device.contactDevices[0].contact.phone ??
+                        undefined,
+                    email:
+                        campaignMessage.Campaign.device.contactDevices[0].contact.email ??
+                        undefined,
+                };
+
                 await session.sendMessage(
                     jid,
-                    { text: campaignMessage.message },
+                    { text: replaceVariables(campaignMessage.message, variables) },
                     { messageId: `CPM_${campaignMessage.pkId}_${Date.now()}` },
                 );
 
@@ -916,7 +937,7 @@ schedule.scheduleJob('*', async () => {
                     select: {
                         sessions: { select: { sessionId: true } },
                         contactDevices: {
-                            select: { contact: { select: { firstName: true, phone: true } } },
+                            select: { contact: true },
                         },
                     },
                 },
@@ -1000,12 +1021,14 @@ schedule.scheduleJob('*', async () => {
                 }
 
                 const jid = getJid(recipient);
-                // back here: complete the provided variables
                 const variables = {
                     registrationSyntax: campaign.registrationSyntax,
                     unregistrationSyntax: campaign.unregistrationSyntax,
                     campaignName: campaign.name,
-                    firstName: campaign.device.contactDevices[0].contact.firstName,
+                    firstName: campaign.device.contactDevices[0].contact.firstName ?? name,
+                    lastName: campaign.device.contactDevices[0].contact.lastName ?? undefined,
+                    phoneNumber: campaign.device.contactDevices[0].contact.phone ?? undefined,
+                    email: campaign.device.contactDevices[0].contact.email ?? undefined,
                 };
 
                 await session.sendMessage(
