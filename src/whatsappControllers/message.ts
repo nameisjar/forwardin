@@ -81,7 +81,7 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                             });
 
                             if (data.message && !data.message.protocolMessage) {
-                                const dir = `media/${sessionId}`;
+                                const dir = `media/S${sessionId}`;
                                 if (!fs.existsSync(dir)) {
                                     try {
                                         fs.mkdirSync(dir, { recursive: true });

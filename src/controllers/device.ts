@@ -4,6 +4,7 @@ import prisma from '../utils/db';
 import logger from '../config/logger';
 import { generateSlug } from '../utils/slug';
 import { useDevice } from '../utils/quota';
+import fs from 'fs';
 
 export const getDevices: RequestHandler = async (req, res) => {
     const pkId = req.authenticatedUser.pkId;
@@ -290,6 +291,16 @@ export const deleteDevices: RequestHandler = async (req, res) => {
                         },
                     },
                 });
+
+            const subDirectoryPath = `media/D${deviceId}`;
+
+            fs.rm(subDirectoryPath, { recursive: true }, (err) => {
+                if (err) {
+                    console.error(`Error deleting sub-directory: ${err}`);
+                } else {
+                    console.log(`Sub-directory ${subDirectoryPath} is deleted successfully.`);
+                }
+            });
 
             return { success: true };
         });

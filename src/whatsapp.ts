@@ -84,7 +84,7 @@ export async function createInstance(options: createInstanceOptions) {
     // back here: delete temporary folders
     const destroy = async (logout = true) => {
         try {
-            const subDirectoryPath = `media/${sessionId}`;
+            const subDirectoryPath = `media/S${sessionId}`;
 
             await Promise.all([
                 logout && sock.logout(),
