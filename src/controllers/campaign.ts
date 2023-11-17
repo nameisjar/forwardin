@@ -932,7 +932,7 @@ schedule.scheduleJob('*', async () => {
                     firstName:
                         campaignMessage.Campaign.device.contactDevices.filter(
                             (cd) => cd.contact.phone == recipient.contact.phone,
-                        )[0]?.contact.firstName ?? name,
+                        )[0]?.contact.firstName ?? undefined,
                     lastName:
                         campaignMessage.Campaign.device.contactDevices.filter(
                             (cd) => cd.contact.phone == recipient.contact.phone,
