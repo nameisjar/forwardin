@@ -291,10 +291,22 @@ export async function sendAutoReply(sessionId: any, data: any) {
             const replyText = matchingAutoReply.response;
 
             const variables = {
-                firstName: matchingAutoReply.device.contactDevices[0].contact.firstName ?? name,
-                lastName: matchingAutoReply.device.contactDevices[0].contact.lastName ?? undefined,
-                phoneNumber: matchingAutoReply.device.contactDevices[0].contact.phone ?? undefined,
-                email: matchingAutoReply.device.contactDevices[0].contact.email ?? undefined,
+                firstName:
+                    matchingAutoReply.device.contactDevices.filter(
+                        (cd) => cd.contact.phone == phoneNumber,
+                    )[0]?.contact.phone ?? name,
+                lastName:
+                    matchingAutoReply.device.contactDevices.filter(
+                        (cd) => cd.contact.phone == phoneNumber,
+                    )[0]?.contact.lastName ?? undefined,
+                phoneNumber:
+                    matchingAutoReply.device.contactDevices.filter(
+                        (cd) => cd.contact.phone == phoneNumber,
+                    )[0]?.contact.phone ?? undefined,
+                email:
+                    matchingAutoReply.device.contactDevices.filter(
+                        (cd) => cd.contact.phone == phoneNumber,
+                    )[0]?.contact.email ?? undefined,
             };
 
             session.readMessages([data.key]);
@@ -304,7 +316,7 @@ export async function sendAutoReply(sessionId: any, data: any) {
                     [jid],
                     {
                         url: matchingAutoReply.mediaPath,
-                        newName: matchingAutoReply.mediaPath.split('\\').pop(),
+                        newName: matchingAutoReply.mediaPath.split('/').pop(),
                     },
                     ['jpg', 'png', 'jpeg'].includes(
                         matchingAutoReply.mediaPath.split('.').pop() || '',

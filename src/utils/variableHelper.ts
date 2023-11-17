@@ -7,6 +7,6 @@ export function replaceVariables(template: string, variables: TemplateVariables)
 
     return template.replace(regex, (match, variableName) => {
         const value = variables[variableName];
-        return value !== undefined ? value : match;
+        return value !== undefined ? value : '';
     });
 }

@@ -146,6 +146,7 @@ export async function sendOutsideBusinessHourMessage(sessionId: any, data: any) 
         const jid = getJid(recipient);
         const name = data.pushName;
         const timestamp = data.messageTimestamp;
+        const phoneNumber = recipient.split('@')[0];
 
         const businessHourRecord = await prisma.businessHour.findFirst({
             where: {
@@ -205,15 +206,24 @@ export async function sendOutsideBusinessHourMessage(sessionId: any, data: any) 
 
                 const variables = {
                     firstName:
-                        businessHourRecord?.device.contactDevices[0].contact.firstName ?? name,
+                        businessHourRecord?.device.contactDevices.filter(
+                            (cd) => cd.contact.phone == phoneNumber,
+                        )[0]?.contact.firstName ?? name,
                     lastName:
-                        businessHourRecord?.device.contactDevices[0].contact.lastName ?? undefined,
+                        businessHourRecord?.device.contactDevices.filter(
+                            (cd) => cd.contact.phone == phoneNumber,
+                        )[0]?.contact.lastName ?? undefined,
                     phoneNumber:
-                        businessHourRecord?.device.contactDevices[0].contact.phone ?? undefined,
-                    email: businessHourRecord?.device.contactDevices[0].contact.email ?? undefined,
+                        businessHourRecord?.device.contactDevices.filter(
+                            (cd) => cd.contact.phone == phoneNumber,
+                        )[0]?.contact.phone ?? undefined,
+                    email:
+                        businessHourRecord?.device.contactDevices.filter(
+                            (cd) => cd.contact.phone == phoneNumber,
+                        )[0]?.contact.email ?? undefined,
                 };
 
-                // back here: send non-text message
+                // ?back here: send non-text message
                 // session.readMessages([data.key]);
                 session.sendMessage(
                     jid,

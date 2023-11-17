@@ -246,14 +246,27 @@ export async function sendCampaignReply(sessionId: any, data: any) {
 
         if (matchingCampaign) {
             let replyText: string;
+
             const variables = {
                 registrationSyntax: matchingCampaign.registrationSyntax,
                 unregistrationSyntax: matchingCampaign.unregistrationSyntax,
                 campaignName: matchingCampaign.name,
-                firstName: matchingCampaign.device.contactDevices[0].contact.firstName ?? name,
-                lastName: matchingCampaign.device.contactDevices[0].contact.lastName ?? undefined,
-                phoneNumber: matchingCampaign.device.contactDevices[0].contact.phone ?? undefined,
-                email: matchingCampaign.device.contactDevices[0].contact.email ?? undefined,
+                firstName:
+                    matchingCampaign.device.contactDevices.filter(
+                        (cd) => cd.contact.phone == phoneNumber,
+                    )[0]?.contact.firstName ?? name,
+                lastName:
+                    matchingCampaign.device.contactDevices.filter(
+                        (cd) => cd.contact.phone == phoneNumber,
+                    )[0]?.contact.lastName ?? undefined,
+                phoneNumber:
+                    matchingCampaign.device.contactDevices.filter(
+                        (cd) => cd.contact.phone == phoneNumber,
+                    )[0]?.contact.phone ?? undefined,
+                email:
+                    matchingCampaign.device.contactDevices.filter(
+                        (cd) => cd.contact.phone == phoneNumber,
+                    )[0]?.contact.email ?? undefined,
             };
             if (wantToUnreg && isMember) {
                 replyText = matchingCampaign.messageUnregistered;
@@ -272,7 +285,7 @@ export async function sendCampaignReply(sessionId: any, data: any) {
             //         [jid],
             //         {
             //             url: matchingCampaign.mediaPath,
-            //             newName: matchingCampaign.mediaPath.split('\\').pop(),
+            //             newName: matchingCampaign.mediaPath.split('/').pop(),
             //         },
             //         ['jpg', 'png', 'jpeg'].includes(
             //             matchingCampaign.mediaPath.split('.').pop() || '',
@@ -917,16 +930,21 @@ schedule.scheduleJob('*', async () => {
 
                 const variables = {
                     firstName:
-                        campaignMessage.Campaign.device.contactDevices[0].contact.firstName ?? name,
+                        campaignMessage.Campaign.device.contactDevices.filter(
+                            (cd) => cd.contact.phone == recipient.contact.phone,
+                        )[0]?.contact.firstName ?? name,
                     lastName:
-                        campaignMessage.Campaign.device.contactDevices[0].contact.lastName ??
-                        undefined,
+                        campaignMessage.Campaign.device.contactDevices.filter(
+                            (cd) => cd.contact.phone == recipient.contact.phone,
+                        )[0]?.contact.lastName ?? undefined,
                     phoneNumber:
-                        campaignMessage.Campaign.device.contactDevices[0].contact.phone ??
-                        undefined,
+                        campaignMessage.Campaign.device.contactDevices.filter(
+                            (cd) => cd.contact.phone == recipient.contact.phone,
+                        )[0]?.contact.phone ?? undefined,
                     email:
-                        campaignMessage.Campaign.device.contactDevices[0].contact.email ??
-                        undefined,
+                        campaignMessage.Campaign.device.contactDevices.filter(
+                            (cd) => cd.contact.phone == recipient.contact.phone,
+                        )[0]?.contact.email ?? undefined,
                 };
 
                 if (campaignMessage.mediaPath) {
@@ -935,7 +953,7 @@ schedule.scheduleJob('*', async () => {
                         [jid],
                         {
                             url: campaignMessage.mediaPath,
-                            newName: campaignMessage.mediaPath.split('\\').pop(),
+                            newName: campaignMessage.mediaPath.split('/').pop(),
                         },
                         ['jpg', 'png', 'jpeg'].includes(
                             campaignMessage.mediaPath.split('.').pop() || '',
@@ -1078,14 +1096,27 @@ schedule.scheduleJob('*', async () => {
                 }
 
                 const jid = getJid(recipient);
+
                 const variables = {
                     registrationSyntax: campaign.registrationSyntax,
                     unregistrationSyntax: campaign.unregistrationSyntax,
                     campaignName: campaign.name,
-                    firstName: campaign.device.contactDevices[0].contact.firstName ?? name,
-                    lastName: campaign.device.contactDevices[0].contact.lastName ?? undefined,
-                    phoneNumber: campaign.device.contactDevices[0].contact.phone ?? undefined,
-                    email: campaign.device.contactDevices[0].contact.email ?? undefined,
+                    firstName:
+                        campaign.device.contactDevices.filter(
+                            (cd) => cd.contact.phone == recipient,
+                        )[0]?.contact.firstName ?? undefined,
+                    lastName:
+                        campaign.device.contactDevices.filter(
+                            (cd) => cd.contact.phone == recipient,
+                        )[0]?.contact.lastName ?? undefined,
+                    phoneNumber:
+                        campaign.device.contactDevices.filter(
+                            (cd) => cd.contact.phone == recipient,
+                        )[0]?.contact.phone ?? undefined,
+                    email:
+                        campaign.device.contactDevices.filter(
+                            (cd) => cd.contact.phone == recipient,
+                        )[0]?.contact.email ?? undefined,
                 };
 
                 if (campaign.mediaPath) {
@@ -1094,7 +1125,7 @@ schedule.scheduleJob('*', async () => {
                         [jid],
                         {
                             url: campaign.mediaPath,
-                            newName: campaign.mediaPath.split('\\').pop(),
+                            newName: campaign.mediaPath.split('/').pop(),
                         },
                         ['jpg', 'png', 'jpeg'].includes(campaign.mediaPath.split('.').pop() || '')
                             ? 'image'

@@ -366,10 +366,22 @@ schedule.scheduleJob('*', async () => {
                 const jid = getJid(recipient);
 
                 const variables = {
-                    firstName: broadcast.device.contactDevices[0].contact.firstName ?? name,
-                    lastName: broadcast.device.contactDevices[0].contact.lastName ?? undefined,
-                    phoneNumber: broadcast.device.contactDevices[0].contact.phone ?? undefined,
-                    email: broadcast.device.contactDevices[0].contact.email ?? undefined,
+                    firstName:
+                        broadcast.device.contactDevices.filter(
+                            (cd) => cd.contact.phone == recipient,
+                        )[0]?.contact.firstName ?? undefined,
+                    lastName:
+                        broadcast.device.contactDevices.filter(
+                            (cd) => cd.contact.phone == recipient,
+                        )[0]?.contact.lastName ?? undefined,
+                    phoneNumber:
+                        broadcast.device.contactDevices.filter(
+                            (cd) => cd.contact.phone == recipient,
+                        )[0]?.contact.phone ?? undefined,
+                    email:
+                        broadcast.device.contactDevices.filter(
+                            (cd) => cd.contact.phone == recipient,
+                        )[0]?.contact.email ?? undefined,
                 };
 
                 if (broadcast.mediaPath) {
@@ -378,7 +390,7 @@ schedule.scheduleJob('*', async () => {
                         [jid],
                         {
                             url: broadcast.mediaPath,
-                            newName: broadcast.mediaPath.split('\\').pop(),
+                            newName: broadcast.mediaPath.split('/').pop(),
                         },
                         ['jpg', 'png', 'jpeg'].includes(broadcast.mediaPath.split('.').pop() || '')
                             ? 'image'
