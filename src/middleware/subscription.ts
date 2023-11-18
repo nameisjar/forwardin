@@ -16,7 +16,7 @@ export const checkSubscriptionQuota: RequestHandler = async (req, res, next) => 
     }
 
     if (subscription.endDate <= new Date()) {
-        return res.status(403).json({ message: 'Subscription has expired' });
+        return res.status(404).json({ message: 'Subscription has expired' });
     }
 
     req.subscription = subscription;
@@ -27,7 +27,7 @@ export const isDeviceQuotaAvailable: RequestHandler = async (req, res, next) => 
     const subscription = req.subscription;
 
     if (subscription.deviceUsed >= subscription.deviceMax) {
-        return res.status(403).json({ message: 'Device quota has been used up' });
+        return res.status(404).json({ message: 'Device quota has been used up' });
     }
 
     next();
@@ -36,7 +36,7 @@ export const isAutoReplyQuotaAvailable: RequestHandler = async (req, res, next) 
     const subscription = req.subscription;
 
     if (subscription.autoReplyUsed >= subscription.autoReplyMax) {
-        return res.status(403).json({ message: 'Auto Reply quota has been used up' });
+        return res.status(404).json({ message: 'Auto Reply quota has been used up' });
     }
     next();
 };
@@ -45,7 +45,7 @@ export const isBroadcastQuotaAvailable: RequestHandler = async (req, res, next) 
     const subscription = req.subscription;
 
     if (subscription.broadcastUsed >= subscription.broadcastMax) {
-        return res.status(403).json({ message: 'Broadcast quota has been used up' });
+        return res.status(404).json({ message: 'Broadcast quota has been used up' });
     }
     next();
 };
@@ -54,7 +54,7 @@ export const isContactQuotaAvailable: RequestHandler = async (req, res, next) =>
     const subscription = req.subscription;
 
     if (subscription.contactUsed >= subscription.contactMax) {
-        return res.status(403).json({ message: 'Contact quota has been used up' });
+        return res.status(404).json({ message: 'Contact quota has been used up' });
     }
     next();
 };

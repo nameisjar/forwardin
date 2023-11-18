@@ -31,11 +31,11 @@ export async function useBroadcast(transaction: any, subscription: Subscription)
     });
 }
 
-export async function useContact(transaction: any, subscription: Subscription) {
+export async function useContact(transaction: any, subscription: Subscription, increment?: number) {
     await transaction.subscription.update({
         where: { pkId: subscription.pkId },
         data: {
-            contactUsed: subscription.contactUsed + 1,
+            contactUsed: increment ?? subscription.contactUsed + 1,
             updatedAt: new Date(),
         },
     });

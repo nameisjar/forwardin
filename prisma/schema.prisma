@@ -197,7 +197,7 @@ model Contact {
   lastName        String?           @db.VarChar(128)
   phone           String            @db.VarChar(20)
   email           String?           @db.VarChar(255)
-  gender          String            @db.VarChar(10)
+  gender          String?           @db.VarChar(10)
   dob             DateTime?         @db.Date
   colorCode       String?           @db.VarChar(6)
   createdAt       DateTime          @default(now()) @map("created_at")

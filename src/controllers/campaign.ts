@@ -310,8 +310,6 @@ export async function sendCampaignReply(sessionId: any, data: any) {
                         data: {
                             firstName: name,
                             phone: phoneNumber,
-                            gender: '',
-                            dob: new Date(),
                             colorCode: getRandomColor(),
                         },
                     });
