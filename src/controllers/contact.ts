@@ -6,7 +6,7 @@ import { generateSlug } from '../utils/slug';
 import logger from '../config/logger';
 import { useContact } from '../utils/quota';
 import { memoryUpload } from '../config/multer';
-import ExcelJS from 'ExcelJS';
+import ExcelJS from 'exceljs';
 
 export const createContact: RequestHandler = async (req, res) => {
     try {
