@@ -23,6 +23,7 @@ export const createContact: RequestHandler = async (req, res) => {
                     contactDevices: {
                         some: {
                             device: {
+                                id: deviceId,
                                 userId:
                                     privilegeId !== Number(process.env.SUPER_ADMIN_ID)
                                         ? pkId
@@ -34,6 +35,7 @@ export const createContact: RequestHandler = async (req, res) => {
             },
         });
 
+        // contacts are saved per user (not per device)
         if (existingContact) {
             return res.status(400).json({
                 message: 'Contact with this email or phone number already exists in your contact',
@@ -94,6 +96,9 @@ export const createContact: RequestHandler = async (req, res) => {
             if (!existingDevice) {
                 throw new Error('Device not found');
             }
+            if (!existingDevice.sessions[0]) {
+                return res.status(400).json({ message: 'Session not found' });
+            }
 
             await transaction.outgoingMessage.updateMany({
                 where: {
@@ -149,6 +154,7 @@ export const importContacts: RequestHandler = async (req, res) => {
             }
             const workbook = new ExcelJS.Workbook();
             const buffer = req.file.buffer;
+            const deviceId = req.body.deviceId;
 
             await workbook.xlsx.load(buffer);
             const worksheet = workbook.getWorksheet(1);
@@ -203,6 +209,7 @@ export const importContacts: RequestHandler = async (req, res) => {
                                 contactDevices: {
                                     some: {
                                         device: {
+                                            id: deviceId,
                                             userId:
                                                 privilegeId !== Number(process.env.SUPER_ADMIN_ID)
                                                     ? pkId
@@ -214,6 +221,7 @@ export const importContacts: RequestHandler = async (req, res) => {
                         },
                     });
 
+                    // contacts are saved per user (not per device)
                     if (existingContact) {
                         throw new Error(
                             'Contact with this email or phone number already exists in your contact',
@@ -266,13 +274,16 @@ export const importContacts: RequestHandler = async (req, res) => {
                         }
                         const existingDevice = await transaction.device.findUnique({
                             where: {
-                                id: req.body.deviceId,
+                                id: deviceId,
                             },
                             include: { sessions: { select: { sessionId: true } } },
                         });
 
                         if (!existingDevice) {
                             throw new Error('Device not found');
+                        }
+                        if (!existingDevice.sessions[0]) {
+                            throw new Error('Session not found');
                         }
                         await transaction.contactDevice.create({
                             data: {

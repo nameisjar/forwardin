@@ -203,34 +203,52 @@ export const updateAutoReply: RequestHandler = async (req, res) => {
     const id = req.params.id;
 
     try {
-        const { name, deviceId, recipients, requests, response, status } = req.body;
+        diskUpload.single('media')(req, res, async (err: any) => {
+            if (err) {
+                return res.status(400).json({ message: 'Error uploading file' });
+            }
+            const { name, deviceId, recipients, requests, response, status } = req.body;
 
-        const device = await prisma.device.findUnique({
-            where: { id: deviceId },
-        });
+            if (
+                recipients.includes('all') &&
+                recipients.some((recipient: { startsWith: (arg0: string) => string }) =>
+                    recipient.startsWith('label'),
+                )
+            ) {
+                return res.status(400).json({
+                    message:
+                        "Recipients can't contain both all contacts and contact labels at the same input",
+                });
+            }
 
-        if (!device) {
-            return res.status(404).json({ message: 'Device not found' });
-        }
+            const device = await prisma.device.findUnique({
+                where: { id: deviceId },
+            });
 
-        const updatedAutoReply = await prisma.autoReply.update({
-            where: { id },
-            data: {
-                name,
-                requests: {
-                    set: requests,
+            if (!device) {
+                return res.status(404).json({ message: 'Device not found' });
+            }
+
+            const updatedAutoReply = await prisma.autoReply.update({
+                where: { id },
+                data: {
+                    name,
+                    requests: {
+                        set: requests,
+                    },
+                    response,
+                    status,
+                    deviceId: device.pkId,
+                    recipients: {
+                        set: recipients,
+                    },
+                    mediaPath: req.file?.path,
+                    updatedAt: new Date(),
                 },
-                response,
-                status,
-                deviceId: device.pkId,
-                recipients: {
-                    set: recipients,
-                },
-                updatedAt: new Date(),
-            },
-        });
+            });
 
-        res.json(updatedAutoReply);
+            res.json(updatedAutoReply);
+        });
     } catch (error) {
         logger.error(error);
         res.status(500).json({ message: 'Internal server error' });
