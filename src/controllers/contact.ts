@@ -13,12 +13,24 @@ export const createContact: RequestHandler = async (req, res) => {
         const { firstName, lastName, phone, email, gender, dob, labels, deviceId } = req.body;
 
         const pkId = req.authenticatedUser.pkId;
+        const privilegeId = req.privilege.pkId;
         const subscription = req.subscription;
 
         const existingContact = await prisma.contact.findFirst({
             where: {
                 phone,
-                AND: { contactDevices: { some: { device: { userId: pkId } } } },
+                AND: {
+                    contactDevices: {
+                        some: {
+                            device: {
+                                userId:
+                                    privilegeId !== Number(process.env.SUPER_ADMIN_ID)
+                                        ? pkId
+                                        : undefined,
+                            },
+                        },
+                    },
+                },
             },
         });
 
@@ -121,6 +133,7 @@ export const createContact: RequestHandler = async (req, res) => {
 
 export const importContacts: RequestHandler = async (req, res) => {
     const subscription = req.subscription;
+    const privilegeId = req.privilege.pkId;
 
     try {
         memoryUpload.single('file')(req, res, async (err) => {
@@ -186,7 +199,18 @@ export const importContacts: RequestHandler = async (req, res) => {
                     const existingContact = await prisma.contact.findFirst({
                         where: {
                             phone: contacts[index].phone,
-                            AND: { contactDevices: { some: { device: { userId: pkId } } } },
+                            AND: {
+                                contactDevices: {
+                                    some: {
+                                        device: {
+                                            userId:
+                                                privilegeId !== Number(process.env.SUPER_ADMIN_ID)
+                                                    ? pkId
+                                                    : undefined,
+                                        },
+                                    },
+                                },
+                            },
                         },
                     });
 
