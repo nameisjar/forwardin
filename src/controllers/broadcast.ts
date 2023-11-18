@@ -7,8 +7,10 @@ import { delay as delayMs } from '../utils/delay';
 import { getRecipients } from '../utils/recipients';
 import { replaceVariables } from '../utils/variableHelper';
 import { diskUpload } from '../config/multer';
+import { useBroadcast } from '../utils/quota';
 
 export const createBroadcast: RequestHandler = async (req, res) => {
+    const subscription = req.subscription;
     try {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         diskUpload.single('media')(req, res, async (err: any) => {
@@ -41,21 +43,23 @@ export const createBroadcast: RequestHandler = async (req, res) => {
             if (!device.sessions[0]) {
                 return res.status(400).json({ message: 'Session not found' });
             }
-
-            await prisma.broadcast.create({
-                data: {
-                    name,
-                    message,
-                    schedule,
-                    deviceId: device.pkId,
-                    delay,
-                    recipients: {
-                        set: recipients,
+            await prisma.$transaction(async (transaction) => {
+                await transaction.broadcast.create({
+                    data: {
+                        name,
+                        message,
+                        schedule,
+                        deviceId: device.pkId,
+                        delay,
+                        recipients: {
+                            set: recipients,
+                        },
+                        mediaPath: req.file?.path,
                     },
-                    mediaPath: req.file?.path,
-                },
+                });
+                await useBroadcast(transaction, subscription);
+                res.status(201).json({ message: 'Broadcast created successfully' });
             });
-            res.status(201).json({ message: 'Broadcast created successfully' });
         });
     } catch (error) {
         logger.error(error);

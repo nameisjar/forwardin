@@ -3,12 +3,14 @@ import prisma from '../utils/db';
 import { getRandomColor } from '../utils/profilePic';
 import { generateSlug } from '../utils/slug';
 import logger from '../config/logger';
+import { useContact } from '../utils/quota';
 
 export const createContact: RequestHandler = async (req, res) => {
     try {
         const { firstName, lastName, phone, email, gender, dob, labels, deviceId } = req.body;
 
         const pkId = req.authenticatedUser.pkId;
+        const subscription = req.subscription;
 
         const existingContact = await prisma.contact.findFirst({
             where: {
@@ -104,6 +106,7 @@ export const createContact: RequestHandler = async (req, res) => {
                     deviceId: existingDevice.pkId,
                 },
             });
+            await useContact(transaction, subscription);
         });
 
         res.status(200).json({ message: 'Contact created successfully' });

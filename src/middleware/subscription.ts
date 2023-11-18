@@ -44,8 +44,8 @@ export const isAutoReplyQuotaAvailable: RequestHandler = async (req, res, next) 
 export const isBroadcastQuotaAvailable: RequestHandler = async (req, res, next) => {
     const subscription = req.subscription;
 
-    if (subscription.autoReplyUsed >= subscription.autoReplyMax) {
-        return res.status(403).json({ message: 'Auto Reply quota has been used up' });
+    if (subscription.broadcastUsed >= subscription.broadcastMax) {
+        return res.status(403).json({ message: 'Broadcast quota has been used up' });
     }
     next();
 };

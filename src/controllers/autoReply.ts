@@ -6,8 +6,11 @@ import logger from '../config/logger';
 import { replaceVariables } from '../utils/variableHelper';
 import { generateSlug } from '../utils/slug';
 import { diskUpload } from '../config/multer';
+import { useAutoReply } from '../utils/quota';
 
 export const createAutoReplies: RequestHandler = async (req, res) => {
+    const subscription = req.subscription;
+
     try {
         diskUpload.single('media')(req, res, async (err: any) => {
             if (err) {
@@ -43,21 +46,24 @@ export const createAutoReplies: RequestHandler = async (req, res) => {
                 return res.status(400).json({ message: 'Request keywords already defined' });
             }
 
-            const autoReply = await prisma.autoReply.create({
-                data: {
-                    name,
-                    requests: {
-                        set: requests,
+            await prisma.$transaction(async (transaction) => {
+                const autoReply = await transaction.autoReply.create({
+                    data: {
+                        name,
+                        requests: {
+                            set: requests,
+                        },
+                        response,
+                        deviceId: device.pkId,
+                        recipients: {
+                            set: recipients,
+                        },
+                        mediaPath: req.file?.path,
                     },
-                    response,
-                    deviceId: device.pkId,
-                    recipients: {
-                        set: recipients,
-                    },
-                    mediaPath: req.file?.path,
-                },
+                });
+                await useAutoReply(transaction, subscription);
+                res.status(201).json(autoReply);
             });
-            res.status(201).json(autoReply);
         });
     } catch (error) {
         logger.error(error);
