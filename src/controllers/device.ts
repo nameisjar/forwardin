@@ -180,8 +180,8 @@ export const updateDevice: RequestHandler = async (req, res) => {
             await transaction.label.update({
                 where: { slug: `device${existingDevice.name}` },
                 data: {
-                    name: `device_${updateDevice.name}`,
-                    slug: generateSlug(`device_${updateDevice.name}`),
+                    name: `device_${updatedDevice.name}`,
+                    slug: generateSlug(`device_${updatedDevice.name}`),
                 },
             });
 
