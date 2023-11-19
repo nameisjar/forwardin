@@ -241,8 +241,23 @@ export const importContacts: RequestHandler = async (req, res) => {
                             },
                         });
 
+                        const existingDevice = await transaction.device.findUnique({
+                            where: {
+                                id: deviceId,
+                            },
+                            include: { sessions: { select: { sessionId: true } } },
+                        });
+
+                        if (!existingDevice) {
+                            throw new Error('Device not found');
+                        }
+                        if (!existingDevice.sessions[0]) {
+                            throw new Error('Session not found');
+                        }
+
                         const labels = contacts[index].labels?.split(',') || null;
 
+                        labels.push(`device_${existingDevice.name}`);
                         if (labels && labels.length > 0) {
                             const labelIds: number[] = [];
 
@@ -273,19 +288,7 @@ export const importContacts: RequestHandler = async (req, res) => {
                                 skipDuplicates: true,
                             });
                         }
-                        const existingDevice = await transaction.device.findUnique({
-                            where: {
-                                id: deviceId,
-                            },
-                            include: { sessions: { select: { sessionId: true } } },
-                        });
 
-                        if (!existingDevice) {
-                            throw new Error('Device not found');
-                        }
-                        if (!existingDevice.sessions[0]) {
-                            throw new Error('Session not found');
-                        }
                         await transaction.contactDevice.create({
                             data: {
                                 contactId: createdContact.pkId,
