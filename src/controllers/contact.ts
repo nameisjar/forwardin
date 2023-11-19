@@ -55,6 +55,21 @@ export const createContact: RequestHandler = async (req, res) => {
                 },
             });
 
+            const existingDevice = await transaction.device.findUnique({
+                where: {
+                    id: deviceId,
+                },
+                include: { sessions: { select: { sessionId: true } } },
+            });
+
+            if (!existingDevice) {
+                throw new Error('Device not found');
+            }
+            if (!existingDevice.sessions[0]) {
+                return res.status(400).json({ message: 'Session not found' });
+            }
+
+            labels.push(`device_${existingDevice.name}`);
             if (labels && labels.length > 0) {
                 const labelIds: number[] = [];
 
@@ -84,20 +99,6 @@ export const createContact: RequestHandler = async (req, res) => {
                     })),
                     skipDuplicates: true,
                 });
-            }
-
-            const existingDevice = await transaction.device.findUnique({
-                where: {
-                    id: deviceId,
-                },
-                include: { sessions: { select: { sessionId: true } } },
-            });
-
-            if (!existingDevice) {
-                throw new Error('Device not found');
-            }
-            if (!existingDevice.sessions[0]) {
-                return res.status(400).json({ message: 'Session not found' });
             }
 
             await transaction.outgoingMessage.updateMany({
@@ -505,7 +506,26 @@ export const updateContact: RequestHandler = async (req, res) => {
                 },
             });
 
+            // update device
+            const existingDevice = await transaction.device.findUnique({
+                where: {
+                    id: deviceId,
+                },
+            });
+
+            if (!existingDevice) {
+                throw new Error('Device not found');
+            }
+
+            await transaction.contactDevice.update({
+                where: { id: existingContact.contactDevices[0].id },
+                data: {
+                    deviceId: existingDevice.pkId,
+                },
+            });
+
             // update labels
+            labels.push(`device_${existingDevice.name}`);
             if (labels && labels.length > 0) {
                 const labelIds: number[] = [];
                 const slugs = labels.map((slug: string) => generateSlug(slug));
@@ -569,24 +589,6 @@ export const updateContact: RequestHandler = async (req, res) => {
                     },
                 });
             }
-
-            // update device
-            const existingDevice = await transaction.device.findUnique({
-                where: {
-                    id: deviceId,
-                },
-            });
-
-            if (!existingDevice) {
-                throw new Error('Device not found');
-            }
-
-            await transaction.contactDevice.update({
-                where: { id: existingContact.contactDevices[0].id },
-                data: {
-                    deviceId: existingDevice.pkId,
-                },
-            });
         });
 
         res.status(200).json({ message: 'Contact updated successfully' });
