@@ -347,9 +347,9 @@ model Campaign {
   registrationSyntax   String            @unique @map("registration_syntax") @db.VarChar(128)
   unregistrationSyntax String            @unique @map("unregistration_syntax") @db.VarChar(128)
   registrationMessage  String            @map("registration_message") @db.VarChar(255)
-  messageRegistered    String            @map("message_registered") @db.VarChar(255)
-  messageFailed        String            @map("message_failed") @db.VarChar(255)
-  messageUnregistered  String            @map("message_unregistered") @db.VarChar(255)
+  successMessage       String            @map("message_registered") @db.VarChar(255)
+  failedMessage        String            @map("message_failed") @db.VarChar(255)
+  unregisteredMessage  String            @map("message_unregistered") @db.VarChar(255)
   recipients           String[]
   delay                Int
   isSent               Boolean           @default(false)

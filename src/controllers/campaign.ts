@@ -22,9 +22,9 @@ export const createCampaign: RequestHandler = async (req, res) => {
                 registrationSyntax,
                 unregistrationSyntax,
                 registrationMessage,
-                messageRegistered,
-                messageFailed,
-                messageUnregistered,
+                successMessage,
+                failedMessage,
+                unregisteredMessage,
                 recipients,
                 deviceId,
             } = req.body;
@@ -96,9 +96,9 @@ export const createCampaign: RequestHandler = async (req, res) => {
                             registrationSyntax: registrationSyntax.toUpperCase(),
                             unregistrationSyntax: unregistrationSyntax.toUpperCase(),
                             registrationMessage,
-                            messageRegistered,
-                            messageFailed,
-                            messageUnregistered,
+                            successMessage,
+                            failedMessage,
+                            unregisteredMessage,
                             delay,
                             mediaPath: req.file?.path,
                             groupId: group.pkId,
@@ -270,13 +270,13 @@ export async function sendCampaignReply(sessionId: any, data: any) {
                     )[0]?.contact.email ?? undefined,
             };
             if (wantToUnreg && isMember) {
-                replyText = matchingCampaign.messageUnregistered;
+                replyText = matchingCampaign.unregisteredMessage;
             } else if (!wantToUnreg && isMember) {
-                replyText = matchingCampaign.messageFailed;
+                replyText = matchingCampaign.failedMessage;
             } else if (wantToUnreg && !isMember) {
                 replyText = `Hai, ${variables.firstName}! Mohon registrasi terlebih dulu pakai format: ${matchingCampaign.registrationSyntax}`;
             } else {
-                replyText = matchingCampaign.messageRegistered;
+                replyText = matchingCampaign.successMessage;
             }
 
             session.readMessages([data.key]);
@@ -464,11 +464,12 @@ export const getCampaign: RequestHandler = async (req, res) => {
                 schedule: true,
                 recipients: true,
                 mediaPath: true,
-                registrationMessage: true,
                 unregistrationSyntax: true,
-                messageRegistered: true,
-                messageFailed: true,
-                messageUnregistered: true,
+                registrationSyntax: true,
+                registrationMessage: true,
+                successMessage: true,
+                failedMessage: true,
+                unregisteredMessage: true,
                 device: { select: { name: true } },
                 // group: { select: { _count: { select: { contactGroups: true } } } },
             },
@@ -775,9 +776,9 @@ export const updateCampaign: RequestHandler = async (req, res) => {
                 registrationSyntax,
                 unregistrationSyntax,
                 registrationMessage,
-                messageRegistered,
-                messageFailed,
-                messageUnregistered,
+                successMessage,
+                failedMessage,
+                unregisteredMessage,
                 recipients,
                 deviceId,
             } = req.body;
@@ -840,9 +841,9 @@ export const updateCampaign: RequestHandler = async (req, res) => {
                             registrationSyntax: registrationSyntax.toUpperCase(),
                             unregistrationSyntax: unregistrationSyntax.toUpperCase(),
                             registrationMessage,
-                            messageRegistered,
-                            messageFailed,
-                            messageUnregistered,
+                            successMessage,
+                            failedMessage,
+                            unregisteredMessage,
                             delay,
                             isSent:
                                 new Date(schedule).getTime() < new Date().getTime() ? true : false,
