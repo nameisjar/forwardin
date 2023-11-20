@@ -446,6 +446,8 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                         (r) => getKeyAuthor(r.key) !== authorID,
                     );
 
+                    // back here: Invalid value for argument `toInt`: We could not serialize [object Function] value.
+                    // Serialize the object to JSON or implement a \".toJSON()\" method on it.
                     if (reaction.text) reactions.push(reaction);
                     await tx.message.update({
                         select: { pkId: true },

@@ -5,6 +5,7 @@ import logger from '../config/logger';
 import { generateSlug } from '../utils/slug';
 import { useDevice } from '../utils/quota';
 import fs from 'fs';
+import schedule from 'node-schedule';
 
 export const getDevices: RequestHandler = async (req, res) => {
     const pkId = req.authenticatedUser.pkId;
@@ -288,6 +289,7 @@ export const deleteDevices: RequestHandler = async (req, res) => {
                     contactDevices: { some: { device: { id: deviceId } } },
                 },
             }),
+                // back here: delete unused labels regularly
                 await prisma.label.deleteMany({
                     where: {
                         NOT: {
@@ -331,3 +333,30 @@ export const deleteDevices: RequestHandler = async (req, res) => {
         res.status(500).json({ message: 'Internal server error' });
     }
 };
+
+// back here: set a rule for running the job every day at midnight
+schedule.scheduleJob('*', async () => {
+    try {
+        const deviceLabels = await prisma.deviceLabel.findMany({ select: { labelId: true } });
+        const contactLabels = await prisma.contactLabel.findMany({
+            select: { labelId: true, contactId: true },
+        });
+        const labels = deviceLabels.map((dl) => dl.labelId);
+        contactLabels.map((cl) => labels.push(cl.labelId));
+
+        const contactDevices = await prisma.contactDevice.findMany({
+            select: { deviceId: true, contactId: true },
+        });
+        const contactGroups = await prisma.contactGroup.findMany({
+            select: { groupId: true, contactId: true },
+        });
+        const contacts = contactDevices.map((cd) => cd.contactId);
+        contactGroups.map((cg) => contacts.push(cg.contactId));
+
+        await prisma.label.deleteMany({ where: { pkId: { notIn: labels } } });
+        await prisma.contact.deleteMany({ where: { pkId: { notIn: contacts } } });
+        logger.info('Database cleanup executed successfully.');
+    } catch (error) {
+        logger.error('Error executing database cleanup:', error);
+    }
+});

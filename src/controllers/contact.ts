@@ -602,6 +602,7 @@ export const updateContact: RequestHandler = async (req, res) => {
     }
 };
 
+// back here: delete unused contacts regularly
 export const deleteContacts: RequestHandler = async (req, res) => {
     try {
         const contactIds = req.body.contactIds;
@@ -623,6 +624,7 @@ export const deleteContacts: RequestHandler = async (req, res) => {
                 },
             });
 
+            // back here: delete unused labels regularly
             await prisma.label.deleteMany({
                 where: {
                     NOT: {

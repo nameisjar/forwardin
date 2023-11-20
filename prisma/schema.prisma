@@ -402,15 +402,15 @@ model BusinessHour {
 }
 
 model Order {
-  pkId     Int     @id @default(autoincrement())
-  id       String  @unique @default(uuid()) @db.Uuid
-  name     String  @db.VarChar(128)
-  address  String  @db.VarChar(255)
-  phone    Int
-  ongkir   Int     @map("delivery_cost")
-  price    Decimal @map("price") @db.Decimal(10, 2)
-  deviceId Int     @map("device_id")
-  device   Device  @relation(fields: [deviceId], references: [pkId])
+  pkId          Int     @id @default(autoincrement())
+  id            String  @unique @default(uuid()) @db.Uuid
+  name          String  @db.VarChar(128)
+  address       String  @db.VarChar(255)
+  phone         Int
+  delivery_cost Int     @map("delivery_cost")
+  price         Decimal @map("price") @db.Decimal(10, 2)
+  deviceId      Int     @map("device_id")
+  device        Device  @relation(fields: [deviceId], references: [pkId])
 }
 
 model PasswordReset {
