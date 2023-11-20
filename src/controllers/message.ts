@@ -216,6 +216,7 @@ export const getIncomingMessages: RequestHandler = async (req, res) => {
                         select: { firstName: true, lastName: true, colorCode: true },
                     },
                 },
+                orderBy: { updatedAt: 'desc' },
             })
         ).map((m) => serializePrisma(m));
 
@@ -261,6 +262,7 @@ export const getOutgoingMessages: RequestHandler = async (req, res) => {
                         select: { firstName: true, lastName: true, colorCode: true },
                     },
                 },
+                orderBy: { updatedAt: 'desc' },
             })
         ).map((m) => serializePrisma(m));
 
