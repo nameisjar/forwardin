@@ -137,7 +137,7 @@ export const createCampaignMessage: RequestHandler = async (req, res) => {
             if (err) {
                 return res.status(400).json({ message: 'Error uploading file' });
             }
-            const { message, schedule, campaignId } = req.body;
+            const { name, message, schedule, campaignId } = req.body;
 
             const delay = Number(req.body.delay) || 5000;
 
@@ -150,6 +150,7 @@ export const createCampaignMessage: RequestHandler = async (req, res) => {
             } else {
                 await prisma.campaignMessage.create({
                     data: {
+                        name,
                         message,
                         schedule,
                         delay,
@@ -578,6 +579,7 @@ export const getCampaignMessage: RequestHandler = async (req, res) => {
             select: {
                 id: true,
                 mediaPath: true,
+                name: true,
                 message: true,
                 schedule: true,
                 Campaign: {
@@ -706,7 +708,7 @@ export const updateCampaignMessage: RequestHandler = async (req, res) => {
             if (err) {
                 return res.status(400).json({ message: 'Error uploading file' });
             }
-            const { message, schedule, campaignId } = req.body;
+            const { name, message, schedule, campaignId } = req.body;
             const delay = Number(req.body.delay) ?? 5000;
 
             const campaign = await prisma.campaign.findUnique({
@@ -719,6 +721,7 @@ export const updateCampaignMessage: RequestHandler = async (req, res) => {
                 await prisma.campaignMessage.update({
                     where: { id, Campaign: { id: campaignId } },
                     data: {
+                        name,
                         message,
                         schedule,
                         delay,

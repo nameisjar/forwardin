@@ -367,6 +367,7 @@ model Campaign {
 model CampaignMessage {
   pkId       Int      @id @default(autoincrement())
   id         String   @unique @default(uuid()) @db.Uuid
+  name       String   @db.VarChar(128)
   campaignId Int      @map("campaign_id")
   message    String
   delay      Int
