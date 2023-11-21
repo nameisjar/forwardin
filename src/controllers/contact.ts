@@ -64,7 +64,7 @@ export const createContact: RequestHandler = async (req, res) => {
             });
 
             if (!existingDevice) {
-                throw new Error('Device not found');
+                return res.status(400).json({ message: 'Device not found' });
             }
             if (!existingDevice.sessions[0]) {
                 return res.status(400).json({ message: 'Session not found' });
@@ -250,10 +250,10 @@ export const importContacts: RequestHandler = async (req, res) => {
                         });
 
                         if (!existingDevice) {
-                            throw new Error('Device not found');
+                            return res.status(400).json({ message: 'Device not found' });
                         }
                         if (!existingDevice.sessions[0]) {
-                            throw new Error('Session not found');
+                            return res.status(400).json({ message: 'Session not found' });
                         }
 
                         const labels = contacts[index].labels?.split(',') || null;
@@ -518,7 +518,7 @@ export const updateContact: RequestHandler = async (req, res) => {
             });
 
             if (!existingDevice) {
-                throw new Error('Device not found');
+                return res.status(400).json({ message: 'Device not found' });
             }
 
             await transaction.contactDevice.update({
@@ -795,10 +795,10 @@ export const syncGoogle: RequestHandler = async (req, res) => {
                         });
 
                         if (!existingDevice) {
-                            throw new Error('Device not found');
+                            return res.status(400).json({ message: 'Device not found' });
                         }
                         if (!existingDevice.sessions[0]) {
-                            throw new Error('Session not found');
+                            return res.status(400).json({ message: 'Session not found' });
                         }
 
                         const labels = ['sync_google', `device_${existingDevice.name}`];
