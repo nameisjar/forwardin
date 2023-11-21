@@ -129,9 +129,8 @@ export const createContact: RequestHandler = async (req, res) => {
                 },
             });
             await useContact(transaction, subscription);
+            res.status(200).json({ message: 'Contact created successfully' });
         });
-
-        res.status(200).json({ message: 'Contact created successfully' });
     } catch (error) {
         logger.error(error);
         res.status(500).json({ message: 'Internal server error' });
