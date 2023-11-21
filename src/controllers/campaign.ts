@@ -81,7 +81,7 @@ export const createCampaign: RequestHandler = async (req, res) => {
                     const group = await transaction.group.create({
                         data: {
                             name: `CP_${name}`,
-                            isCampaign: true,
+                            type: 'campaign',
                             user: { connect: { pkId: userId } },
                         },
                     });

@@ -36,7 +36,6 @@ export const createContact: RequestHandler = async (req, res) => {
             },
         });
 
-        // contacts are saved per user (not per device)
         if (existingContact) {
             return res.status(400).json({
                 message: 'Contact with this email or phone number already exists in your contact',
@@ -44,6 +43,7 @@ export const createContact: RequestHandler = async (req, res) => {
         }
 
         await prisma.$transaction(async (transaction) => {
+            // step 1: create contact
             const createdContact = await transaction.contact.create({
                 data: {
                     firstName,
@@ -70,6 +70,7 @@ export const createContact: RequestHandler = async (req, res) => {
                 return res.status(400).json({ message: 'Session not found' });
             }
 
+            // step 2: create labels
             labels.push(`device_${existingDevice.name}`);
             if (labels && labels.length > 0) {
                 const labelIds: number[] = [];
@@ -102,6 +103,7 @@ export const createContact: RequestHandler = async (req, res) => {
                 });
             }
 
+            // step 3: replace contact info in outgoing & incoming message
             await transaction.outgoingMessage.updateMany({
                 where: {
                     to: phone + '@s.whatsapp.net',
@@ -111,7 +113,6 @@ export const createContact: RequestHandler = async (req, res) => {
                     contactId: createdContact.pkId,
                 },
             });
-
             await transaction.incomingMessage.updateMany({
                 where: {
                     from: phone + '@s.whatsapp.net',
@@ -122,12 +123,15 @@ export const createContact: RequestHandler = async (req, res) => {
                 },
             });
 
+            // step 4: create contacts to devices relationship
             await transaction.contactDevice.create({
                 data: {
                     contactId: createdContact.pkId,
                     deviceId: existingDevice.pkId,
                 },
             });
+
+            // step 5: decrease contact quota
             await useContact(transaction, subscription);
             res.status(200).json({ message: 'Contact created successfully' });
         });
@@ -156,6 +160,7 @@ export const importContacts: RequestHandler = async (req, res) => {
             const workbook = new ExcelJS.Workbook();
             const buffer = req.file.buffer;
             const deviceId = req.body.deviceId;
+            const groupName = req.body.groupName;
 
             await workbook.xlsx.load(buffer);
             const worksheet = workbook.getWorksheet(1);
@@ -200,6 +205,15 @@ export const importContacts: RequestHandler = async (req, res) => {
                 });
             }
             const pkId = req.authenticatedUser.pkId;
+            let group: {
+                pkId: any;
+                id?: string;
+                name?: string;
+                type?: string;
+                userId?: number;
+                createdAt?: Date;
+                updatedAt?: Date;
+            };
             for (let index = 0; index < contacts.length; index++) {
                 const email = contacts[index].email?.text ?? contacts[index].email;
                 try {
@@ -222,13 +236,13 @@ export const importContacts: RequestHandler = async (req, res) => {
                         },
                     });
 
-                    // contacts are saved per user (not per device)
                     if (existingContact) {
                         throw new Error(
                             'Contact with this email or phone number already exists in your contact',
                         );
                     }
                     await prisma.$transaction(async (transaction) => {
+                        // step 1: create contact
                         const createdContact = await transaction.contact.create({
                             data: {
                                 firstName: contacts[index].firstName,
@@ -241,6 +255,25 @@ export const importContacts: RequestHandler = async (req, res) => {
                             },
                         });
 
+                        // step 2: create group
+                        if (index === 0) {
+                            group = await transaction.group.create({
+                                data: {
+                                    name: `IMPORT_${groupName}`,
+                                    type: 'import',
+                                    user: { connect: { pkId } },
+                                },
+                            });
+                        }
+                        if (group) {
+                            await transaction.contactGroup.create({
+                                data: {
+                                    groupId: group.pkId,
+                                    contactId: createdContact.pkId,
+                                },
+                            });
+                        }
+
                         const existingDevice = await transaction.device.findUnique({
                             where: {
                                 id: deviceId,
@@ -249,14 +282,14 @@ export const importContacts: RequestHandler = async (req, res) => {
                         });
 
                         if (!existingDevice) {
-                            return res.status(400).json({ message: 'Device not found' });
+                            throw new Error('Device not found');
                         }
                         if (!existingDevice.sessions[0]) {
-                            return res.status(400).json({ message: 'Session not found' });
+                            throw new Error('Session not found');
                         }
 
+                        // step 3: create labels
                         const labels = contacts[index].labels?.split(',') || null;
-
                         labels.push(`device_${existingDevice.name}`);
                         if (labels && labels.length > 0) {
                             const labelIds: number[] = [];
@@ -289,12 +322,15 @@ export const importContacts: RequestHandler = async (req, res) => {
                             });
                         }
 
+                        // step 4: create contacts to devices relationship
                         await transaction.contactDevice.create({
                             data: {
                                 contactId: createdContact.pkId,
                                 deviceId: existingDevice.pkId,
                             },
                         });
+
+                        // step 5: replace contact info in outgoing & incoming message
                         await transaction.outgoingMessage.updateMany({
                             where: {
                                 to: contacts[index].phone + '@s.whatsapp.net',
@@ -314,8 +350,11 @@ export const importContacts: RequestHandler = async (req, res) => {
                                 contactId: createdContact.pkId,
                             },
                         });
+
+                        // step 6: decrease contact quota
                         await useContact(transaction, subscription, subscription.contactUsed + 1);
                         subscription.contactUsed = subscription.contactUsed + 1;
+
                         results.push({ index, createdContact });
                     });
                 } catch (error: unknown) {
@@ -602,7 +641,6 @@ export const updateContact: RequestHandler = async (req, res) => {
     }
 };
 
-// back here: delete unused contacts regularly
 export const deleteContacts: RequestHandler = async (req, res) => {
     try {
         const contactIds = req.body.contactIds;
@@ -697,29 +735,87 @@ export const addContactToGroup: RequestHandler = async (req, res) => {
     }
 };
 
-// back here: create google contact from contacts in the database
 export const syncGoogle: RequestHandler = async (req, res) => {
     const accessToken = req.body.accessToken;
     const deviceId = req.body.deviceId;
     const privilegeId = req.privilege.pkId;
     const pkId = req.authenticatedUser.pkId;
 
-    const apiEndpoint =
+    const downloadEndpoint =
         'https://people.googleapis.com/v1/people/me/connections?personFields=names,phoneNumbers,emailAddresses,birthdays,genders,photos';
+    const uploadEndpoint = 'https://people.googleapis.com/v1/people:createContact';
 
-    const response = await axios.get(apiEndpoint, {
+    const downloadResponse = await axios.get(downloadEndpoint, {
         headers: {
             Authorization: `Bearer ${accessToken}`,
         },
     });
+
     try {
-        if (response.status == 200) {
-            const connections = response.data.connections || [];
-            const contactsData: any[] = [];
+        if (downloadResponse.status == 200) {
+            const connections = downloadResponse.data.connections || [];
+            const googleContactsData: any[] = [];
             const results: any[] = [];
             const errors: any[] = [];
 
-            connections.forEach(async (contact: any) => {
+            // set up upload
+            const existingGoogleContacts: string[] = [];
+            connections.map((contact: any) =>
+                existingGoogleContacts.push(
+                    contact.phoneNumbers && contact.phoneNumbers.length > 0
+                        ? contact.phoneNumbers[0].canonicalForm?.replace(/\+/g, '')
+                        : contact.names[0].displayNameLastFirst.split(',')[0],
+                ),
+            );
+
+            const forwardinContactsData = await prisma.contact.findMany({
+                where: { phone: { notIn: existingGoogleContacts } },
+            });
+
+            // upload
+            for (let index = 0; index < forwardinContactsData.length; index++) {
+                const newContactData = {
+                    names: [
+                        {
+                            givenName: forwardinContactsData[index].firstName,
+                            familyName: 'Forwardin',
+                        },
+                    ],
+                    phoneNumbers: [
+                        {
+                            value: forwardinContactsData[index].phone,
+                            type: 'mobile',
+                        },
+                    ],
+                    // emailAddresses: [
+                    //     {
+                    //         value: 'johndoe@example.com',
+                    //         type: 'home',
+                    //     },
+                    // ],
+                };
+
+                try {
+                    const uploadResponse = await axios.post(uploadEndpoint, newContactData, {
+                        headers: {
+                            Authorization: `Bearer ${accessToken}`,
+                        },
+                    });
+                    results.push({
+                        index,
+                        uploaded: uploadResponse.data.phoneNumbers[0].canonicalForm,
+                    });
+                } catch (error) {
+                    const message =
+                        error instanceof Error
+                            ? error.message
+                            : 'An error occurred during upload contacts';
+                    errors.push({ index, error: message });
+                }
+            }
+
+            // set up download
+            for (const contact of connections) {
                 const phones = contact.phoneNumbers || [];
                 const phone =
                     phones && phones.length > 0
@@ -743,14 +839,15 @@ export const syncGoogle: RequestHandler = async (req, res) => {
                     // dob,
                     // labels,
                 };
-                contactsData.push(data);
-            });
+                googleContactsData.push(data);
+            }
 
-            for (let index = 0; index < contactsData.length; index++) {
+            // download
+            for (let index = 0; index < googleContactsData.length; index++) {
                 try {
                     const existingContact = await prisma.contact.findFirst({
                         where: {
-                            phone: contactsData[index].phone,
+                            phone: googleContactsData[index].phone,
                             AND: {
                                 contactDevices: {
                                     some: {
@@ -767,18 +864,18 @@ export const syncGoogle: RequestHandler = async (req, res) => {
                         },
                     });
 
-                    // contacts are saved per user (not per device)
                     if (existingContact) {
                         throw new Error(
                             'Contact with this email or phone number already exists in your contact',
                         );
                     }
                     await prisma.$transaction(async (transaction) => {
+                        // step 1: create contact
                         const createdContact = await transaction.contact.create({
                             data: {
-                                firstName: contactsData[index].firstName,
+                                firstName: googleContactsData[index].firstName,
                                 // lastName: data.lastName,
-                                phone: contactsData[index].phone,
+                                phone: googleContactsData[index].phone,
                                 // email,
                                 // gender: data.gender,
                                 // dob: data.dob ? new Date(data.dob) : null,
@@ -794,12 +891,13 @@ export const syncGoogle: RequestHandler = async (req, res) => {
                         });
 
                         if (!existingDevice) {
-                            return res.status(400).json({ message: 'Device not found' });
+                            throw new Error('Device not found');
                         }
                         if (!existingDevice.sessions[0]) {
-                            return res.status(400).json({ message: 'Session not found' });
+                            throw new Error('Session not found');
                         }
 
+                        // step 2: create labels
                         const labels = ['sync_google', `device_${existingDevice.name}`];
                         if (labels && labels.length > 0) {
                             const labelIds: number[] = [];
@@ -831,15 +929,18 @@ export const syncGoogle: RequestHandler = async (req, res) => {
                             });
                         }
 
+                        // step 3: create contacts to devices relationship
                         await transaction.contactDevice.create({
                             data: {
                                 contactId: createdContact.pkId,
                                 deviceId: existingDevice.pkId,
                             },
                         });
+
+                        // step 4: replace contact info in outgoing & incoming message
                         await transaction.outgoingMessage.updateMany({
                             where: {
-                                to: contactsData[index].phone + '@s.whatsapp.net',
+                                to: googleContactsData[index].phone + '@s.whatsapp.net',
                                 sessionId: existingDevice.sessions[0].sessionId,
                             },
                             data: {
@@ -849,29 +950,32 @@ export const syncGoogle: RequestHandler = async (req, res) => {
 
                         await transaction.incomingMessage.updateMany({
                             where: {
-                                from: contactsData[index].phone + '@s.whatsapp.net',
+                                from: googleContactsData[index].phone + '@s.whatsapp.net',
                                 sessionId: existingDevice.sessions[0].sessionId,
                             },
                             data: {
                                 contactId: createdContact.pkId,
                             },
                         });
+
+                        // step 5: decrease contact quota
                         // await useContact(transaction, subscription, subscription.contactUsed + 1);
                         // subscription.contactUsed = subscription.contactUsed + 1;
-                        results.push({ index, createdContact });
+                        results.push({ index, downloaded: createdContact });
                     });
                 } catch (error: unknown) {
                     const message =
                         error instanceof Error
                             ? error.message
-                            : 'An error occurred during import contacts';
+                            : 'An error occurred during download contacts';
                     errors.push({ index, error: message });
                 }
             }
+
             res.status(200).json({ results, errors });
         } else {
-            const errorMessage = response.data?.error?.message || 'Unknown Error';
-            res.status(response.status).json({ error: errorMessage });
+            const errorMessage = downloadResponse.data?.error?.message || 'Unknown Error';
+            res.status(downloadResponse.status).json({ error: errorMessage });
         }
     } catch (error) {
         logger.error(error);

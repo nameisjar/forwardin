@@ -459,6 +459,7 @@ export const googleAuth = passport.authenticate('google', {
         'profile',
         'email',
         'https://www.googleapis.com/auth/user.phonenumbers.read',
+        'https://www.googleapis.com/auth/contacts',
         'https://www.googleapis.com/auth/contacts.readonly',
     ],
 });

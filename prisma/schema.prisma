@@ -267,7 +267,7 @@ model Group {
   pkId          Int            @id @default(autoincrement())
   id            String         @unique @default(uuid()) @db.Uuid
   name          String         @db.VarChar(128)
-  isCampaign    Boolean        @default(false) @map("is_campaign")
+  type          String         @db.VarChar(128)
   userId        Int
   user          User           @relation(fields: [userId], references: [pkId], onDelete: Cascade)
   contactGroups ContactGroup[]

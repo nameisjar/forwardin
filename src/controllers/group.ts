@@ -21,7 +21,7 @@ export const getGroups: RequestHandler = async (req, res) => {
             const groupCount = {
                 id: group.id,
                 name: group.name,
-                isCampaign: group.isCampaign,
+                type: group.type,
                 membersCount: numberOfContacts,
             };
 
@@ -43,7 +43,7 @@ export const createGroup: RequestHandler = async (req, res) => {
         await prisma.group.create({
             data: {
                 name,
-                isCampaign: false,
+                type: 'manual',
                 user: { connect: { pkId: userId } },
             },
         });
@@ -207,7 +207,7 @@ export const getGroup: RequestHandler = async (req, res) => {
 export const updatedGroup: RequestHandler = async (req, res) => {
     try {
         const groupId = req.params.groupId;
-        const { name, isCampaign } = req.body;
+        const { name } = req.body;
 
         const existingGroup = await prisma.group.findUnique({
             where: { id: groupId },
@@ -221,7 +221,6 @@ export const updatedGroup: RequestHandler = async (req, res) => {
             where: { pkId: existingGroup.pkId },
             data: {
                 name,
-                isCampaign,
                 updatedAt: new Date(),
             },
         });
