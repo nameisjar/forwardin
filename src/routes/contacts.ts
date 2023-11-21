@@ -16,6 +16,7 @@ router.post(
     controller.createContact,
 );
 router.post('/import', checkSubscriptionQuota, isContactQuotaAvailable, controller.importContacts);
+router.post('/sync-google', controller.syncGoogle);
 router.get('/', controller.getContacts);
 router.get('/labels', controller.getContactLabels);
 router.get('/:contactId', controller.getContact);

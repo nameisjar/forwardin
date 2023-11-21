@@ -7,6 +7,7 @@ import logger from '../config/logger';
 import { useContact } from '../utils/quota';
 import { memoryUpload } from '../config/multer';
 import ExcelJS from 'exceljs';
+import axios from 'axios';
 
 export const createContact: RequestHandler = async (req, res) => {
     try {
@@ -691,6 +692,188 @@ export const addContactToGroup: RequestHandler = async (req, res) => {
         await Promise.all(groupPromises);
 
         res.status(200).json({ message: 'Contact added to group(s) successfully' });
+    } catch (error) {
+        logger.error(error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};
+
+// back here: create google contact from contacts in the database
+export const syncGoogle: RequestHandler = async (req, res) => {
+    const accessToken = req.body.accessToken;
+    const deviceId = req.body.deviceId;
+    const privilegeId = req.privilege.pkId;
+    const pkId = req.authenticatedUser.pkId;
+
+    const apiEndpoint =
+        'https://people.googleapis.com/v1/people/me/connections?personFields=names,phoneNumbers,emailAddresses,birthdays,genders,photos';
+
+    const response = await axios.get(apiEndpoint, {
+        headers: {
+            Authorization: `Bearer ${accessToken}`,
+        },
+    });
+    try {
+        if (response.status == 200) {
+            const connections = response.data.connections || [];
+            const contactsData: any[] = [];
+            const results: any[] = [];
+            const errors: any[] = [];
+
+            connections.forEach(async (contact: any) => {
+                const phones = contact.phoneNumbers || [];
+                const phone =
+                    phones && phones.length > 0
+                        ? phones[0].canonicalForm?.replace(/\+/g, '')
+                        : contact.names[0].displayNameLastFirst.split(',')[0];
+
+                // const nameParts = contact.names[0].displayNameLastFirst.split(',');
+                // const lastName = nameParts.length > 1 ? nameParts[0].trim() : null;
+                // const firstName = lastName ? nameParts[1].trim() : nameParts[0].trim();
+                // const email = contact.emailAddresses && contact.emailAddresses.length > 0 ? contact.emailAddresses[0].value : null;
+                const firstName = contact.names
+                    ? contact.names[0].displayName
+                    : phones[0].canonicalForm?.replace(/\+/g, '');
+
+                const data = {
+                    firstName,
+                    // lastName,
+                    phone,
+                    // email,
+                    // gender,
+                    // dob,
+                    // labels,
+                };
+                contactsData.push(data);
+            });
+
+            for (let index = 0; index < contactsData.length; index++) {
+                try {
+                    const existingContact = await prisma.contact.findFirst({
+                        where: {
+                            phone: contactsData[index].phone,
+                            AND: {
+                                contactDevices: {
+                                    some: {
+                                        device: {
+                                            id: deviceId,
+                                            userId:
+                                                privilegeId !== Number(process.env.SUPER_ADMIN_ID)
+                                                    ? pkId
+                                                    : undefined,
+                                        },
+                                    },
+                                },
+                            },
+                        },
+                    });
+
+                    // contacts are saved per user (not per device)
+                    if (existingContact) {
+                        throw new Error(
+                            'Contact with this email or phone number already exists in your contact',
+                        );
+                    }
+                    await prisma.$transaction(async (transaction) => {
+                        const createdContact = await transaction.contact.create({
+                            data: {
+                                firstName: contactsData[index].firstName,
+                                // lastName: data.lastName,
+                                phone: contactsData[index].phone,
+                                // email,
+                                // gender: data.gender,
+                                // dob: data.dob ? new Date(data.dob) : null,
+                                colorCode: getRandomColor(),
+                            },
+                        });
+
+                        const existingDevice = await transaction.device.findUnique({
+                            where: {
+                                id: deviceId,
+                            },
+                            include: { sessions: { select: { sessionId: true } } },
+                        });
+
+                        if (!existingDevice) {
+                            throw new Error('Device not found');
+                        }
+                        if (!existingDevice.sessions[0]) {
+                            throw new Error('Session not found');
+                        }
+
+                        const labels = ['sync_google', `device_${existingDevice.name}`];
+                        if (labels && labels.length > 0) {
+                            const labelIds: number[] = [];
+
+                            for (const labelName of labels) {
+                                const slug = generateSlug(labelName);
+                                const createdLabel = await transaction.label.upsert({
+                                    where: {
+                                        slug,
+                                    },
+                                    create: {
+                                        name: labelName,
+                                        slug,
+                                    },
+                                    update: {
+                                        name: labelName,
+                                        slug,
+                                    },
+                                });
+
+                                labelIds.push(createdLabel.pkId);
+                            }
+                            await transaction.contactLabel.createMany({
+                                data: labelIds.map((labelId) => ({
+                                    contactId: createdContact.pkId,
+                                    labelId: labelId,
+                                })),
+                                skipDuplicates: true,
+                            });
+                        }
+
+                        await transaction.contactDevice.create({
+                            data: {
+                                contactId: createdContact.pkId,
+                                deviceId: existingDevice.pkId,
+                            },
+                        });
+                        await transaction.outgoingMessage.updateMany({
+                            where: {
+                                to: contactsData[index].phone + '@s.whatsapp.net',
+                                sessionId: existingDevice.sessions[0].sessionId,
+                            },
+                            data: {
+                                contactId: createdContact.pkId,
+                            },
+                        });
+
+                        await transaction.incomingMessage.updateMany({
+                            where: {
+                                from: contactsData[index].phone + '@s.whatsapp.net',
+                                sessionId: existingDevice.sessions[0].sessionId,
+                            },
+                            data: {
+                                contactId: createdContact.pkId,
+                            },
+                        });
+                        // await useContact(transaction, subscription, subscription.contactUsed + 1);
+                        // subscription.contactUsed = subscription.contactUsed + 1;
+                        results.push({ index, createdContact });
+                    });
+                } catch (error: unknown) {
+                    const message =
+                        error instanceof Error
+                            ? error.message
+                            : 'An error occurred during import contacts';
+                    errors.push({ index, error: message });
+                }
+            }
+            res.status(200).json({ results, errors });
+        } else {
+            const errorMessage = response.data?.error?.message || 'Unknown Error';
+            res.status(response.status).json({ error: errorMessage });
+        }
     } catch (error) {
         logger.error(error);
         res.status(500).json({ message: 'Internal server error' });

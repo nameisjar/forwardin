@@ -455,7 +455,12 @@ passport.use(
     ),
 );
 export const googleAuth = passport.authenticate('google', {
-    scope: ['profile', 'email', 'https://www.googleapis.com/auth/user.phonenumbers.read'],
+    scope: [
+        'profile',
+        'email',
+        'https://www.googleapis.com/auth/user.phonenumbers.read',
+        'https://www.googleapis.com/auth/contacts.readonly',
+    ],
 });
 export const googleAuthCallback: RequestHandler = (req, res, next) => {
     passport.authenticate('google', { session: true }, async (err, accessToken) => {
