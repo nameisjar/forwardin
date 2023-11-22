@@ -294,6 +294,7 @@ export const getConversationMessages: RequestHandler = async (req, res) => {
     try {
         const { sessionId } = req.params;
         const { page = 1, pageSize = 25, phoneNumber } = req.query;
+        const sort = req.query.sort as string;
         const offset = (Number(page) - 1) * Number(pageSize);
 
         const incomingMessages = await prisma.incomingMessage.findMany({
@@ -325,7 +326,9 @@ export const getConversationMessages: RequestHandler = async (req, res) => {
         logger.debug(allMessages);
 
         // Sort the combined messages by timestamp (receivedAt or createdAt)
-        allMessages.sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
+        sort == 'asc'
+            ? allMessages.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
+            : allMessages.sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
 
         // Apply pagination
         const messages = allMessages.slice(offset, offset + Number(pageSize));
