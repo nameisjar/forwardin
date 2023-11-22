@@ -11,6 +11,7 @@ import prisma from '../utils/db';
 import axios from 'axios';
 import logger from '../config/logger';
 import { refreshTokenPayload } from '../types';
+import refresh from 'passport-oauth2-refresh';
 
 export const register: RequestHandler = async (req, res) => {
     try {
@@ -435,25 +436,28 @@ export const changePassword: RequestHandler = async (req, res) => {
 };
 
 // mock get google access token by client
-passport.use(
-    new GoogleStrategy(
-        {
-            clientID: process.env.GOOGLE_CLIENT_ID!,
-            clientSecret: process.env.GOOGLE_CLIENT_SECRET!,
-            callbackURL:
-                process.env.NODE_ENV !== 'production'
-                    ? `http://${process.env.HOST}:${process.env.PORT}/auth/google/callback`
-                    : `https://${process.env.BASE_URL}/auth/google/callback`,
-        },
-        async (accessToken: any, refreshToken: any, profile: Profile, done: any) => {
-            try {
-                return done(null, accessToken);
-            } catch (error: any) {
-                return done(error, false);
-            }
-        },
-    ),
+const strategy = new GoogleStrategy(
+    {
+        clientID: process.env.GOOGLE_CLIENT_ID!,
+        clientSecret: process.env.GOOGLE_CLIENT_SECRET!,
+        callbackURL:
+            process.env.NODE_ENV !== 'production'
+                ? `http://${process.env.HOST}:${process.env.PORT}/auth/google/callback`
+                : `https://${process.env.BASE_URL}/auth/google/callback`,
+    },
+    async (accessToken: any, refreshToken: any, profile: Profile, done: any) => {
+        try {
+            logger.warn(refreshToken);
+            return done(null, accessToken);
+        } catch (error: any) {
+            return done(error, false);
+        }
+    },
 );
+
+passport.use(strategy);
+refresh.use(strategy);
+
 export const googleAuth = passport.authenticate('google', {
     scope: [
         'profile',

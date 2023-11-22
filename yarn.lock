@@ -481,6 +481,14 @@
     "@types/passport" "*"
     "@types/passport-oauth2" "*"
 
+"@types/passport-oauth2-refresh@^1.1.4":
+  version "1.1.4"
+  resolved "https://registry.yarnpkg.com/@types/passport-oauth2-refresh/-/passport-oauth2-refresh-1.1.4.tgz#b762a60a2273bc98cbb3da0fe3194871304fee3f"
+  integrity sha512-MLykzdKFfst46qaZ5TMfJhdrZC95gGql0xF1h6fw4vVR2XoerZhPzBnW++Wjfjrn8QeXSDiaYiaAym4LRPQXpg==
+  dependencies:
+    "@types/oauth" "*"
+    "@types/passport-oauth2" "*"
+
 "@types/passport-oauth2@*":
   version "1.4.13"
   resolved "https://registry.yarnpkg.com/@types/passport-oauth2/-/passport-oauth2-1.4.13.tgz#15accda15c90eb5fb06e7b2a5e0c30cec9c1679c"
@@ -3376,6 +3384,11 @@ passport-google-oauth20@^2.0.0:
   integrity sha512-KSk6IJ15RoxuGq7D1UKK/8qKhNfzbLeLrG3gkLZ7p4A6DBCcv7xpyQwuXtWdpyR0+E0mwkpjY1VfPOhxQrKzdQ==
   dependencies:
     passport-oauth2 "1.x.x"
+
+passport-oauth2-refresh@^2.2.0:
+  version "2.2.0"
+  resolved "https://registry.yarnpkg.com/passport-oauth2-refresh/-/passport-oauth2-refresh-2.2.0.tgz#e60dd4e84e8df3c6ead87b6aab0754dec7a89aca"
+  integrity sha512-yXwXHL7ZZH0s2oknnjugfvwzCB5mpJ5ZNpzkb+b/sTsHeZFbx2BXfzvwsoD4aq6gq/aWuCxBV89ef+L/cjjrjg==
 
 passport-oauth2@1.x.x:
   version "1.7.0"
