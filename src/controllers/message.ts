@@ -392,7 +392,12 @@ export const getMessengerList: RequestHandler = async (req, res) => {
         logger.debug(allMessages);
 
         // Sort the combined messages by timestamp (receivedAt or createdAt)
-        allMessages.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+
+        // ASC
+        // allMessages.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+
+        // DESC
+        allMessages.sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
 
         // Create a map to track unique recipients and their most recent timestamps
         const uniqueRecipients = new Map();
