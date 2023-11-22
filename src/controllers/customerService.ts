@@ -93,7 +93,7 @@ export const login: RequestHandler = async (req, res) => {
         });
 
         if (!cs) {
-            return res.status(401).json({ message: 'CS Account not found' });
+            return res.status(404).json({ message: 'CS Account not found' });
         }
 
         const passwordMatch = await bcrypt.compare(password, cs.password);

@@ -33,7 +33,7 @@ export const createBusinessHour: RequestHandler = async (req, res) => {
         });
 
         if (!device) {
-            return res.status(401).json({ message: 'Device not found' });
+            return res.status(404).json({ message: 'Device not found' });
         }
         const businessHour = await prisma.businessHour.create({
             data: {
@@ -72,7 +72,7 @@ export const getAllBusinessHours: RequestHandler = async (req, res) => {
     });
 
     if (!device) {
-        return res.status(401).json({ message: 'Device not found' });
+        return res.status(404).json({ message: 'Device not found' });
     }
     try {
         const businessHours = await prisma.businessHour.findMany({

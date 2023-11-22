@@ -71,10 +71,10 @@ export const createCampaign: RequestHandler = async (req, res) => {
             });
 
             if (!device) {
-                return res.status(401).json({ message: 'Device not found' });
+                return res.status(404).json({ message: 'Device not found' });
             }
             if (!device.sessions[0]) {
-                return res.status(400).json({ message: 'Session not found' });
+                return res.status(404).json({ message: 'Session not found' });
             }
             await prisma.$transaction(
                 async (transaction) => {
@@ -823,10 +823,10 @@ export const updateCampaign: RequestHandler = async (req, res) => {
             });
 
             if (!device) {
-                return res.status(401).json({ message: 'Device not found' });
+                return res.status(404).json({ message: 'Device not found' });
             }
             if (!device.sessions[0]) {
-                return res.status(400).json({ message: 'Session not found' });
+                return res.status(404).json({ message: 'Session not found' });
             }
             await prisma.$transaction(
                 async (transaction) => {

@@ -64,10 +64,10 @@ export const createContact: RequestHandler = async (req, res) => {
             });
 
             if (!existingDevice) {
-                return res.status(400).json({ message: 'Device not found' });
+                return res.status(404).json({ message: 'Device not found' });
             }
             if (!existingDevice.sessions[0]) {
-                return res.status(400).json({ message: 'Session not found' });
+                return res.status(404).json({ message: 'Session not found' });
             }
 
             // step 2: create labels
@@ -556,7 +556,7 @@ export const updateContact: RequestHandler = async (req, res) => {
             });
 
             if (!existingDevice) {
-                return res.status(400).json({ message: 'Device not found' });
+                return res.status(404).json({ message: 'Device not found' });
             }
 
             await transaction.contactDevice.update({
