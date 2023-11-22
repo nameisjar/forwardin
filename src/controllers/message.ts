@@ -355,6 +355,7 @@ export const getMessengerList: RequestHandler = async (req, res) => {
     try {
         const { sessionId } = req.params;
         const { page = 1, pageSize = 25 } = req.query;
+        const sort = req.query.sort as string;
         const offset = (Number(page) - 1) * Number(pageSize);
 
         const incomingMessages = await prisma.incomingMessage.findMany({
@@ -392,12 +393,9 @@ export const getMessengerList: RequestHandler = async (req, res) => {
         logger.debug(allMessages);
 
         // Sort the combined messages by timestamp (receivedAt or createdAt)
-
-        // ASC
-        // allMessages.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
-
-        // DESC
-        allMessages.sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
+        sort == 'asc'
+            ? allMessages.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
+            : allMessages.sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
 
         // Create a map to track unique recipients and their most recent timestamps
         const uniqueRecipients = new Map();
