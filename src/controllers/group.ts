@@ -19,9 +19,7 @@ export const getGroups: RequestHandler = async (req, res) => {
         for (const group of rawGroups) {
             const numberOfContacts = group.contactGroups.length;
             const groupCount = {
-                id: group.id,
-                name: group.name,
-                type: group.type,
+                ...group,
                 membersCount: numberOfContacts,
             };
 
