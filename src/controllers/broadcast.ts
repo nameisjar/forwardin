@@ -221,7 +221,9 @@ export const getBrodcastReplies: RequestHandler = async (req, res) => {
 
         const broadcastReplies = [];
 
-        for (const recipient of broadcast.recipients) {
+        const recipients = await getRecipients(broadcast);
+
+        for (const recipient of recipients) {
             const incomingMessages = await prisma.incomingMessage.findFirst({
                 where: {
                     from: `${recipient}@s.whatsapp.net`,
