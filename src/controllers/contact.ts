@@ -735,6 +735,7 @@ export const addContactToGroup: RequestHandler = async (req, res) => {
     }
 };
 
+// back here: replace 0 to 62
 export const syncGoogle: RequestHandler = async (req, res) => {
     const accessToken = req.body.accessToken;
     const deviceId = req.body.deviceId;
@@ -825,15 +826,11 @@ export const syncGoogle: RequestHandler = async (req, res) => {
                         : contact.names && contact.names.length > 0
                         ? contact.names[0].displayNameLastFirst.split(',')[0]
                         : '';
-                logger.warn({ phone: phone });
-
                 // const nameParts = contact.names[0].displayNameLastFirst.split(',');
                 // const lastName = nameParts.length > 1 ? nameParts[0].trim() : null;
                 // const firstName = lastName ? nameParts[1].trim() : nameParts[0].trim();
                 // const email = contact.emailAddresses && contact.emailAddresses.length > 0 ? contact.emailAddresses[0].value : null;
                 const firstName = contact.names ? contact.names[0].displayName : phone;
-
-                logger.warn({ firstName: firstName });
 
                 const data = {
                     firstName,

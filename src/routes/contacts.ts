@@ -2,7 +2,11 @@ import { Router } from 'express';
 import * as controller from '../controllers/contact';
 import { dateRules, validate } from '../middleware/requestValidator';
 import { checkPrivilege } from '../middleware/auth';
-import { checkSubscriptionQuota, isContactQuotaAvailable } from '../middleware/subscription';
+import {
+    checkSubscriptionQuota,
+    isContactQuotaAvailable,
+    isGoogleContactSync,
+} from '../middleware/subscription';
 
 const router = Router();
 
@@ -16,7 +20,7 @@ router.post(
     controller.createContact,
 );
 router.post('/import', checkSubscriptionQuota, isContactQuotaAvailable, controller.importContacts);
-router.post('/sync-google', controller.syncGoogle);
+router.post('/sync-google', checkSubscriptionQuota, isGoogleContactSync, controller.syncGoogle);
 router.get('/', controller.getContacts);
 router.get('/labels', controller.getContactLabels);
 router.get('/:contactId', controller.getContact);

@@ -58,3 +58,19 @@ export const isContactQuotaAvailable: RequestHandler = async (req, res, next) =>
     }
     next();
 };
+
+export const isGoogleContactSync: RequestHandler = async (req, res, next) => {
+    const subscriptionId = req.subscription.subscriptionPlanId;
+    const subscriptionPlan = await prisma.subscriptionPlan.findUnique({
+        where: { pkId: subscriptionId },
+    });
+
+    if (!subscriptionPlan?.isGoogleContactSync) {
+        return res.status(403).json({
+            message:
+                'Access denied. You do not have the required subcriptions to perform this action',
+        });
+    }
+
+    next();
+};
