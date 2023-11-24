@@ -111,3 +111,24 @@ export const login: RequestHandler = async (req, res) => {
         res.status(500).json({ message: 'Internal server error' });
     }
 };
+
+export const getCustomerServices: RequestHandler = async (req, res) => {
+    try {
+        const userId = req.params.userId;
+        const user = await prisma.user.findUnique({
+            where: { id: userId },
+        });
+
+        if (!user) {
+            return res.status(404).json({ message: 'User not found' });
+        }
+
+        const customerServices = await prisma.customerService.findMany({
+            where: { userId: user.pkId },
+        });
+        return res.status(200).json(customerServices);
+    } catch (error) {
+        logger.error(error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};

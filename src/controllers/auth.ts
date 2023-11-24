@@ -72,7 +72,13 @@ export const register: RequestHandler = async (req, res) => {
             where: { pkId: newUser.pkId },
             data: { refreshToken },
         });
-        res.status(201).json({ accessToken, refreshToken, accountApiKey, id });
+        res.status(201).json({
+            accessToken,
+            refreshToken,
+            accountApiKey,
+            id,
+            role: newUser.privilegeId,
+        });
     } catch (error) {
         logger.error(error);
         res.status(500).json({ message: 'Internal server error' });
@@ -512,7 +518,6 @@ export const loginRegisterByGoogle: RequestHandler = async (req, res) => {
             const email = profileData.emailAddresses[0].value;
             const phones = profileData.phoneNumbers || [];
             const phone = phones.length > 0 ? phones[0].canonicalForm?.replace(/\+/g, '') : null;
-
             const nameParts = profileData.names[0].displayNameLastFirst.split(',');
             const lastName = nameParts.length > 1 ? nameParts[0].trim() : null;
             const firstName = lastName ? nameParts[1].trim() : nameParts[0].trim();
@@ -585,7 +590,13 @@ export const loginRegisterByGoogle: RequestHandler = async (req, res) => {
             } else {
                 refreshToken = newUser.refreshToken;
             }
-            res.status(201).json({ accessToken, refreshToken, accountApiKey, id });
+            res.status(201).json({
+                accessToken,
+                refreshToken,
+                accountApiKey,
+                id,
+                role: newUser.privilegeId,
+            });
         } else {
             const errorMessage = response.data?.error?.message || 'Unknown Error';
             res.status(response.status).json({ error: errorMessage });

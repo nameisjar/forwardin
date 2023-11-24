@@ -40,7 +40,7 @@ router.use('/orders', authMiddleware, orderRoutes);
 router.use('/menus', authMiddleware, menuRoutes);
 router.use('/privileges', authMiddleware, privilegeRoutes);
 router.use('/subscription-plans', authMiddleware, subsPlanRoutes);
-router.use('/customer-services', customerServiceRoutes);
+router.use('/customer-services', authMiddleware, customerServiceRoutes);
 router.use('/media', express.static('media'));
 
 export default router;
