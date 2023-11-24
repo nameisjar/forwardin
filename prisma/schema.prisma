@@ -35,21 +35,23 @@ model User {
 }
 
 model CustomerService {
-  pkId         Int        @id @default(autoincrement())
-  id           String     @unique @default(uuid()) @db.Uuid
-  username     String     @unique @db.VarChar(255)
-  email        String     @unique @db.VarChar(255)
-  password     String     @db.VarChar(255)
-  refreshToken String?    @unique @map("refresh_token") @db.VarChar(255)
-  deletedAt    DateTime?  @map("deleted_at")
-  createdAt    DateTime   @default(now()) @map("created_at")
-  updatedAt    DateTime   @default(now()) @map("updated_at")
+  pkId         Int           @id @default(autoincrement())
+  id           String        @unique @default(uuid()) @db.Uuid
+  username     String        @unique @db.VarChar(255)
+  email        String        @unique @db.VarChar(255)
+  password     String        @db.VarChar(255)
+  refreshToken String?       @unique @map("refresh_token") @db.VarChar(255)
+  deletedAt    DateTime?     @map("deleted_at")
+  createdAt    DateTime      @default(now()) @map("created_at")
+  updatedAt    DateTime      @default(now()) @map("updated_at")
   userId       Int
   deviceId     Int?
-  privilegeId  Int?       @map("privilege_id")
-  user         User       @relation(fields: [userId], references: [pkId], onDelete: Cascade)
-  device       Device?    @relation(fields: [deviceId], references: [pkId], onDelete: SetNull)
-  privilege    Privilege? @relation(fields: [privilegeId], references: [pkId], onDelete: SetNull)
+  privilegeId  Int?          @map("privilege_id")
+  user         User          @relation(fields: [userId], references: [pkId], onDelete: Cascade)
+  device       Device?       @relation(fields: [deviceId], references: [pkId], onDelete: SetNull)
+  privilege    Privilege?    @relation(fields: [privilegeId], references: [pkId], onDelete: SetNull)
+  Order        Order[]
+  OrderMessage OrderMessage?
 }
 
 model Privilege {
@@ -405,15 +407,33 @@ model BusinessHour {
 }
 
 model Order {
-  pkId          Int     @id @default(autoincrement())
-  id            String  @unique @default(uuid()) @db.Uuid
-  name          String  @db.VarChar(128)
-  address       String  @db.VarChar(255)
+  pkId          Int             @id @default(autoincrement())
+  id            String          @unique @default(uuid()) @db.Uuid
+  name          String          @db.VarChar(128)
+  address       String          @db.VarChar(255)
   phone         Int
-  delivery_cost Int     @map("delivery_cost")
-  price         Decimal @map("price") @db.Decimal(10, 2)
-  deviceId      Int     @map("device_id")
-  device        Device  @relation(fields: [deviceId], references: [pkId])
+  delivery_cost Int             @map("delivery_cost")
+  price         Decimal         @map("price") @db.Decimal(10, 2)
+  status        String          @db.VarChar(20)
+  csId          Int
+  cs            CustomerService @relation(fields: [csId], references: [pkId], onDelete: Cascade)
+  createdAt     DateTime        @default(now()) @map("created_at")
+  updatedAt     DateTime        @default(now()) @map("updated_at")
+  Device        Device?         @relation(fields: [devicePkId], references: [pkId])
+  devicePkId    Int?
+}
+
+model OrderMessage {
+  pkId            Int             @id @default(autoincrement())
+  id              String          @unique @default(uuid()) @db.Uuid
+  orderTemplate   String
+  welcomeMessage  String
+  processMessage  String
+  completeMessage String
+  csId            Int             @unique
+  cs              CustomerService @relation(fields: [csId], references: [pkId], onDelete: Cascade)
+  createdAt       DateTime        @default(now()) @map("created_at")
+  updatedAt       DateTime        @default(now()) @map("updated_at")
 }
 
 model PasswordReset {

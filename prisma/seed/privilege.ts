@@ -70,6 +70,7 @@ async function seedPrivileges(prisma: PrismaClient, logger: Logger) {
                     'broadcast',
                     'campaign',
                     'customerService',
+                    'order',
                 ];
                 const isCsController = csControllers.includes(controllerName);
 

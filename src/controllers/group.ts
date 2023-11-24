@@ -185,7 +185,11 @@ export const getGroup: RequestHandler = async (req, res) => {
             include: {
                 contactGroups: {
                     include: {
-                        contact: true,
+                        contact: {
+                            include: {
+                                ContactLabel: { select: { label: { select: { name: true } } } },
+                            },
+                        },
                     },
                 },
             },
