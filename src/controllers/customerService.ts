@@ -132,3 +132,82 @@ export const getCustomerServices: RequestHandler = async (req, res) => {
         res.status(500).json({ message: 'Internal server error' });
     }
 };
+
+export const updateCS: RequestHandler = async (req, res) => {
+    try {
+        const { username, email, password, userId, deviceId, confirmPassword } = req.body;
+        const csId = req.params.csId;
+
+        const hashedPassword = await bcrypt.hash(password, 10);
+        if (password !== confirmPassword) {
+            return res.status(400).json({ message: 'Passwords do not match' });
+        }
+        const CS = await prisma.customerService.findUnique({
+            where: {
+                id: csId,
+            },
+        });
+
+        if (!CS) {
+            return res.status(400).json({ message: 'CS not found' });
+        }
+
+        const privilege = await prisma.privilege.findUnique({
+            where: { pkId: Number(process.env.CS_ID) },
+        });
+        if (!privilege) {
+            return res.status(404).json({
+                error: 'Privilege not found',
+            });
+        }
+
+        const user = await prisma.user.findUnique({
+            where: { id: userId },
+        });
+        if (!user) {
+            return res.status(404).json({
+                error: 'User not found',
+            });
+        }
+
+        const device = await prisma.device.findUnique({
+            where: { id: deviceId },
+        });
+        if (!device) {
+            return res.status(404).json({
+                error: 'Device not found',
+            });
+        }
+
+        const newCS = await prisma.customerService.update({
+            where: { pkId: CS.pkId },
+            data: {
+                username,
+                email,
+                password: hashedPassword,
+                privilegeId: privilege.pkId,
+                userId: user.pkId,
+                deviceId: device.pkId,
+            },
+        });
+
+        const accessToken = generateAccessToken(newCS);
+        const refreshToken = generateRefreshToken(newCS);
+        const id = newCS.id;
+
+        await prisma.customerService.update({
+            where: { pkId: newCS.pkId },
+            data: { refreshToken },
+        });
+        res.status(201).json({
+            message: 'CS updated successfully',
+            accessToken,
+            refreshToken,
+            id,
+            role: newCS.privilegeId,
+        });
+    } catch (error) {
+        logger.error(error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};

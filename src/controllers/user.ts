@@ -43,6 +43,126 @@ export const getUserProfile: RequestHandler = async (req, res) => {
     }
 };
 
+export const updateUser: RequestHandler = async (req, res) => {
+    const { firstName, lastName, username, affiliationCode } = req.body;
+    const userId = req.params.userId;
+
+    const existingUser = await prisma.user.findUnique({
+        where: {
+            username,
+            NOT: { id: userId },
+        },
+    });
+    if (existingUser) {
+        return res.status(400).json({ message: 'User with this username already exists' });
+    }
+
+    const existingAffiliationCode = await prisma.user.findUnique({
+        where: { affiliationCode, NOT: { id: userId } },
+    });
+
+    if (existingAffiliationCode) {
+        return res.status(400).json({ message: 'Affiliation code is already used' });
+    }
+
+    const user = await prisma.user.findUnique({
+        where: { id: userId },
+    });
+
+    if (!user) {
+        return res.status(404).json({ message: 'User to update not found' });
+    }
+
+    await prisma.user.update({
+        where: {
+            id: userId,
+        },
+        data: {
+            firstName,
+            lastName,
+            username,
+            affiliationCode,
+            updatedAt: new Date(),
+        },
+    });
+
+    return res.status(200).json({ message: 'User profile updated successfully' });
+};
+
+export const changeEmail: RequestHandler = async (req, res) => {
+    const { email } = req.body;
+    const userId = req.params.userId;
+
+    const existingUser = await prisma.user.findUnique({
+        where: {
+            email,
+            NOT: { id: userId },
+        },
+    });
+    if (existingUser) {
+        return res.status(400).json({ message: 'User with this email already exists' });
+    }
+
+    const user = await prisma.user.findUnique({
+        where: { id: userId },
+    });
+
+    if (!user) {
+        return res.status(404).json({ message: 'User to update not found' });
+    }
+
+    await prisma.user.update({
+        where: {
+            id: userId,
+        },
+        data: {
+            email,
+            emailOtpSecret: email && email == user.email ? user.emailOtpSecret : null,
+            emailVerifiedAt: email && email == user.email ? user.emailVerifiedAt : null,
+            updatedAt: new Date(),
+        },
+    });
+
+    return res.status(200).json({ message: 'Email changed successfully' });
+};
+
+export const changePhoneNumber: RequestHandler = async (req, res) => {
+    const { phoneNumber } = req.body;
+    const userId = req.params.userId;
+
+    const existingUser = await prisma.user.findUnique({
+        where: {
+            phone: phoneNumber,
+            NOT: { id: userId },
+        },
+    });
+    if (existingUser) {
+        return res.status(400).json({ message: 'User with this email already exists' });
+    }
+
+    const user = await prisma.user.findUnique({
+        where: { id: userId },
+    });
+
+    if (!user) {
+        return res.status(404).json({ message: 'User to update not found' });
+    }
+
+    await prisma.user.update({
+        where: {
+            id: userId,
+        },
+        data: {
+            phone: phoneNumber,
+            // emailOtpSecret: email && email == user.email ? user.emailOtpSecret : null,
+            // emailVerifiedAt: email && email == user.email ? user.emailVerifiedAt : null,
+            updatedAt: new Date(),
+        },
+    });
+
+    return res.status(200).json({ message: 'Phone number changed successfully' });
+};
+
 // back here: delete user > delete device > logout session! > delete contact? > delete group > delete cs > delete subscription > delete transaction
 export const deleteUser: RequestHandler = async (req, res) => {
     try {

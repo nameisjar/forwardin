@@ -146,7 +146,7 @@ export function checkPrivilege(controller: string): RequestHandler {
             if (method === 'get' && role.isRead) {
                 return role.module.controller === controller;
             }
-            if (method === 'put' && role.isEdit) {
+            if (['put', 'patch'].includes(method) && role.isEdit) {
                 return role.module.controller === controller;
             }
             if (method === 'delete' && role.isDelete) {
