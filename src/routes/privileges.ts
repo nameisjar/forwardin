@@ -7,5 +7,6 @@ const router = express.Router();
 router.use(superAdminOnly);
 router.use(checkPrivilege('privilege'));
 router.get('/', controller.getPrivileges);
+router.put('/:privilegeId/:moduleId', controller.updatePrivilege);
 
 export default router;

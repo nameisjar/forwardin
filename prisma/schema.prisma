@@ -74,6 +74,8 @@ model PrivilegeRole {
   module      Module    @relation(fields: [moduleId], references: [pkId], onDelete: Cascade)
   privilege   Privilege @relation(fields: [privilegeId], references: [pkId], onDelete: Cascade)
   privilegeId Int       @map("privilege_id")
+
+  @@unique([moduleId, privilegeId])
 }
 
 model Menu {
