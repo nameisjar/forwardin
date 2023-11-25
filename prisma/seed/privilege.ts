@@ -101,7 +101,7 @@ async function seedPrivileges(prisma: PrismaClient, logger: Logger) {
                     (!isSuperAdmin &&
                         !isCS &&
                         !isSuperAdminOnlyController &&
-                        !['menu', 'privilege', 'user'].includes(controllerName)) ||
+                        !['menu', 'privilege'].includes(controllerName)) ||
                     (isCS && isCsController);
 
                 await prisma.privilegeRole.create({
