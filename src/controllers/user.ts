@@ -147,16 +147,6 @@ export const changePhoneNumber: RequestHandler = async (req, res) => {
         return res.status(400).json({ message: 'Invalid userId' });
     }
 
-    const existingUser = await prisma.user.findUnique({
-        where: {
-            phone: phoneNumber,
-            NOT: { id: userId },
-        },
-    });
-    if (existingUser) {
-        return res.status(400).json({ message: 'User with this phone already exists' });
-    }
-
     const user = await prisma.user.findUnique({
         where: { id: userId },
     });

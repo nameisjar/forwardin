@@ -120,7 +120,7 @@ export const checkIdentifierAvailability: RequestHandler = async (req, res) => {
 const isIdentifierTaken = async (identifier: string) => {
     const existingUser = await prisma.user.findFirst({
         where: {
-            OR: [{ username: identifier }, { email: identifier }, { phone: identifier }],
+            OR: [{ username: identifier }, { email: identifier }],
         },
     });
     return !!existingUser;
@@ -132,7 +132,7 @@ export const login: RequestHandler = async (req, res) => {
 
         const user = await prisma.user.findFirst({
             where: {
-                OR: [{ email: identifier }, { username: identifier }, { phone: identifier }],
+                OR: [{ email: identifier }, { username: identifier }],
                 deletedAt: null,
             },
         });
