@@ -32,6 +32,7 @@ model User {
   devices          Device[]
   Group            Group[]
   Subscription     Subscription[]
+  Template         Template[]
 }
 
 model CustomerService {
@@ -434,6 +435,17 @@ model OrderMessage {
   cs              CustomerService @relation(fields: [csId], references: [pkId], onDelete: Cascade)
   createdAt       DateTime        @default(now()) @map("created_at")
   updatedAt       DateTime        @default(now()) @map("updated_at")
+}
+
+model Template {
+  pkId      Int      @id @default(autoincrement())
+  id        String   @unique @default(uuid()) @db.Uuid
+  name      String   @db.VarChar(128)
+  message   String
+  userId    Int
+  user      User     @relation(fields: [userId], references: [pkId], onDelete: Cascade)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @default(now()) @map("updated_at")
 }
 
 model PasswordReset {
