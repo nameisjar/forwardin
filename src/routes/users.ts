@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import * as controller from '../controllers/user';
-import { checkPrivilege, superAdminOnly } from '../middleware/auth';
+import { checkPrivilege, isEmailVerified, superAdminOnly } from '../middleware/auth';
 
 const router = Router();
 
@@ -10,6 +10,8 @@ router.get('/:userId/subscription', controller.getUserSubscriptionDetail);
 router.patch('/:userId', controller.updateUser);
 router.patch('/change-email/:userId', controller.changeEmail);
 router.patch('/change-phone-number/:userId', controller.changePhoneNumber);
+
+router.use(isEmailVerified);
 router.delete('/:userId/delete', controller.deleteUser);
 
 router.use(superAdminOnly);
