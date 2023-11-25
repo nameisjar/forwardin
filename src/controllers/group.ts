@@ -1,6 +1,7 @@
 import { RequestHandler } from 'express';
 import prisma from '../utils/db';
 import logger from '../config/logger';
+import { isUUID } from '../utils/uuidChecker';
 
 export const getGroups: RequestHandler = async (req, res) => {
     const userId = req.authenticatedUser.pkId;
@@ -179,6 +180,9 @@ export const removeMembersFromGroup: RequestHandler = async (req, res) => {
 export const getGroup: RequestHandler = async (req, res) => {
     try {
         const groupId = req.params.groupId;
+        if (!isUUID(groupId)) {
+            return res.status(400).json({ message: 'Invalid groupId' });
+        }
 
         const group = await prisma.group.findUnique({
             where: { id: groupId },
@@ -210,6 +214,10 @@ export const updatedGroup: RequestHandler = async (req, res) => {
     try {
         const groupId = req.params.groupId;
         const { name } = req.body;
+
+        if (!isUUID(groupId)) {
+            return res.status(400).json({ message: 'Invalid groupId' });
+        }
 
         const existingGroup = await prisma.group.findUnique({
             where: { id: groupId },

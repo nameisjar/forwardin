@@ -1,6 +1,7 @@
 import { RequestHandler } from 'express';
 import prisma from '../utils/db';
 import logger from '../config/logger';
+import { isUUID } from '../utils/uuidChecker';
 
 export const createSubscriptionPlan: RequestHandler = async (req, res) => {
     try {
@@ -55,9 +56,13 @@ export const getAllSubscriptionPlans: RequestHandler = async (req, res) => {
 };
 
 export const getSubscriptionPlanById: RequestHandler = async (req, res) => {
-    const id = req.params.id;
-
     try {
+        const id = req.params.id;
+
+        if (!isUUID(id)) {
+            return res.status(400).json({ message: 'Invalid subscriptionPlanId' });
+        }
+
         const subscriptionPlan = await prisma.subscriptionPlan.findUnique({
             where: { id },
         });
@@ -74,9 +79,13 @@ export const getSubscriptionPlanById: RequestHandler = async (req, res) => {
 };
 
 export const updateSubscriptionPlan: RequestHandler = async (req, res) => {
-    const id = req.params.id;
-
     try {
+        const id = req.params.id;
+
+        if (!isUUID(id)) {
+            return res.status(400).json({ message: 'Invalid subscriptionPlanId' });
+        }
+
         const {
             name,
             monthlyPrice,
@@ -120,9 +129,12 @@ export const updateSubscriptionPlan: RequestHandler = async (req, res) => {
 };
 
 export const deleteSubscriptionPlan: RequestHandler = async (req, res) => {
-    const id = req.params.id;
-
     try {
+        const id = req.params.id;
+
+        if (!isUUID(id)) {
+            return res.status(400).json({ message: 'Invalid subscriptionPlanId' });
+        }
         await prisma.subscriptionPlan.delete({
             where: { id },
         });

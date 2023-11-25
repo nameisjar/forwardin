@@ -1,6 +1,7 @@
 import { RequestHandler } from 'express';
 import prisma from '../utils/db';
 import logger from '../config/logger';
+import { isUUID } from '../utils/uuidChecker';
 
 export const getUsers: RequestHandler = async (req, res) => {
     try {
@@ -15,6 +16,10 @@ export const getUsers: RequestHandler = async (req, res) => {
 export const getUserProfile: RequestHandler = async (req, res) => {
     try {
         const userId = req.params.userId;
+
+        if (!isUUID(userId)) {
+            return res.status(400).json({ message: 'Invalid userId' });
+        }
 
         const user = await prisma.user.findUnique({
             where: {
@@ -46,6 +51,10 @@ export const getUserProfile: RequestHandler = async (req, res) => {
 export const updateUser: RequestHandler = async (req, res) => {
     const { firstName, lastName, username, affiliationCode } = req.body;
     const userId = req.params.userId;
+
+    if (!isUUID(userId)) {
+        return res.status(400).json({ message: 'Invalid userId' });
+    }
 
     const existingUser = await prisma.user.findUnique({
         where: {
@@ -93,6 +102,10 @@ export const changeEmail: RequestHandler = async (req, res) => {
     const { email } = req.body;
     const userId = req.params.userId;
 
+    if (!isUUID(userId)) {
+        return res.status(400).json({ message: 'Invalid userId' });
+    }
+
     const existingUser = await prisma.user.findUnique({
         where: {
             email,
@@ -129,6 +142,10 @@ export const changeEmail: RequestHandler = async (req, res) => {
 export const changePhoneNumber: RequestHandler = async (req, res) => {
     const { phoneNumber } = req.body;
     const userId = req.params.userId;
+
+    if (!isUUID(userId)) {
+        return res.status(400).json({ message: 'Invalid userId' });
+    }
 
     const existingUser = await prisma.user.findUnique({
         where: {
@@ -167,6 +184,10 @@ export const changePhoneNumber: RequestHandler = async (req, res) => {
 export const deleteUser: RequestHandler = async (req, res) => {
     try {
         const userId = req.params.userId;
+
+        if (!isUUID(userId)) {
+            return res.status(400).json({ message: 'Invalid userId' });
+        }
 
         if (!userId) {
             return res.status(401).json({ message: 'Unauthorized: User not authenticated' });
@@ -209,6 +230,10 @@ export const deleteUser: RequestHandler = async (req, res) => {
 export const getUserSubscriptionDetail: RequestHandler = async (req, res) => {
     try {
         const userId = req.params.userId;
+
+        if (!isUUID(userId)) {
+            return res.status(400).json({ message: 'Invalid userId' });
+        }
 
         const user = await prisma.user.findUnique({
             where: {

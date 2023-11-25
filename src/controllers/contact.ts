@@ -8,6 +8,7 @@ import { useContact } from '../utils/quota';
 import { memoryUpload } from '../config/multer';
 import ExcelJS from 'exceljs';
 import axios from 'axios';
+import { isUUID } from '../utils/uuidChecker';
 
 export const createContact: RequestHandler = async (req, res) => {
     try {
@@ -468,6 +469,9 @@ export const getContactLabels: RequestHandler = async (req, res) => {
 export const getContact: RequestHandler = async (req, res) => {
     try {
         const contactId = req.params.contactId;
+        if (!isUUID(contactId)) {
+            return res.status(400).json({ message: 'Invalid contactId' });
+        }
 
         const contact = await prisma.contact.findUnique({
             where: {
@@ -513,6 +517,10 @@ export const updateContact: RequestHandler = async (req, res) => {
     try {
         const contactId = req.params.contactId;
         const { firstName, lastName, phone, email, gender, dob, labels, deviceId } = req.body;
+
+        if (!isUUID(contactId)) {
+            return res.status(400).json({ message: 'Invalid contactId' });
+        }
 
         await prisma.$transaction(async (transaction) => {
             const existingContact = await prisma.contact.findUnique({

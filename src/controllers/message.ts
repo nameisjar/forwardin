@@ -5,10 +5,14 @@ import prisma, { serializePrisma } from '../utils/db';
 import { delay as delayMs } from '../utils/delay';
 import { proto } from '@whiskeysockets/baileys';
 import { memoryUpload } from '../config/multer';
+import { isUUID } from '../utils/uuidChecker';
 
 export const sendMessages: RequestHandler = async (req, res) => {
     try {
         const session = getInstance(req.params.sessionId)!;
+        if (!isUUID(req.params.sessionId)) {
+            return res.status(400).json({ message: 'Invalid sessionId' });
+        }
 
         const results: { index: number; result?: proto.WebMessageInfo }[] = [];
         const errors: { index: number; error: string }[] = [];
@@ -50,6 +54,10 @@ export const sendMessages: RequestHandler = async (req, res) => {
 export const sendImageMessages: RequestHandler = async (req, res) => {
     try {
         const session = getInstance(req.params.sessionId)!;
+
+        if (!isUUID(req.params.sessionId)) {
+            return res.status(400).json({ message: 'Invalid sessionId' });
+        }
 
         memoryUpload.single('image')(req, res, async (err) => {
             if (err) {
@@ -104,6 +112,10 @@ export const sendImageMessages: RequestHandler = async (req, res) => {
 export const sendDocumentMessages: RequestHandler = async (req, res) => {
     try {
         const session = getInstance(req.params.sessionId)!;
+
+        if (!isUUID(req.params.sessionId)) {
+            return res.status(400).json({ message: 'Invalid sessionId' });
+        }
 
         memoryUpload.single('document')(req, res, async (err) => {
             if (err) {
@@ -161,6 +173,10 @@ export const sendButton: RequestHandler = async (req, res) => {
         const session = getInstance(req.params.sessionId)!;
         const to = req.body.to;
         const data = req.body.data;
+
+        if (!isUUID(req.params.sessionId)) {
+            return res.status(400).json({ message: 'Invalid sessionId' });
+        }
 
         const result = await sendButtonMessage(session, to, data);
 

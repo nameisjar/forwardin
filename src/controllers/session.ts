@@ -9,6 +9,7 @@ import {
 import prisma from '../utils/db';
 import { generateUuid } from '../utils/keyGenerator';
 import logger from '../config/logger';
+import { isUUID } from '../utils/uuidChecker';
 
 // one device, one session
 // one whatsapp number, multiple devices == one whatsapp number, multiple sessions
@@ -69,6 +70,9 @@ export const createSSE: RequestHandler = async (req, res) => {
 export const getSessionStatus: RequestHandler = async (req, res) => {
     try {
         const session = getInstance(req.params.sessionId)!;
+        if (!isUUID(req.params.sessionId)) {
+            return res.status(400).json({ message: 'Invalid sessionId' });
+        }
         res.status(200).json({ status: getInstanceStatus(session), session });
     } catch (error) {
         logger.error(error);
@@ -141,5 +145,10 @@ export const getSessionsByDeviceApiKey: RequestHandler = async (req, res) => {
 
 export const deleteSession: RequestHandler = async (req, res) => {
     await deleteInstance(req.params.sessionId);
+
+    if (!isUUID(req.params.sessionId)) {
+        return res.status(400).json({ message: 'Invalid sessionId' });
+    }
+
     res.status(200).json({ message: 'Session deleted' });
 };

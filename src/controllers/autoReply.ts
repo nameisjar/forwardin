@@ -7,6 +7,7 @@ import { replaceVariables } from '../utils/variableHelper';
 import { generateSlug } from '../utils/slug';
 import { diskUpload } from '../config/multer';
 import { useAutoReply } from '../utils/quota';
+import { isUUID } from '../utils/uuidChecker';
 
 export const createAutoReplies: RequestHandler = async (req, res) => {
     const subscription = req.subscription;
@@ -132,9 +133,13 @@ export const getAutoReplies: RequestHandler = async (req, res) => {
 };
 
 export const getAutoReply: RequestHandler = async (req, res) => {
-    const id = req.params.id;
-
     try {
+        const id = req.params.id;
+
+        if (!isUUID(id)) {
+            return res.status(400).json({ message: 'Invalid autoReplyId' });
+        }
+
         const autoReply = await prisma.autoReply.findUnique({
             where: { id },
             select: {
@@ -159,9 +164,12 @@ export const getAutoReply: RequestHandler = async (req, res) => {
 };
 
 export const getAutoReplyRecipients: RequestHandler = async (req, res) => {
-    const id = req.params.id;
-
     try {
+        const id = req.params.id;
+
+        if (!isUUID(id)) {
+            return res.status(400).json({ message: 'Invalid autoReplyId' });
+        }
         const autoReply = await prisma.autoReply.findUnique({
             where: { id },
         });
@@ -200,9 +208,13 @@ export const getAutoReplyRecipients: RequestHandler = async (req, res) => {
 };
 
 export const updateAutoReply: RequestHandler = async (req, res) => {
-    const id = req.params.id;
-
     try {
+        const id = req.params.id;
+
+        if (!isUUID(id)) {
+            return res.status(400).json({ message: 'Invalid autoReplyId' });
+        }
+
         diskUpload.single('media')(req, res, async (err: any) => {
             if (err) {
                 return res.status(400).json({ message: 'Error uploading file' });

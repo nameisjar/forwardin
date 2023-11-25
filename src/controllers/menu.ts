@@ -1,6 +1,7 @@
 import { RequestHandler } from 'express';
 import prisma from '../utils/db';
 import logger from '../config/logger';
+import { isUUID } from '../utils/uuidChecker';
 
 export const getMenus: RequestHandler = async (req, res) => {
     try {
@@ -51,6 +52,10 @@ export const getMenusByUserId: RequestHandler = async (req, res) => {
     const isActiveParam = req.query.isActive as string | undefined;
 
     const isActive = isActiveParam === 'true';
+
+    if (!isUUID(userId)) {
+        return res.status(400).json({ message: 'Invalid userId' });
+    }
 
     const user = await prisma.user.findUnique({
         where: { id: userId },

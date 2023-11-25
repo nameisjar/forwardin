@@ -6,6 +6,7 @@ import { replaceVariables } from '../utils/variableHelper';
 import { format, parseISO } from 'date-fns';
 import { utcToZonedTime } from 'date-fns-tz';
 import { sendAutoReply } from './autoReply';
+import { isUUID } from '../utils/uuidChecker';
 
 export const createBusinessHour: RequestHandler = async (req, res) => {
     const {
@@ -66,6 +67,9 @@ export const createBusinessHour: RequestHandler = async (req, res) => {
 
 export const getAllBusinessHours: RequestHandler = async (req, res) => {
     const deviceId = req.params.id;
+    if (!isUUID(deviceId)) {
+        return res.status(400).json({ message: 'Invalid deviceId' });
+    }
 
     const device = await prisma.device.findUnique({
         where: { id: deviceId },

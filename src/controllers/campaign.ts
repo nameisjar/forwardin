@@ -9,6 +9,7 @@ import { replaceVariables } from '../utils/variableHelper';
 import { generateSlug } from '../utils/slug';
 import { getRandomColor } from '../utils/profilePic';
 import { diskUpload } from '../config/multer';
+import { isUUID } from '../utils/uuidChecker';
 
 export const createCampaign: RequestHandler = async (req, res) => {
     try {
@@ -388,6 +389,9 @@ export const getAllCampaigns: RequestHandler = async (req, res) => {
 export const getAllCampaignMessages: RequestHandler = async (req, res) => {
     try {
         const campaignId = req.params.campaignId;
+        if (!isUUID(campaignId)) {
+            return res.status(400).json({ message: 'Invalid campaignId' });
+        }
 
         const campaignMessages = await prisma.campaignMessage.findMany({
             where: { Campaign: { id: campaignId } },
@@ -455,6 +459,9 @@ export const getAllCampaignMessages: RequestHandler = async (req, res) => {
 export const getCampaign: RequestHandler = async (req, res) => {
     try {
         const campaignId = req.params.campaignId;
+        if (!isUUID(campaignId)) {
+            return res.status(400).json({ message: 'Invalid campaignId' });
+        }
 
         const campaign = await prisma.campaign.findUnique({
             where: { id: campaignId },
@@ -489,6 +496,10 @@ export const getOutgoingCampaigns: RequestHandler = async (req, res) => {
     try {
         const campaignId = req.params.campaignId;
         const status = req.query.status as string;
+
+        if (!isUUID(campaignId)) {
+            return res.status(400).json({ message: 'Invalid campaignId' });
+        }
 
         const campaign = await prisma.campaign.findUnique({
             where: { id: campaignId },
@@ -526,6 +537,10 @@ export const getOutgoingCampaigns: RequestHandler = async (req, res) => {
 export const getCampaignReplies: RequestHandler = async (req, res) => {
     try {
         const campaignId = req.params.campaignId;
+
+        if (!isUUID(campaignId)) {
+            return res.status(400).json({ message: 'Invalid campaignId' });
+        }
 
         const campaign = await prisma.campaign.findUnique({
             select: { recipients: true, createdAt: true },
@@ -575,6 +590,10 @@ export const getCampaignMessage: RequestHandler = async (req, res) => {
     try {
         const campaignMessageId = req.params.campaignMessageId;
 
+        if (!isUUID(campaignMessageId)) {
+            return res.status(400).json({ message: 'Invalid campaignMessageId' });
+        }
+
         const campaignMessage = await prisma.campaignMessage.findUnique({
             where: { id: campaignMessageId },
             select: {
@@ -606,6 +625,10 @@ export const getOutgoingCampaignMessages: RequestHandler = async (req, res) => {
     try {
         const campaignMessageId = req.params.campaignMessageId;
         const status = req.query.status as string;
+
+        if (!isUUID(campaignMessageId)) {
+            return res.status(400).json({ message: 'Invalid campaignMessageId' });
+        }
 
         const campaignMessage = await prisma.campaignMessage.findUnique({
             where: { id: campaignMessageId },
@@ -643,6 +666,10 @@ export const getOutgoingCampaignMessages: RequestHandler = async (req, res) => {
 export const getCampaignMessageReplies: RequestHandler = async (req, res) => {
     try {
         const campaignMessageId = req.params.campaignMessageId;
+
+        if (!isUUID(campaignMessageId)) {
+            return res.status(400).json({ message: 'Invalid campaignMessageId' });
+        }
 
         const campaignMessage = await prisma.campaignMessage.findUnique({
             where: { id: campaignMessageId },
@@ -703,8 +730,12 @@ export const getCampaignMessageReplies: RequestHandler = async (req, res) => {
 };
 
 export const updateCampaignMessage: RequestHandler = async (req, res) => {
-    const id = req.params.campaignMessageId;
     try {
+        const id = req.params.campaignMessageId;
+
+        if (!isUUID(id)) {
+            return res.status(400).json({ message: 'Invalid campaignMessageId' });
+        }
         diskUpload.single('media')(req, res, async (err: any) => {
             if (err) {
                 return res.status(400).json({ message: 'Error uploading file' });
@@ -764,8 +795,13 @@ export const deleteCampaignMessages: RequestHandler = async (req, res) => {
 
 // to do: CRUD campaign message template
 export const updateCampaign: RequestHandler = async (req, res) => {
-    const id = req.params.campaignId;
     try {
+        const id = req.params.campaignMessageId;
+
+        if (!isUUID(id)) {
+            return res.status(400).json({ message: 'Invalid campaignMessageId' });
+        }
+
         diskUpload.single('media')(req, res, async (err: any) => {
             if (err) {
                 return res.status(400).json({ message: 'Error uploading file' });

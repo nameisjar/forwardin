@@ -3,6 +3,7 @@ import bcrypt from 'bcrypt';
 import prisma from '../utils/db';
 import logger from '../config/logger';
 import { generateAccessToken, generateRefreshToken } from '../utils/jwtGenerator';
+import { isUUID } from '../utils/uuidChecker';
 
 export const registerCS: RequestHandler = async (req, res) => {
     try {
@@ -119,6 +120,10 @@ export const getCustomerServices: RequestHandler = async (req, res) => {
             where: { id: userId },
         });
 
+        if (!isUUID(userId)) {
+            return res.status(400).json({ message: 'Invalid userId' });
+        }
+
         if (!user) {
             return res.status(404).json({ message: 'User not found' });
         }
@@ -137,6 +142,10 @@ export const updateCS: RequestHandler = async (req, res) => {
     try {
         const { username, email, password, userId, deviceId, confirmPassword } = req.body;
         const csId = req.params.csId;
+
+        if (!isUUID(csId)) {
+            return res.status(400).json({ message: 'Invalid csId' });
+        }
 
         const hashedPassword = await bcrypt.hash(password, 10);
         if (password !== confirmPassword) {

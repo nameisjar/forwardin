@@ -6,6 +6,7 @@ import { generateSlug } from '../utils/slug';
 import { useDevice } from '../utils/quota';
 import fs from 'fs';
 import schedule from 'node-schedule';
+import { isUUID } from '../utils/uuidChecker';
 
 export const getDevices: RequestHandler = async (req, res) => {
     const pkId = req.authenticatedUser.pkId;
@@ -122,6 +123,9 @@ export const createDevice: RequestHandler = async (req, res) => {
 export const getDevice: RequestHandler = async (req, res) => {
     try {
         const deviceId = req.params.deviceId;
+        if (!isUUID(deviceId)) {
+            return res.status(400).json({ message: 'Invalid deviceId' });
+        }
 
         // back here: get session logs
         const device = await prisma.device.findUnique({
@@ -155,6 +159,10 @@ export const updateDevice: RequestHandler = async (req, res) => {
     try {
         const deviceId = req.params.deviceId;
         const { name, labels } = req.body;
+
+        if (!isUUID(deviceId)) {
+            return res.status(400).json({ message: 'Invalid deviceId' });
+        }
 
         await prisma.$transaction(async (transaction) => {
             const existingDevice = await transaction.device.findUnique({

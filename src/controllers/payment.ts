@@ -3,6 +3,7 @@ import prisma from '../utils/db';
 import logger from '../config/logger';
 import axios from 'axios';
 import moment from 'moment-timezone';
+import { isUUID } from '../utils/uuidChecker';
 
 export const pay: RequestHandler = async (req, res) => {
     try {
@@ -327,6 +328,10 @@ export const getSubscription: RequestHandler = async (req, res) => {
     try {
         const subscriptionId = req.params.subscriptionId;
 
+        if (!isUUID(subscriptionId)) {
+            return res.status(400).json({ message: 'Invalid subscriptionId' });
+        }
+
         const subscription = await prisma.subscriptionPlan.findMany({
             where: { isAvailable: true, id: subscriptionId },
             select: {
@@ -367,6 +372,10 @@ export const getTransactions: RequestHandler = async (req, res) => {
 export const getTransactionStatus: RequestHandler = async (req, res) => {
     try {
         const id = req.params.transactionId;
+
+        if (!isUUID(id)) {
+            return res.status(400).json({ message: 'Invalid subscriptionId' });
+        }
 
         const transactions = await prisma.transaction.findUnique({
             where: { id },

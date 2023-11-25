@@ -9,6 +9,7 @@ import { getRecipients } from '../utils/recipients';
 import { replaceVariables } from '../utils/variableHelper';
 import { diskUpload } from '../config/multer';
 import { useBroadcast } from '../utils/quota';
+import { isUUID } from '../utils/uuidChecker';
 
 export const createBroadcast: RequestHandler = async (req, res) => {
     const subscription = req.subscription;
@@ -144,6 +145,10 @@ export const getBroadcast: RequestHandler = async (req, res) => {
     try {
         const broadcastId = req.params.broadcastId;
 
+        if (!isUUID(broadcastId)) {
+            return res.status(400).json({ message: 'Invalid broadcastId' });
+        }
+
         const broadcast = await prisma.broadcast.findUnique({
             where: { id: broadcastId },
             select: {
@@ -172,6 +177,10 @@ export const getOutgoingBroadcasts: RequestHandler = async (req, res) => {
     try {
         const broadcastId = req.params.broadcastId;
         const status = req.query.status as string;
+
+        if (!isUUID(broadcastId)) {
+            return res.status(400).json({ message: 'Invalid broadcastId' });
+        }
 
         const broadcast = await prisma.broadcast.findUnique({
             where: { id: broadcastId },
@@ -209,6 +218,10 @@ export const getOutgoingBroadcasts: RequestHandler = async (req, res) => {
 export const getBrodcastReplies: RequestHandler = async (req, res) => {
     try {
         const broadcastId = req.params.broadcastId;
+
+        if (!isUUID(broadcastId)) {
+            return res.status(400).json({ message: 'Invalid broadcastId' });
+        }
 
         const broadcast = await prisma.broadcast.findUnique({
             select: { recipients: true, createdAt: true },
@@ -258,8 +271,13 @@ export const getBrodcastReplies: RequestHandler = async (req, res) => {
 
 // to do: CRUD broadcast message template
 export const updateBroadcast: RequestHandler = async (req, res) => {
-    const id = req.params.id;
     try {
+        const id = req.params.id;
+
+        if (!isUUID(id)) {
+            return res.status(400).json({ message: 'Invalid broadcastId' });
+        }
+
         diskUpload.single('media')(req, res, async (err: any) => {
             if (err) {
                 return res.status(400).json({ message: 'Error uploading file' });
