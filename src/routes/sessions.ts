@@ -11,5 +11,7 @@ router.delete('/:sessionId/delete', controller.deleteSession);
 router.get('/:sessionId/status', controller.getSessionStatus);
 router.get('/:deviceApiKey/', controller.getSessionsByDeviceApiKey);
 router.get('/', controller.getSessions);
+router.put('/:deviceId/profile', controller.updateSessionProfile);
+router.get('/:deviceId/profile', controller.getSessionProfile);
 
 export default router;

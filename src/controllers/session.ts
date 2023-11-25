@@ -4,6 +4,7 @@ import {
     deleteInstance,
     getInstance,
     getInstanceStatus,
+    getJid,
     verifyInstance,
 } from '../whatsapp';
 import prisma from '../utils/db';
@@ -151,4 +152,94 @@ export const deleteSession: RequestHandler = async (req, res) => {
     }
 
     res.status(200).json({ message: 'Session deleted' });
+};
+
+export const getSessionProfile: RequestHandler = async (req, res) => {
+    try {
+        const deviceId = req.params.deviceId;
+
+        if (!isUUID(req.params.deviceId)) {
+            return res.status(400).json({ message: 'Invalid deviceId' });
+        }
+
+        const device = await prisma.device.findUnique({
+            where: { id: deviceId },
+            select: {
+                name: true,
+                phone: true,
+                sessions: { where: { id: { contains: 'config' } }, select: { sessionId: true } },
+            },
+        });
+
+        if (!device) {
+            return res.status(404).json({ message: 'Device not found' });
+        }
+
+        const sessionId = device.sessions[0].sessionId;
+
+        if (!sessionId) {
+            return res.status(404).json({ message: 'Session not found' });
+        }
+
+        const jid = getJid(device.phone!);
+        const session = getInstance(sessionId)!;
+        const businessProfile = await session.getBusinessProfile(jid);
+        const status = await session.fetchStatus(jid);
+        const user = await session.user;
+
+        // await session.sendPresenceUpdate('available');
+        // session.ev.on('presence.update', ({ presences }) => {
+        //     logger.warn(presences);
+        // });
+        // session.presenceSubscribe(jid);
+
+        res.status(200).json({
+            device,
+            profileName: user?.name,
+            presence: 'available',
+            status: status?.status,
+            address: businessProfile?.address,
+        });
+    } catch (error) {
+        logger.error(error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};
+
+export const updateSessionProfile: RequestHandler = async (req, res) => {
+    try {
+        const deviceId = req.params.deviceId;
+
+        if (!isUUID(req.params.deviceId)) {
+            return res.status(400).json({ message: 'Invalid deviceId' });
+        }
+        const device = await prisma.device.findUnique({
+            where: { id: deviceId },
+            select: {
+                sessions: { where: { id: { contains: 'config' } }, select: { sessionId: true } },
+            },
+        });
+
+        if (!device) {
+            return res.status(404).json({ message: 'Device not found' });
+        }
+
+        const sessionId = device.sessions[0].sessionId;
+
+        if (!sessionId) {
+            return res.status(404).json({ message: 'Session not found' });
+        }
+
+        const session = getInstance(sessionId)!;
+        const { profileName, presence, status } = req.body;
+
+        session.updateProfileName(profileName);
+        session.sendPresenceUpdate(presence);
+        session.updateProfileStatus(status);
+
+        res.status(200).json({ message: 'Session profile updated successfully' });
+    } catch (error) {
+        logger.error(error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
 };
