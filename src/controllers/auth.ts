@@ -32,13 +32,13 @@ export const register: RequestHandler = async (req, res) => {
 
         const existingUser = await prisma.user.findFirst({
             where: {
-                OR: [{ username }, { email }, { phone }],
+                OR: [{ username }, { email }],
             },
         });
         if (existingUser) {
             return res
                 .status(400)
-                .json({ message: 'User with this username, email, or phone already exists' });
+                .json({ message: 'User with this username or email already exists' });
         }
 
         const existingPrivilege = await prisma.privilege.findUnique({
@@ -523,12 +523,12 @@ export const loginRegisterByGoogle: RequestHandler = async (req, res) => {
             const firstName = lastName ? nameParts[1].trim() : nameParts[0].trim();
 
             const deletedUser = await prisma.user.findFirst({
-                where: { OR: [{ email }, { username }, { phone }], NOT: { deletedAt: null } },
+                where: { OR: [{ email }, { username }], NOT: { deletedAt: null } },
             });
 
             // forbid deleted user
-            if (deletedUser && phone) {
-                return res.status(401).json({ message: 'Account not found' });
+            if (deletedUser) {
+                return res.status(401).json({ message: 'Account not found or has been deleted' });
             }
 
             const oAuthRegisteredUser = await prisma.user.findUnique({

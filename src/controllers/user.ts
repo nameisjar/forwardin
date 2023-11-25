@@ -154,7 +154,7 @@ export const changePhoneNumber: RequestHandler = async (req, res) => {
         },
     });
     if (existingUser) {
-        return res.status(400).json({ message: 'User with this email already exists' });
+        return res.status(400).json({ message: 'User with this phone already exists' });
     }
 
     const user = await prisma.user.findUnique({
