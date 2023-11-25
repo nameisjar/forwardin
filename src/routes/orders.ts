@@ -5,7 +5,11 @@ import { checkPrivilege } from '../middleware/auth';
 const router = Router();
 router.use(checkPrivilege('order'));
 
-router.get('/', controller.getOrderMessages);
-router.post('/', controller.createOrderMessages);
+router.post('/', controller.createOrder);
+router.get('/', controller.getOrders);
+router.patch('/:orderId', controller.updateOrderStatus);
+
+router.get('/messages', controller.getOrderMessages);
+router.post('/messages', controller.createOrderMessages);
 
 export default router;

@@ -175,7 +175,6 @@ model Device {
   sessions        Session[]
   autoReplies     AutoReply[]
   campaigns       Campaign[]
-  orders          Order[]
   contactDevices  ContactDevice[]
   DeviceLabel     DeviceLabel[]
   Broadcast       Broadcast[]
@@ -408,20 +407,16 @@ model BusinessHour {
 }
 
 model Order {
-  pkId          Int             @id @default(autoincrement())
-  id            String          @unique @default(uuid()) @db.Uuid
-  name          String          @db.VarChar(128)
-  address       String          @db.VarChar(255)
-  phone         Int
-  delivery_cost Int             @map("delivery_cost")
-  price         Decimal         @map("price") @db.Decimal(10, 2)
-  status        String          @db.VarChar(20)
-  csId          Int
-  cs            CustomerService @relation(fields: [csId], references: [pkId], onDelete: Cascade)
-  createdAt     DateTime        @default(now()) @map("created_at")
-  updatedAt     DateTime        @default(now()) @map("updated_at")
-  Device        Device?         @relation(fields: [devicePkId], references: [pkId])
-  devicePkId    Int?
+  pkId      Int             @id @default(autoincrement())
+  id        String          @unique @default(uuid()) @db.Uuid
+  name      String          @db.VarChar(128)
+  phone     String?
+  orderData String
+  status    String          @default("pending") @db.VarChar(20)
+  csId      Int
+  cs        CustomerService @relation(fields: [csId], references: [pkId], onDelete: Cascade)
+  createdAt DateTime        @default(now()) @map("created_at")
+  updatedAt DateTime        @default(now()) @map("updated_at")
 }
 
 model OrderMessage {
