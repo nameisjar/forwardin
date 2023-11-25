@@ -129,8 +129,8 @@ function isOutsideBusinessHours(
     const day = businessHours[dayKey as keyof BusinessHours];
 
     // start && end are null == available a whole day
-    const startMinutes = day.start !== null ? day.start * 60 : 0;
-    const endMinutes = day.end !== null ? day.end * 60 : 24 * 60;
+    const startMinutes = day.start !== null ? day.start : 0;
+    const endMinutes = day.end !== null ? day.end : 24 * 60;
     const messageMinutes = messageTime.getHours() * 60 + messageTime.getMinutes();
 
     logger.warn(

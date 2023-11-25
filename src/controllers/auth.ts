@@ -523,7 +523,10 @@ export const loginRegisterByGoogle: RequestHandler = async (req, res) => {
             const firstName = lastName ? nameParts[1].trim() : nameParts[0].trim();
 
             const deletedUser = await prisma.user.findFirst({
-                where: { OR: [{ email }, { username }, { phone }], NOT: { deletedAt: null } },
+                where: {
+                    OR: [{ email }, { username }, { phone }],
+                    NOT: { deletedAt: null, phone: null },
+                },
             });
 
             // forbid deleted user
