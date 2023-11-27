@@ -187,7 +187,9 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                                     }
                                 } else {
                                     logger.warn({ sessionId, data }, 'incoming messages');
-                                    sendOutsideBusinessHourMessage(sessionId, message);
+                                    if (!message.key.remoteJid.includes('@g.us')) {
+                                        sendOutsideBusinessHourMessage(sessionId, message);
+                                    }
                                     sendCampaignReply(sessionId, message);
 
                                     const incomingMessage = await prisma.incomingMessage.create({

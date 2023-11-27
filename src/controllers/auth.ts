@@ -32,13 +32,13 @@ export const register: RequestHandler = async (req, res) => {
 
         const existingUser = await prisma.user.findFirst({
             where: {
-                OR: [{ username }, { email }],
+                OR: [{ username }, { email }, { phone }],
             },
         });
         if (existingUser) {
             return res
                 .status(400)
-                .json({ message: 'User with this username or email already exists' });
+                .json({ message: 'User with this username, email, or phone already exists' });
         }
 
         const existingPrivilege = await prisma.privilege.findUnique({
@@ -120,7 +120,7 @@ export const checkIdentifierAvailability: RequestHandler = async (req, res) => {
 const isIdentifierTaken = async (identifier: string) => {
     const existingUser = await prisma.user.findFirst({
         where: {
-            OR: [{ username: identifier }, { email: identifier }],
+            OR: [{ username: identifier }, { email: identifier }, { phone: identifier }],
         },
     });
     return !!existingUser;
@@ -132,13 +132,17 @@ export const login: RequestHandler = async (req, res) => {
 
         const user = await prisma.user.findFirst({
             where: {
-                OR: [{ email: identifier }, { username: identifier }],
-                deletedAt: null,
+                OR: [
+                    { email: identifier, deletedAt: null },
+                    { phone: identifier, deletedAt: null },
+                    { username: identifier, deletedAt: null },
+                    { googleId: identifier, deletedAt: null },
+                ],
             },
         });
 
         if (!user) {
-            return res.status(401).json({ message: 'Account not found' });
+            return res.status(401).json({ message: 'Account not found or has been deleted' });
         }
 
         const passwordMatch = await bcrypt.compare(password, user.password);
@@ -522,12 +526,19 @@ export const loginRegisterByGoogle: RequestHandler = async (req, res) => {
             const lastName = nameParts.length > 1 ? nameParts[0].trim() : null;
             const firstName = lastName ? nameParts[1].trim() : nameParts[0].trim();
 
-            const deletedUser = await prisma.user.findFirst({
-                where: { OR: [{ email }, { username }], NOT: { deletedAt: null } },
+            const user = await prisma.user.findFirst({
+                where: {
+                    OR: [
+                        { email, deletedAt: null },
+                        { phone, deletedAt: null },
+                        { username, deletedAt: null },
+                        { googleId, deletedAt: null },
+                    ],
+                },
             });
 
             // forbid deleted user
-            if (deletedUser) {
+            if (!user) {
                 return res.status(401).json({ message: 'Account not found or has been deleted' });
             }
 
@@ -546,7 +557,9 @@ export const loginRegisterByGoogle: RequestHandler = async (req, res) => {
                     where: { pkId: oAuthRegisteredUser.pkId },
                     data: { refreshToken },
                 });
-                return res.status(200).json({ accessToken, refreshToken, id });
+                return res
+                    .status(200)
+                    .json({ accessToken, refreshToken, id, role: oAuthRegisteredUser.privilegeId });
             }
 
             if (!existingPrivilege) {
