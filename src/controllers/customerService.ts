@@ -130,6 +130,7 @@ export const getCustomerServices: RequestHandler = async (req, res) => {
 
         const customerServices = await prisma.customerService.findMany({
             where: { userId: user.pkId },
+            include: { device: { select: { id: true } } },
         });
         return res.status(200).json(customerServices);
     } catch (error) {

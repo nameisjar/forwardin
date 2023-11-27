@@ -79,7 +79,7 @@ export const getAllBusinessHours: RequestHandler = async (req, res) => {
         return res.status(404).json({ message: 'Device not found' });
     }
     try {
-        const businessHours = await prisma.businessHour.findMany({
+        const businessHours = await prisma.businessHour.findUnique({
             where: {
                 deviceId: device.pkId,
             },
