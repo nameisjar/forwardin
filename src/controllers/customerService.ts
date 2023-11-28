@@ -60,6 +60,7 @@ export const registerCS: RequestHandler = async (req, res) => {
                 userId: user.pkId,
                 deviceId: device.pkId,
             },
+            include: { device: { select: { id: true, sessions: { select: { id: true } } } } },
         });
 
         const accessToken = generateAccessToken(newCS);
@@ -76,6 +77,8 @@ export const registerCS: RequestHandler = async (req, res) => {
             refreshToken,
             id,
             role: newCS.privilegeId,
+            sessionId: newCS.device?.sessions[0]?.id,
+            deviceId: newCS.device?.id,
         });
     } catch (error) {
         logger.error(error);
@@ -91,6 +94,7 @@ export const login: RequestHandler = async (req, res) => {
             where: {
                 OR: [{ email: identifier }, { username: identifier }],
             },
+            include: { device: { select: { id: true, sessions: { select: { id: true } } } } },
         });
 
         if (!cs) {
@@ -106,7 +110,14 @@ export const login: RequestHandler = async (req, res) => {
         const refreshToken = cs.refreshToken;
         const id = cs.id;
 
-        return res.status(200).json({ accessToken, refreshToken, id, role: cs.privilegeId });
+        return res.status(200).json({
+            accessToken,
+            refreshToken,
+            id,
+            role: cs.privilegeId,
+            sessionId: cs.device?.sessions[0]?.id,
+            deviceId: cs.device?.id,
+        });
     } catch (error) {
         logger.error(error);
         res.status(500).json({ message: 'Internal server error' });
