@@ -60,7 +60,9 @@ export const registerCS: RequestHandler = async (req, res) => {
                 userId: user.pkId,
                 deviceId: device.pkId,
             },
-            include: { device: { select: { id: true, sessions: { select: { id: true } } } } },
+            include: {
+                device: { select: { id: true, sessions: { select: { sessionId: true } } } },
+            },
         });
 
         const accessToken = generateAccessToken(newCS);
@@ -77,7 +79,7 @@ export const registerCS: RequestHandler = async (req, res) => {
             refreshToken,
             id,
             role: newCS.privilegeId,
-            sessionId: newCS.device?.sessions[0]?.id,
+            sessionId: newCS.device?.sessions[0]?.sessionId,
             deviceId: newCS.device?.id,
         });
     } catch (error) {
@@ -94,7 +96,9 @@ export const login: RequestHandler = async (req, res) => {
             where: {
                 OR: [{ email: identifier }, { username: identifier }],
             },
-            include: { device: { select: { id: true, sessions: { select: { id: true } } } } },
+            include: {
+                device: { select: { id: true, sessions: { select: { sessionId: true } } } },
+            },
         });
 
         if (!cs) {
@@ -115,7 +119,7 @@ export const login: RequestHandler = async (req, res) => {
             refreshToken,
             id,
             role: cs.privilegeId,
-            sessionId: cs.device?.sessions[0]?.id,
+            sessionId: cs.device?.sessions[0]?.sessionId,
             deviceId: cs.device?.id,
         });
     } catch (error) {
