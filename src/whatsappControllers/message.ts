@@ -13,6 +13,8 @@ import { BaileysEventHandler } from '../types';
 import { sendCampaignReply } from '../controllers/campaign';
 import { sendOutsideBusinessHourMessage } from '../controllers/businessHour';
 import fs from 'fs';
+import { getSocketIO } from '../socket';
+import { Server } from 'socket.io';
 
 const getKeyAuthor = (key: WAMessageKey | undefined | null) =>
     (key?.fromMe ? 'me' : key?.participant || key?.remoteJid) || '';
@@ -90,6 +92,8 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                                     }
                                 }
 
+                                const io: Server = getSocketIO();
+
                                 if (message.key.fromMe) {
                                     logger.warn({ sessionId, data }, 'outgoing messages');
                                     let status;
@@ -128,7 +132,21 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                                             sessionId,
                                             contactId: contact?.pkId || null,
                                         },
+                                        include: {
+                                            contact: {
+                                                select: {
+                                                    firstName: true,
+                                                    lastName: true,
+                                                    colorCode: true,
+                                                },
+                                            },
+                                        },
                                     });
+
+                                    io.emit(
+                                        `message:${sessionId}:${message.key.remoteJid}`,
+                                        outgoingMessage,
+                                    );
 
                                     if (data.message.imageMessage) {
                                         const outputFilePath = data.message.imageMessage.fileName
@@ -201,7 +219,21 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                                             sessionId,
                                             contactId: contact?.pkId || null,
                                         },
+                                        include: {
+                                            contact: {
+                                                select: {
+                                                    firstName: true,
+                                                    lastName: true,
+                                                    colorCode: true,
+                                                },
+                                            },
+                                        },
                                     });
+
+                                    io.emit(
+                                        `message:${sessionId}:${message.key.remoteJid}`,
+                                        incomingMessage,
+                                    );
 
                                     if (data.message.imageMessage) {
                                         const outputFilePath = data.message.imageMessage.fileName

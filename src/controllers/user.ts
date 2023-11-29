@@ -34,6 +34,7 @@ export const getUserProfile: RequestHandler = async (req, res) => {
                 accountApiKey: true,
                 googleId: true,
                 affiliationCode: true,
+                emailVerifiedAt: true,
             },
         });
 
