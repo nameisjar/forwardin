@@ -46,7 +46,7 @@ model CustomerService {
   createdAt    DateTime      @default(now()) @map("created_at")
   updatedAt    DateTime      @default(now()) @map("updated_at")
   userId       Int
-  deviceId     Int?
+  deviceId     Int?          @unique
   privilegeId  Int?          @map("privilege_id")
   user         User          @relation(fields: [userId], references: [pkId], onDelete: Cascade)
   device       Device?       @relation(fields: [deviceId], references: [pkId], onDelete: SetNull)
@@ -162,24 +162,24 @@ model Transaction {
 }
 
 model Device {
-  pkId            Int               @id @default(autoincrement())
-  id              String            @unique @default(uuid()) @db.Uuid
-  name            String            @db.VarChar(128)
-  phone           String?           @db.VarChar(20)
-  apiKey          String            @unique @map("api_key") @db.VarChar(255)
-  status          String            @default("close") @map("status") @db.VarChar(20)
-  createdAt       DateTime          @default(now()) @map("created_at")
-  updatedAt       DateTime          @default(now()) @map("updated_at")
+  pkId            Int              @id @default(autoincrement())
+  id              String           @unique @default(uuid()) @db.Uuid
+  name            String           @db.VarChar(128)
+  phone           String?          @db.VarChar(20)
+  apiKey          String           @unique @map("api_key") @db.VarChar(255)
+  status          String           @default("close") @map("status") @db.VarChar(20)
+  createdAt       DateTime         @default(now()) @map("created_at")
+  updatedAt       DateTime         @default(now()) @map("updated_at")
   userId          Int
-  user            User              @relation(fields: [userId], references: [pkId], onDelete: Cascade)
+  user            User             @relation(fields: [userId], references: [pkId], onDelete: Cascade)
   sessions        Session[]
   autoReplies     AutoReply[]
   campaigns       Campaign[]
   contactDevices  ContactDevice[]
   DeviceLabel     DeviceLabel[]
   Broadcast       Broadcast[]
-  CustomerService CustomerService[]
   BusinessHour    BusinessHour[]
+  CustomerService CustomerService?
 }
 
 model Session {

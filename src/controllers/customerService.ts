@@ -29,7 +29,7 @@ export const registerCS: RequestHandler = async (req, res) => {
         });
         if (!privilege) {
             return res.status(404).json({
-                error: 'Privilege not found',
+                message: 'Privilege not found',
             });
         }
 
@@ -38,7 +38,7 @@ export const registerCS: RequestHandler = async (req, res) => {
         });
         if (!user) {
             return res.status(404).json({
-                error: 'User not found',
+                message: 'User not found',
             });
         }
 
@@ -47,7 +47,13 @@ export const registerCS: RequestHandler = async (req, res) => {
         });
         if (!device) {
             return res.status(404).json({
-                error: 'Device not found',
+                message: 'Device not found',
+            });
+        }
+
+        if (deviceId == device.id) {
+            return res.status(404).json({
+                message: 'Device already assigned to other CS',
             });
         }
 
@@ -128,26 +134,22 @@ export const login: RequestHandler = async (req, res) => {
     }
 };
 
-export const getCustomerServices: RequestHandler = async (req, res) => {
+export const getCustomerService: RequestHandler = async (req, res) => {
     try {
-        const userId = req.params.userId;
-        const user = await prisma.user.findUnique({
-            where: { id: userId },
+        const csId = req.params.csId;
+        const cs = await prisma.customerService.findUnique({
+            where: { id: csId },
         });
 
-        if (!isUUID(userId)) {
+        if (!isUUID(csId)) {
             return res.status(400).json({ message: 'Invalid userId' });
         }
 
-        if (!user) {
-            return res.status(404).json({ message: 'User not found' });
+        if (!cs) {
+            return res.status(404).json({ message: 'CS not found' });
         }
 
-        const customerServices = await prisma.customerService.findMany({
-            where: { userId: user.pkId },
-            include: { device: { select: { id: true } } },
-        });
-        return res.status(200).json(customerServices);
+        return res.status(200).json(cs);
     } catch (error) {
         logger.error(error);
         res.status(500).json({ message: 'Internal server error' });

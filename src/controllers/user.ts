@@ -180,6 +180,32 @@ export const changePhoneNumber: RequestHandler = async (req, res) => {
     return res.status(200).json({ message: 'Phone number changed successfully' });
 };
 
+export const getCustomerServices: RequestHandler = async (req, res) => {
+    try {
+        const userId = req.params.userId;
+        const user = await prisma.user.findUnique({
+            where: { id: userId },
+        });
+
+        if (!isUUID(userId)) {
+            return res.status(400).json({ message: 'Invalid userId' });
+        }
+
+        if (!user) {
+            return res.status(404).json({ message: 'User not found' });
+        }
+
+        const customerServices = await prisma.customerService.findMany({
+            where: { userId: user.pkId },
+            include: { device: { select: { id: true } } },
+        });
+        return res.status(200).json(customerServices);
+    } catch (error) {
+        logger.error(error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};
+
 // back here: delete user > delete device > logout session! > delete contact? > delete group > delete cs > delete subscription > delete transaction
 export const deleteUser: RequestHandler = async (req, res) => {
     try {
