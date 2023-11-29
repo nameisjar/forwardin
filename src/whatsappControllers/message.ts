@@ -135,6 +135,7 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                                         include: {
                                             contact: {
                                                 select: {
+                                                    id: true,
                                                     firstName: true,
                                                     lastName: true,
                                                     colorCode: true,
@@ -142,11 +143,6 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                                             },
                                         },
                                     });
-
-                                    io.emit(
-                                        `message:${sessionId}:${message.key.remoteJid}`,
-                                        outgoingMessage,
-                                    );
 
                                     if (data.message.imageMessage) {
                                         const outputFilePath = data.message.imageMessage.fileName
@@ -203,6 +199,8 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                                             data: { mediaPath: outputFilePath },
                                         });
                                     }
+
+                                    io.emit(`message:${sessionId}`, outgoingMessage);
                                 } else {
                                     logger.warn({ sessionId, data }, 'incoming messages');
                                     if (!message.key.remoteJid.includes('@g.us')) {
@@ -222,6 +220,7 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                                         include: {
                                             contact: {
                                                 select: {
+                                                    id: true,
                                                     firstName: true,
                                                     lastName: true,
                                                     colorCode: true,
@@ -229,11 +228,6 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                                             },
                                         },
                                     });
-
-                                    io.emit(
-                                        `message:${sessionId}:${message.key.remoteJid}`,
-                                        incomingMessage,
-                                    );
 
                                     if (data.message.imageMessage) {
                                         const outputFilePath = data.message.imageMessage.fileName
@@ -289,6 +283,8 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                                             data: { mediaPath: outputFilePath },
                                         });
                                     }
+
+                                    io.emit(`message:${sessionId}`, incomingMessage);
                                 }
                             }
                             //   const chatExists = (await prisma.chat.count({ where: { id: jid, sessionId } })) > 0;
