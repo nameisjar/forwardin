@@ -15,13 +15,13 @@ export const registerCS: RequestHandler = async (req, res) => {
 
         const existingCS = await prisma.customerService.findFirst({
             where: {
-                OR: [{ email }, { username }],
+                OR: [{ email }, { username }, { device: { id: deviceId } }],
             },
         });
         if (existingCS) {
             return res
                 .status(400)
-                .json({ message: 'CS with this email or username already exists' });
+                .json({ message: 'CS with this email, username, or deviceId already exists' });
         }
 
         const privilege = await prisma.privilege.findUnique({
@@ -48,12 +48,6 @@ export const registerCS: RequestHandler = async (req, res) => {
         if (!device) {
             return res.status(404).json({
                 message: 'Device not found',
-            });
-        }
-
-        if (deviceId == device.id) {
-            return res.status(404).json({
-                message: 'Device already assigned to other CS',
             });
         }
 
