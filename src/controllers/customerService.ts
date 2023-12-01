@@ -139,6 +139,7 @@ export const getCustomerService: RequestHandler = async (req, res) => {
         const csId = req.params.csId;
         const cs = await prisma.customerService.findUnique({
             where: { id: csId },
+            include: { user: { select: { id: true, firstName: true, lastName: true } } },
         });
 
         if (!isUUID(csId)) {
