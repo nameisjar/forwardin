@@ -184,7 +184,6 @@ export const changePhoneNumber: RequestHandler = async (req, res) => {
 export const getCustomerServices: RequestHandler = async (req, res) => {
     try {
         const userId = req.params.userId;
-        const privilegeId = req.privilege.pkId;
         const user = await prisma.user.findUnique({
             where: { id: userId },
         });
@@ -197,19 +196,10 @@ export const getCustomerServices: RequestHandler = async (req, res) => {
             return res.status(404).json({ message: 'User not found' });
         }
 
-        let customerServices;
-        if (privilegeId == Number(process.env.SUPER_ADMIN_ID)) {
-            customerServices = await prisma.customerService.findMany({
-                where: { userId: user.pkId ?? undefined },
-                include: { device: { select: { id: true } } },
-            });
-        } else {
-            customerServices = await prisma.customerService.findMany({
-                where: { userId: user.pkId },
-                include: { device: { select: { id: true } } },
-            });
-        }
-
+        const customerServices = await prisma.customerService.findMany({
+            where: { userId: user.pkId },
+            include: { device: { select: { id: true } } },
+        });
         return res.status(200).json(customerServices);
     } catch (error) {
         logger.error(error);
