@@ -44,3 +44,23 @@ export const getTemplates: RequestHandler = async (req, res) => {
         res.status(500).json({ message: 'Internal server error' });
     }
 };
+
+export const deleteTemplates: RequestHandler = async (req, res) => {
+    const templateIds = req.body.templateIds;
+
+    try {
+        const templatePromises = templateIds.map(async (templateId: string) => {
+            await prisma.template.delete({
+                where: { id: templateId },
+            });
+        });
+
+        // wait for all the Promises to settle (either resolve or reject)
+        await Promise.all(templatePromises);
+
+        res.status(200).json({ message: 'Template(s) deleted successfully' });
+    } catch (error) {
+        logger.error(error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};

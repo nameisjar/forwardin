@@ -88,6 +88,7 @@ async function seedPrivileges(prisma: PrismaClient, logger: Logger) {
                 const isRead =
                     isSuperAdmin ||
                     (isCS && isCsController) ||
+                    ['contact'].includes(controllerName) ||
                     (!isSuperAdmin && !isCS && !isSuperAdminOnlyController);
                 const isEdit =
                     isSuperAdmin ||

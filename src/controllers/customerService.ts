@@ -233,3 +233,23 @@ export const updateCS: RequestHandler = async (req, res) => {
         res.status(500).json({ message: 'Internal server error' });
     }
 };
+
+export const deleteCS: RequestHandler = async (req, res) => {
+    const csIds = req.body.csIds;
+
+    try {
+        const csPromises = csIds.map(async (csId: string) => {
+            await prisma.customerService.delete({
+                where: { id: csId },
+            });
+        });
+
+        // wait for all the Promises to settle (either resolve or reject)
+        await Promise.all(csPromises);
+
+        res.status(200).json({ message: 'Customer service(s) deleted successfully' });
+    } catch (error) {
+        logger.error(error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};

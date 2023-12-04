@@ -7,5 +7,6 @@ const router = express.Router();
 router.use(checkPrivilege('template'));
 router.post('/', controller.createTemplate);
 router.get('/', controller.getTemplates);
+router.delete('/', controller.deleteTemplates);
 
 export default router;

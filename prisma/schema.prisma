@@ -311,6 +311,11 @@ model IncomingMessage {
   contact    Contact? @relation(fields: [contactId], references: [pkId], onDelete: Cascade)
 }
 
+model messageNotification {
+  
+  isRead boolean
+}
+
 model Broadcast {
   pkId       Int      @id @default(autoincrement())
   id         String   @unique @default(uuid()) @db.Uuid

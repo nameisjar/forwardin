@@ -12,5 +12,6 @@ router.use(checkPrivilege('customerService'));
 router.post('/register', passwordRules, validate, controller.registerCS);
 router.get('/:csId', controller.getCustomerService);
 router.put('/:csId', controller.updateCS);
+router.delete('/', controller.deleteCS);
 
 export default router;
