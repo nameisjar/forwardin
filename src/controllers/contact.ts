@@ -402,6 +402,28 @@ export const getContacts: RequestHandler = async (req, res) => {
                     },
                 },
             });
+        } else if (privilegeId == Number(process.env.CS_ID)) {
+            contacts = await prisma.contact.findMany({
+                where: {
+                    contactDevices: {
+                        some: {
+                            device: {
+                                id: deviceId ?? undefined,
+                                CustomerService: { pkId },
+                            },
+                        },
+                    },
+                },
+                include: {
+                    ContactLabel: {
+                        select: {
+                            label: {
+                                select: { name: true },
+                            },
+                        },
+                    },
+                },
+            });
         } else {
             contacts = await prisma.contact.findMany({
                 where: {
