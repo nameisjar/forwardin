@@ -89,18 +89,24 @@ export async function createInstance(options: createInstanceOptions) {
             await Promise.all([
                 logout && sock.logout(),
 
-                // uncomment code below to delete them if the session logout
                 // prisma.chat.deleteMany({ where: { sessionId } }),
+                // prisma.groupMetadata.deleteMany({ where: { sessionId } }),
+
                 // prisma.contact.deleteMany({
                 //     where: {
                 //         contactDevices: { some: { device: { sessions: { some: { sessionId } } } } },
                 //     },
                 // }),
-                // prisma.message.deleteMany({ where: { sessionId } }),
-                // prisma.groupMetadata.deleteMany({ where: { sessionId } }),
-                // prisma.incomingMessage.deleteMany({ where: { sessionId } }),
-                // prisma.outgoingMessage.deleteMany({ where: { sessionId } }),
 
+                prisma.message.updateMany({ where: { sessionId }, data: { sessionId: 'del' } }),
+                prisma.incomingMessage.updateMany({
+                    where: { sessionId },
+                    data: { sessionId: 'del' },
+                }),
+                prisma.outgoingMessage.updateMany({
+                    where: { sessionId },
+                    data: { sessionId: 'del' },
+                }),
                 prisma.session.deleteMany({ where: { sessionId } }),
                 fs.rm(subDirectoryPath, { recursive: true }, (err) => {
                     if (err) {
