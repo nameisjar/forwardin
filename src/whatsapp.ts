@@ -98,14 +98,14 @@ export async function createInstance(options: createInstanceOptions) {
                 //     },
                 // }),
 
-                prisma.message.updateMany({ where: { sessionId }, data: { sessionId: 'del' } }),
+                prisma.message.updateMany({ where: { sessionId }, data: { sessionId: null } }),
                 prisma.incomingMessage.updateMany({
                     where: { sessionId },
-                    data: { sessionId: 'del' },
+                    data: { sessionId: null },
                 }),
                 prisma.outgoingMessage.updateMany({
                     where: { sessionId },
-                    data: { sessionId: 'del' },
+                    data: { sessionId: null },
                 }),
                 prisma.session.deleteMany({ where: { sessionId } }),
                 fs.rm(subDirectoryPath, { recursive: true }, (err) => {

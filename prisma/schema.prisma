@@ -290,7 +290,7 @@ model OutgoingMessage {
   status    String   @db.VarChar(20)
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @default(now()) @map("updated_at")
-  sessionId String
+  sessionId String?
   contactId Int?
   contact   Contact? @relation(fields: [contactId], references: [pkId], onDelete: Cascade)
 
@@ -306,14 +306,9 @@ model IncomingMessage {
   receivedAt DateTime @map("received_at")
   createdAt  DateTime @default(now()) @map("created_at")
   updatedAt  DateTime @default(now()) @map("updated_at")
-  sessionId  String
+  sessionId  String?
   contactId  Int?
   contact    Contact? @relation(fields: [contactId], references: [pkId], onDelete: Cascade)
-}
-
-model messageNotification {
-  
-  isRead boolean
 }
 
 model Broadcast {
@@ -459,7 +454,7 @@ model PasswordReset {
 
 model Message {
   pkId                            BigInt   @id @default(autoincrement())
-  sessionId                       String
+  sessionId                       String?
   remoteJid                       String
   id                              String
   agentId                         String?
