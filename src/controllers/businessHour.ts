@@ -106,7 +106,7 @@ export const updateBusinessHour: RequestHandler = async (req, res) => {
             return res.status(404).json({ message: 'Device not found' });
         }
         const businessHour = await prisma.businessHour.update({
-            where: { id: deviceId },
+            where: { deviceId: device.pkId },
             data: {
                 message,
                 monStart,
