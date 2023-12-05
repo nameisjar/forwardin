@@ -7,5 +7,6 @@ const router = express.Router();
 router.use(checkPrivilege('businessHour'));
 router.post('/', controller.createBusinessHour);
 router.get('/:id', controller.getAllBusinessHours);
+router.put('/', controller.updateBusinessHour);
 
 export default router;

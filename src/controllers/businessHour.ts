@@ -36,7 +36,77 @@ export const createBusinessHour: RequestHandler = async (req, res) => {
         if (!device) {
             return res.status(404).json({ message: 'Device not found' });
         }
+
+        const createdBusinessHour = await prisma.businessHour.findFirst({
+            where: { deviceId: device.pkId },
+        });
+
+        if (createdBusinessHour) {
+            return res
+                .status(400)
+                .json({ message: 'Business hour for this device already created' });
+        }
+
         const businessHour = await prisma.businessHour.create({
+            data: {
+                message,
+                monStart,
+                monEnd,
+                tueStart,
+                tueEnd,
+                wedStart,
+                wedEnd,
+                thuStart,
+                thuEnd,
+                friStart,
+                friEnd,
+                satStart,
+                satEnd,
+                sunStart,
+                sunEnd,
+                timeZone,
+                deviceId: device.pkId,
+            },
+        });
+
+        res.status(201).json(businessHour);
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};
+
+export const updateBusinessHour: RequestHandler = async (req, res) => {
+    const {
+        message,
+        monStart,
+        monEnd,
+        tueStart,
+        tueEnd,
+        wedStart,
+        wedEnd,
+        thuStart,
+        thuEnd,
+        friStart,
+        friEnd,
+        satStart,
+        satEnd,
+        sunStart,
+        sunEnd,
+        deviceId,
+        timeZone,
+    } = req.body;
+
+    try {
+        const device = await prisma.device.findUnique({
+            where: { id: deviceId },
+        });
+
+        if (!device) {
+            return res.status(404).json({ message: 'Device not found' });
+        }
+        const businessHour = await prisma.businessHour.update({
+            where: { id: deviceId },
             data: {
                 message,
                 monStart,
