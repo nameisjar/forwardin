@@ -495,6 +495,7 @@ export const googleAuthCallback: RequestHandler = (req, res, next) => {
     })(req, res, next);
 };
 
+// back here: separate email account & oAuth google email
 export const loginRegisterByGoogle: RequestHandler = async (req, res) => {
     const accessToken = req.body.accessToken;
     const apiEndpoint =
