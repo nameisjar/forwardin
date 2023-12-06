@@ -11,6 +11,7 @@ import { diskUpload } from '../config/multer';
 import { useBroadcast } from '../utils/quota';
 import { isUUID } from '../utils/uuidChecker';
 
+// back here: add deviceId param checker
 export const createBroadcast: RequestHandler = async (req, res) => {
     const subscription = req.subscription;
     try {

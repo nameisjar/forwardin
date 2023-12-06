@@ -11,6 +11,7 @@ import { getRandomColor } from '../utils/profilePic';
 import { diskUpload } from '../config/multer';
 import { isUUID } from '../utils/uuidChecker';
 
+// back here: add deviceId param checker
 export const createCampaign: RequestHandler = async (req, res) => {
     try {
         diskUpload.single('media')(req, res, async (err: any) => {
@@ -131,6 +132,7 @@ export const createCampaign: RequestHandler = async (req, res) => {
     }
 };
 
+// back here: add deviceId param checker
 export const createCampaignMessage: RequestHandler = async (req, res) => {
     try {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -147,7 +149,7 @@ export const createCampaignMessage: RequestHandler = async (req, res) => {
             });
 
             if (!campaign) {
-                res.status(404).json({ message: { message: 'Campaign not found' } });
+                res.status(404).json({ message: 'Campaign not found' });
             } else {
                 await prisma.campaignMessage.create({
                     data: {

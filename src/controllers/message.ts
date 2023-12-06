@@ -380,6 +380,7 @@ export const getMessengerList: RequestHandler = async (req, res) => {
         const incomingMessages = await prisma.incomingMessage.findMany({
             where: {
                 sessionId,
+                NOT: { from: { contains: '@g.us' } },
             },
             select: { from: true, createdAt: true, contact: true },
         });
@@ -387,6 +388,7 @@ export const getMessengerList: RequestHandler = async (req, res) => {
         const outgoingMessages = await prisma.outgoingMessage.findMany({
             where: {
                 sessionId,
+                NOT: { to: { contains: '@g.us' } },
             },
             select: { to: true, createdAt: true, contact: true },
         });
