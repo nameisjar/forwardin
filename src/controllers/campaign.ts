@@ -1100,7 +1100,7 @@ schedule.scheduleJob('*', async () => {
                         }
                     });
                 } else if (recipient.includes('label')) {
-                    const contactLabel = recipient.split('_')[1];
+                    const contactLabel = recipient.split('label_')[1];
 
                     const contacts = await prisma.contact.findMany({
                         where: {
@@ -1115,7 +1115,7 @@ schedule.scheduleJob('*', async () => {
                         }
                     });
                 } else if (recipient.includes('group')) {
-                    const groupName = recipient.split('_')[1];
+                    const groupName = recipient.split('group_')[1];
                     const group = await prisma.group.findFirst({
                         where: {
                             contactGroups: {
