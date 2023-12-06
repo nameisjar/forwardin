@@ -11,6 +11,7 @@ router.get('/', controller.getAutoReplies);
 router.get('/:id', controller.getAutoReply);
 router.get('/:id/recipients', controller.getAutoReplyRecipients);
 router.put('/:id', controller.updateAutoReply);
+router.patch('/:id/status', controller.updateAutoReplyStatus);
 router.delete('/', controller.deleteAutoReplies);
 
 export default router;

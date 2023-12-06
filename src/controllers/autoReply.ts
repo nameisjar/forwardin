@@ -259,8 +259,31 @@ export const updateAutoReply: RequestHandler = async (req, res) => {
                 },
             });
 
-            res.json(updatedAutoReply);
+            res.status(200).json(updatedAutoReply);
         });
+    } catch (error) {
+        logger.error(error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};
+
+export const updateAutoReplyStatus: RequestHandler = async (req, res) => {
+    try {
+        const id = req.params.id;
+        const status = req.body.status;
+
+        if (!isUUID(id)) {
+            return res.status(400).json({ message: 'Invalid autoReplyId' });
+        }
+        const updatedAutoReply = await prisma.autoReply.update({
+            where: { id },
+            data: {
+                status,
+                updatedAt: new Date(),
+            },
+        });
+
+        res.status(200).json(updatedAutoReply);
     } catch (error) {
         logger.error(error);
         res.status(500).json({ message: 'Internal server error' });
