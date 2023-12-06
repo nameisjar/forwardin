@@ -381,19 +381,20 @@ export const getMessengerList: RequestHandler = async (req, res) => {
             where: {
                 sessionId,
             },
-            select: { from: true, createdAt: true },
+            select: { from: true, createdAt: true, contact: true },
         });
 
         const outgoingMessages = await prisma.outgoingMessage.findMany({
             where: {
                 sessionId,
             },
-            select: { to: true, createdAt: true },
+            select: { to: true, createdAt: true, contact: true },
         });
 
         type Message = {
             from?: string;
             createdAt: Date;
+            contact?: unknown;
             to?: string;
             phone?: string;
         };
@@ -420,11 +421,11 @@ export const getMessengerList: RequestHandler = async (req, res) => {
         const uniqueRecipients = new Map();
 
         for (const message of allMessages) {
-            const { createdAt, phone } = message;
+            const { createdAt, phone, contact } = message;
 
             // Incoming message
             if (!uniqueRecipients.has(phone) || uniqueRecipients.get(phone).createdAt < createdAt) {
-                uniqueRecipients.set(phone, { createdAt });
+                uniqueRecipients.set(phone, { createdAt, contact });
             }
         }
 
@@ -432,6 +433,7 @@ export const getMessengerList: RequestHandler = async (req, res) => {
         const uniqueMessages = Array.from(uniqueRecipients, ([key, value]) => ({
             phone: key.split('@')[0],
             createdAt: value.createdAt,
+            contact: value.contact,
         }));
 
         // Apply pagination
@@ -456,6 +458,3 @@ export const getMessengerList: RequestHandler = async (req, res) => {
         res.status(500).json({ message: 'Internal server error' });
     }
 };
-// to do: send template message & personalization
-// to do: auto reply (triggered by certain words)
-// to do: scheduled send message(s)
