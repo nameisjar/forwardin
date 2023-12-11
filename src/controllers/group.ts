@@ -10,7 +10,14 @@ export const getGroups: RequestHandler = async (req, res) => {
     try {
         const rawGroups = await prisma.group.findMany({
             where: {
-                userId: privilegeId !== Number(process.env.SUPER_ADMIN_ID) ? userId : undefined,
+                userId: privilegeId !== Number(process.env.ADMIN_ID) ? undefined : userId,
+                user: {
+                    customerServices: {
+                        some: {
+                            pkId: privilegeId !== Number(process.env.CS_ID) ? undefined : userId,
+                        },
+                    },
+                },
             },
             include: { contactGroups: true },
         });

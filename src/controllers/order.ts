@@ -32,6 +32,37 @@ export const createOrderMessages: RequestHandler = async (req, res) => {
     }
 };
 
+export const updateOrderMessages: RequestHandler = async (req, res) => {
+    try {
+        const { orderTemplate, welcomeMessage, processMessage, completeMessage } = req.body;
+        const csId = req.authenticatedUser.pkId;
+        const orderMessageId = req.params.orderMessageId;
+
+        const existingOrderMessage = await prisma.orderMessage.findUnique({
+            where: { id: orderMessageId },
+        });
+
+        if (!existingOrderMessage) {
+            return res.status(400).json({ message: 'Order message not found' });
+        }
+        await prisma.orderMessage.update({
+            where: { id: orderMessageId },
+            data: {
+                csId,
+                orderTemplate,
+                welcomeMessage,
+                processMessage,
+                completeMessage,
+            },
+        });
+
+        res.status(201).json({ message: 'Order message updated successfully' });
+    } catch (error) {
+        logger.error(error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};
+
 export const getOrderMessages: RequestHandler = async (req, res) => {
     try {
         const csId = req.authenticatedUser.pkId;
@@ -41,7 +72,7 @@ export const getOrderMessages: RequestHandler = async (req, res) => {
                 csId,
             },
         });
-        res.status(200).json(orderMessage);
+        res.status(200).json(orderMessage ?? []);
     } catch (error) {
         logger.error(error);
         res.status(500).json({ message: 'Internal server error' });

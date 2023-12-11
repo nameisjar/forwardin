@@ -11,5 +11,6 @@ router.patch('/:orderId', controller.updateOrderStatus);
 
 router.get('/messages', controller.getOrderMessages);
 router.post('/messages', controller.createOrderMessages);
+router.put('/messages/:orderMessageId', controller.updateOrderMessages);
 
 export default router;
