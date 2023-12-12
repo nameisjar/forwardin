@@ -81,6 +81,7 @@ async function seedPrivileges(prisma: PrismaClient, logger: Logger) {
                 const isCreate =
                     isSuperAdmin ||
                     (isCS && isCsController) ||
+                    ['session'].includes(controllerName) ||
                     (!isSuperAdmin &&
                         !isCS &&
                         !isSuperAdminOnlyController &&
