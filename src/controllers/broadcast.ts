@@ -309,7 +309,6 @@ export const updateBroadcast: RequestHandler = async (req, res) => {
             if (!device.sessions[0]) {
                 return res.status(404).json({ message: 'Session not found' });
             }
-            // back here: what is status for?
             await prisma.broadcast.update({
                 where: { id },
                 data: {

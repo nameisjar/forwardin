@@ -297,7 +297,6 @@ export const deleteDevices: RequestHandler = async (req, res) => {
                     contactDevices: { some: { device: { id: deviceId } } },
                 },
             }),
-                // back here: delete unused labels regularly
                 await prisma.label.deleteMany({
                     where: {
                         NOT: {

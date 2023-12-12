@@ -692,7 +692,6 @@ export const deleteContacts: RequestHandler = async (req, res) => {
                 },
             });
 
-            // back here: delete unused labels regularly
             await prisma.label.deleteMany({
                 where: {
                     NOT: {
@@ -765,7 +764,7 @@ export const addContactToGroup: RequestHandler = async (req, res) => {
     }
 };
 
-// back here: replace 0 to 62
+// back here: replace 0 to country code format (such as: +62)
 export const syncGoogle: RequestHandler = async (req, res) => {
     const accessToken = req.body.accessToken;
     const deviceId = req.body.deviceId;

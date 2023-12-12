@@ -298,7 +298,6 @@ export const subscribeToTrial: RequestHandler = async (req, res) => {
     }
 };
 
-// back here: move to subscription plan controller
 export const getSubscriptions: RequestHandler = async (req, res) => {
     try {
         const subscriptions = await prisma.subscriptionPlan.findMany({

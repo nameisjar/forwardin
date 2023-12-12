@@ -43,7 +43,6 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
         }
     };
 
-    // back here: check the type: campaign? broadcast? dm?
     const upsert: BaileysEventHandler<'messages.upsert'> = async ({ messages, type }) => {
         switch (type) {
             case 'append':
@@ -306,7 +305,6 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
         }
     };
 
-    // back here: update the timestamp
     const update: BaileysEventHandler<'messages.update'> = async (updates) => {
         for (const { update, key } of updates) {
             try {
@@ -379,7 +377,7 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                                         sessionId,
                                     },
                                 },
-                                data: { status },
+                                data: { status, updatedAt: new Date() },
                             });
                         }
                     });

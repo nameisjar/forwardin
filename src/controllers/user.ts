@@ -187,6 +187,7 @@ export const getCustomerServices: RequestHandler = async (req, res) => {
         const user = await prisma.user.findUnique({
             where: { id: userId },
         });
+        const privilegeId = req.privilege.pkId;
 
         if (!isUUID(userId)) {
             return res.status(400).json({ message: 'Invalid userId' });
@@ -197,7 +198,9 @@ export const getCustomerServices: RequestHandler = async (req, res) => {
         }
 
         const customerServices = await prisma.customerService.findMany({
-            where: { userId: user.pkId },
+            where: {
+                userId: privilegeId !== Number(process.env.SUPER_ADMIN_ID) ? user.pkId : undefined,
+            },
             include: { device: { select: { id: true } } },
         });
         return res.status(200).json(customerServices);
@@ -207,7 +210,8 @@ export const getCustomerServices: RequestHandler = async (req, res) => {
     }
 };
 
-// back here: delete user > delete device > logout session! > delete contact? > delete group > delete cs > delete subscription > delete transaction
+// back here: delete user > delete device > logout session! > delete contact?
+// > delete group > delete cs > delete subscription > delete transaction
 export const deleteUser: RequestHandler = async (req, res) => {
     try {
         const userId = req.params.userId;

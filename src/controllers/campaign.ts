@@ -1083,7 +1083,7 @@ schedule.scheduleJob('*', async () => {
             },
         });
 
-        // back here: processedRecipients
+        // back here: fix processedRecipients
         for (const campaign of pendingCampaigns) {
             const processedRecipients: (string | number)[] = [];
             const session = getInstance(campaign.device.sessions[0].sessionId)!;
