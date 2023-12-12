@@ -172,7 +172,6 @@ export const createCampaignMessage: RequestHandler = async (req, res) => {
 };
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-// !!!back here: handle send campaign to group, label
 export async function sendCampaignReply(sessionId: any, data: any) {
     try {
         const session = getInstance(sessionId)!;
@@ -187,10 +186,12 @@ export async function sendCampaignReply(sessionId: any, data: any) {
             '';
 
         console.log(phoneNumber);
+        // !!!back here: handle send campaign to group, label
         const matchingCampaign = await prisma.campaign.findFirst({
             where: {
                 AND: [
                     {
+                        isSent: false,
                         OR: [
                             {
                                 registrationSyntax: {
@@ -229,8 +230,6 @@ export async function sendCampaignReply(sessionId: any, data: any) {
                                     has: phoneNumber,
                                 },
                             },
-                            // contact labels
-                            // groups
                         ],
                     },
                 ],

@@ -332,6 +332,7 @@ export async function sendAutoReply(sessionId: any, data: any) {
             data.message?.imageMessage?.caption ||
             '';
 
+        // !!!back here: handle send campaign to group, label
         const matchingAutoReply = await prisma.autoReply.findFirst({
             where: {
                 AND: [

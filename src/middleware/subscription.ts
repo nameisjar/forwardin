@@ -3,9 +3,19 @@ import prisma from '../utils/db';
 
 export const checkSubscriptionQuota: RequestHandler = async (req, res, next) => {
     const userId = req.authenticatedUser.pkId;
+    const privilegeId = req.privilege.pkId;
 
     const subscription = await prisma.subscription.findFirst({
-        where: { userId },
+        where: {
+            userId: privilegeId !== Number(process.env.CS_ID) ? userId : undefined,
+            user: {
+                customerServices: {
+                    some: {
+                        pkId: privilegeId !== Number(process.env.CS_ID) ? undefined : userId,
+                    },
+                },
+            },
+        },
         orderBy: { startDate: 'desc' },
     });
 
