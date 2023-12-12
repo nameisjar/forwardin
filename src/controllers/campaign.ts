@@ -191,7 +191,6 @@ export async function sendCampaignReply(sessionId: any, data: any) {
             where: {
                 AND: [
                     {
-                        isSent: false,
                         OR: [
                             {
                                 registrationSyntax: {
@@ -368,7 +367,7 @@ export const getAllCampaigns: RequestHandler = async (req, res) => {
         const userId = req.authenticatedUser.pkId;
         const privilegeId = req.privilege.pkId;
 
-        // !!!back here: show subs count
+        // ?back here: show subs count
         const campaigns = await prisma.campaign.findMany({
             where: {
                 device: {
@@ -385,7 +384,7 @@ export const getAllCampaigns: RequestHandler = async (req, res) => {
                 device: { select: { name: true } },
                 createdAt: true,
                 updatedAt: true,
-                // group: { select: { _count: { select: { contactGroups: true } } } },
+                group: { select: { _count: { select: { contactGroups: true } } } },
             },
         });
 
