@@ -32,7 +32,7 @@ export const createOrderMessages: RequestHandler = async (req, res) => {
     }
 };
 
-export const updateOrderMessages: RequestHandler = async (req, res) => {
+export const updateOrderMessage: RequestHandler = async (req, res) => {
     try {
         const { orderTemplate, welcomeMessage, processMessage, completeMessage } = req.body;
         const csId = req.authenticatedUser.pkId;
@@ -63,7 +63,7 @@ export const updateOrderMessages: RequestHandler = async (req, res) => {
     }
 };
 
-export const getOrderMessages: RequestHandler = async (req, res) => {
+export const getOrderMessage: RequestHandler = async (req, res) => {
     try {
         const csId = req.authenticatedUser.pkId;
 
@@ -72,7 +72,7 @@ export const getOrderMessages: RequestHandler = async (req, res) => {
                 csId,
             },
         });
-        res.status(200).json(orderMessage ?? []);
+        res.status(200).json(orderMessage);
     } catch (error) {
         logger.error(error);
         res.status(500).json({ message: 'Internal server error' });

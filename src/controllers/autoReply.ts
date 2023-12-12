@@ -81,7 +81,15 @@ export const getAutoReplies: RequestHandler = async (req, res) => {
         const autoRepliesRaw = await prisma.autoReply.findMany({
             where: {
                 device: {
-                    userId: privilegeId !== Number(process.env.SUPER_ADMIN_ID) ? userId : undefined,
+                    userId: privilegeId !== Number(process.env.ADMIN_ID) ? undefined : userId,
+                    user: {
+                        customerServices: {
+                            some: {
+                                pkId:
+                                    privilegeId !== Number(process.env.CS_ID) ? undefined : userId,
+                            },
+                        },
+                    },
                     id: deviceId,
                 },
             },

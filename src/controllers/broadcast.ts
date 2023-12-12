@@ -270,7 +270,6 @@ export const getBrodcastReplies: RequestHandler = async (req, res) => {
     }
 };
 
-// to do: CRUD broadcast message template
 export const updateBroadcast: RequestHandler = async (req, res) => {
     try {
         const id = req.params.id;

@@ -9,8 +9,8 @@ router.post('/', controller.createOrder);
 router.get('/', controller.getOrders);
 router.patch('/:orderId', controller.updateOrderStatus);
 
-router.get('/messages', controller.getOrderMessages);
+router.get('/messages', controller.getOrderMessage);
 router.post('/messages', controller.createOrderMessages);
-router.put('/messages/:orderMessageId', controller.updateOrderMessages);
+router.put('/messages/:orderMessageId', controller.updateOrderMessage);
 
 export default router;

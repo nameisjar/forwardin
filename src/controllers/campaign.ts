@@ -172,6 +172,7 @@ export const createCampaignMessage: RequestHandler = async (req, res) => {
 };
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
+// !!!back here: handle send campaign to group, label
 export async function sendCampaignReply(sessionId: any, data: any) {
     try {
         const session = getInstance(sessionId)!;
@@ -184,8 +185,8 @@ export async function sendCampaignReply(sessionId: any, data: any) {
             data.message?.extendedTextMessage?.text ||
             data.message?.imageMessage?.caption ||
             '';
-        // const parts = messageText.split('#');
-        // const prefix = parts[0] + '#' + parts[1];
+
+        console.log(phoneNumber);
         const matchingCampaign = await prisma.campaign.findFirst({
             where: {
                 AND: [
@@ -207,11 +208,13 @@ export async function sendCampaignReply(sessionId: any, data: any) {
                     },
                     {
                         OR: [
+                            // all numbers
                             {
                                 recipients: {
                                     has: '*',
                                 },
                             },
+                            // all forwardin contacts
                             {
                                 recipients: {
                                     has: 'all',
@@ -220,11 +223,14 @@ export async function sendCampaignReply(sessionId: any, data: any) {
                                     contactDevices: { some: { contact: { phone: phoneNumber } } },
                                 },
                             },
+                            // defined phone numbers
                             {
                                 recipients: {
                                     has: phoneNumber,
                                 },
                             },
+                            // contact labels
+                            // groups
                         ],
                     },
                 ],
@@ -240,6 +246,8 @@ export async function sendCampaignReply(sessionId: any, data: any) {
                 device: { select: { contactDevices: { select: { contact: true } } } },
             },
         });
+
+        console.log(matchingCampaign);
 
         const isMember = matchingCampaign?.group.contactGroups.some(
             (contactGroup) => contactGroup.contact.phone === phoneNumber,
@@ -361,6 +369,7 @@ export const getAllCampaigns: RequestHandler = async (req, res) => {
         const userId = req.authenticatedUser.pkId;
         const privilegeId = req.privilege.pkId;
 
+        // !!!back here: show subs count
         const campaigns = await prisma.campaign.findMany({
             where: {
                 device: {
@@ -795,7 +804,6 @@ export const deleteCampaignMessages: RequestHandler = async (req, res) => {
     }
 };
 
-// to do: CRUD campaign message template
 export const updateCampaign: RequestHandler = async (req, res) => {
     try {
         const id = req.params.campaignMessageId;
