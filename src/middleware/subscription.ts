@@ -5,15 +5,19 @@ export const checkSubscriptionQuota: RequestHandler = async (req, res, next) => 
     const userId = req.authenticatedUser.pkId;
     const privilegeId = req.privilege.pkId;
 
+    // back here: non cs use userId, cs use cs.pkId
     const subscription = await prisma.subscription.findFirst({
         where: {
             userId: privilegeId !== Number(process.env.CS_ID) ? userId : undefined,
             user: {
-                customerServices: {
-                    some: {
-                        pkId: privilegeId !== Number(process.env.CS_ID) ? undefined : userId,
-                    },
-                },
+                customerServices:
+                    privilegeId !== Number(process.env.CS_ID)
+                        ? undefined
+                        : {
+                              some: {
+                                  pkId: userId,
+                              },
+                          },
             },
         },
         orderBy: { startDate: 'desc' },
