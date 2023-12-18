@@ -111,8 +111,13 @@ export const login: RequestHandler = async (req, res) => {
         }
 
         const accessToken = generateAccessToken(cs);
-        const refreshToken = cs.refreshToken;
+        const refreshToken = generateRefreshToken(cs);
         const id = cs.id;
+
+        await prisma.customerService.update({
+            where: { pkId: cs.pkId },
+            data: { refreshToken },
+        });
 
         return res.status(200).json({
             accessToken,

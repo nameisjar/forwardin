@@ -127,7 +127,7 @@ export const getDevice: RequestHandler = async (req, res) => {
             return res.status(400).json({ message: 'Invalid deviceId' });
         }
 
-        // back here: get session logs
+        // !!!back here: get session logs
         const device = await prisma.device.findUnique({
             where: {
                 id: deviceId,
