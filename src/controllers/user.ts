@@ -59,7 +59,7 @@ export const updateUser: RequestHandler = async (req, res) => {
 
     const existingUser = await prisma.user.findUnique({
         where: {
-            username,
+            username: username ?? null,
             NOT: { id: userId },
         },
     });
