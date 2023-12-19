@@ -57,13 +57,13 @@ export const updateUser: RequestHandler = async (req, res) => {
         return res.status(400).json({ message: 'Invalid userId' });
     }
 
-    const existingUser = await prisma.user.findUnique({
+    const existingUser = await prisma.user.findFirst({
         where: {
-            username: username ?? null,
+            username,
             NOT: { id: userId },
         },
     });
-    if (existingUser) {
+    if (username && existingUser) {
         return res.status(400).json({ message: 'User with this username already exists' });
     }
 
@@ -72,7 +72,7 @@ export const updateUser: RequestHandler = async (req, res) => {
     //     where: { affiliationCode, NOT: { id: userId } },
     // });
 
-    // if (existingAffiliationCode) {
+    // if (affiliationCode && existingAffiliationCode) {
     //     return res.status(400).json({ message: 'Affiliation code is already used' });
     // }
 
