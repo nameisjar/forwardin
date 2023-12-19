@@ -50,7 +50,7 @@ export const getUserProfile: RequestHandler = async (req, res) => {
 };
 
 export const updateUser: RequestHandler = async (req, res) => {
-    const { firstName, lastName, username, affiliationCode } = req.body;
+    const { firstName, lastName, username } = req.body;
     const userId = req.params.userId;
 
     if (!isUUID(userId)) {
@@ -67,13 +67,14 @@ export const updateUser: RequestHandler = async (req, res) => {
         return res.status(400).json({ message: 'User with this username already exists' });
     }
 
-    const existingAffiliationCode = await prisma.user.findUnique({
-        where: { affiliationCode, NOT: { id: userId } },
-    });
+    // back here: revise affiliation code
+    // const existingAffiliationCode = await prisma.user.findUnique({
+    //     where: { affiliationCode, NOT: { id: userId } },
+    // });
 
-    if (existingAffiliationCode) {
-        return res.status(400).json({ message: 'Affiliation code is already used' });
-    }
+    // if (existingAffiliationCode) {
+    //     return res.status(400).json({ message: 'Affiliation code is already used' });
+    // }
 
     const user = await prisma.user.findUnique({
         where: { id: userId },
@@ -91,7 +92,7 @@ export const updateUser: RequestHandler = async (req, res) => {
             firstName,
             lastName,
             username,
-            affiliationCode,
+            // affiliationCode,
             updatedAt: new Date(),
         },
     });
