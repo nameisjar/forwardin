@@ -180,6 +180,18 @@ model Device {
   Broadcast       Broadcast[]
   BusinessHour    BusinessHour[]
   CustomerService CustomerService?
+  DeviceLog       DeviceLog[]
+}
+
+model DeviceLog {
+  pkId      Int      @id @default(autoincrement())
+  id        String   @unique @default(uuid()) @db.Uuid
+  status    String   @db.VarChar(20)
+  deviceId  Int
+  sessionId String?
+  device    Device   @relation(fields: [deviceId], references: [pkId], onDelete: Cascade)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @default(now()) @map("updated_at")
 }
 
 model Session {

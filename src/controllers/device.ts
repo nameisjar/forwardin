@@ -141,6 +141,7 @@ export const getDevice: RequestHandler = async (req, res) => {
                         },
                     },
                 },
+                DeviceLog: true,
             },
         });
 

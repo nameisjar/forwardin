@@ -237,6 +237,16 @@ export async function createInstance(options: createInstanceOptions) {
             data: { status: connection, updatedAt: new Date() },
         });
 
+        if (connection) {
+            await prisma.deviceLog.create({
+                data: {
+                    sessionId,
+                    deviceId,
+                    status: connection,
+                },
+            });
+        }
+
         const io: Server = getSocketIO();
         io.emit(`device:${device.id}:status`, connection);
     });
