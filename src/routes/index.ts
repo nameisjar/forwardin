@@ -17,6 +17,7 @@ import subsPlanRoutes from './subscriptionPlans';
 import privilegeRoutes from './privileges';
 import customerServiceRoutes from './customerServices';
 import businessHourRoutes from './businessHours';
+import analyticsRoutes from './analytics';
 import authMiddleware from '../middleware/auth';
 
 const router = Router();
@@ -43,6 +44,7 @@ router.use('/menus', authMiddleware, menuRoutes);
 router.use('/privileges', authMiddleware, privilegeRoutes);
 router.use('/subscription-plans', authMiddleware, subsPlanRoutes);
 router.use('/customer-services', customerServiceRoutes);
+router.use('/analytics', authMiddleware, analyticsRoutes);
 router.use('/media', express.static('media'));
 
 export default router;

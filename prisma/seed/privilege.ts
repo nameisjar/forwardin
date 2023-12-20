@@ -69,6 +69,7 @@ async function seedPrivileges(prisma: PrismaClient, logger: Logger) {
                     'autoReply',
                     'broadcast',
                     'campaign',
+                    'analytics',
                     'customerService',
                     'order',
                 ];
