@@ -108,6 +108,9 @@ export const getOrders: RequestHandler = async (req, res) => {
             where: {
                 csId,
             },
+            orderBy: {
+                updatedAt: 'desc',
+            },
         });
         res.status(200).json(orders);
     } catch (error) {
