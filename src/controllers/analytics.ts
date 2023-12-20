@@ -52,9 +52,6 @@ export const getMessageStatistics: RequestHandler = async (req, res) => {
         const startOfMonth = new Date(today.getFullYear(), today.getMonth(), 1);
         const endOfMonth = new Date(today.getFullYear(), today.getMonth() + 1, 0);
 
-        console.log(startOfMonth);
-        console.log(endOfMonth);
-
         const tomorrow = new Date(today);
         tomorrow.setDate(today.getDate() + 1);
 
@@ -96,12 +93,6 @@ export const getMessageStatistics: RequestHandler = async (req, res) => {
                 },
             },
         });
-
-        console.log(
-            thisMonthIncomingMessageCount,
-            thisMonthFailedMessageCount,
-            thisMonthOutgoingMessageCount,
-        );
 
         const todayIncomingMessageCount = await prisma.incomingMessage.count({
             where: {
