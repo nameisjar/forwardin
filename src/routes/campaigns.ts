@@ -11,6 +11,7 @@ router.get('/:campaignId', controller.getCampaign);
 router.get('/:campaignId/replies', controller.getCampaignReplies);
 router.get('/:campaignId/outgoing', controller.getOutgoingCampaigns);
 router.put('/:campaignId', controller.updateCampaign);
+router.patch('/:campaignId/status', controller.updateCampaignStatus);
 router.delete('/', controller.deleteCampaigns);
 
 router.post('/messages/', controller.createCampaignMessage);
@@ -19,6 +20,7 @@ router.get('/messages/:campaignMessageId', controller.getCampaignMessage);
 router.get('/messages/:campaignMessageId/replies', controller.getCampaignMessageReplies);
 router.get('/messages/:campaignMessageId/outgoing', controller.getOutgoingCampaignMessages);
 router.put('/messages/:campaignMessageId', controller.updateCampaignMessage);
+router.patch('/messages/:campaignMessageId/status', controller.updateCampaignMessageStatus);
 router.delete('/messages/', controller.deleteCampaignMessages);
 
 export default router;

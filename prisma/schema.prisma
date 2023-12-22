@@ -387,6 +387,7 @@ model CampaignMessage {
   campaignId Int      @map("campaign_id")
   message    String
   delay      Int
+  status               Boolean           @default(true)
   isSent     Boolean  @default(false)
   schedule   DateTime @map("schedule")
   mediaPath  String?

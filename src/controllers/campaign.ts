@@ -928,6 +928,52 @@ export const updateCampaign: RequestHandler = async (req, res) => {
     }
 };
 
+export const updateCampaignStatus: RequestHandler = async (req, res) => {
+    try {
+        const id = req.params.campaignId;
+        const status = req.body.status;
+
+        if (!isUUID(id)) {
+            return res.status(400).json({ message: 'Invalid campaignId' });
+        }
+        const updatedCampaign = await prisma.campaign.update({
+            where: { id },
+            data: {
+                status,
+                updatedAt: new Date(),
+            },
+        });
+
+        res.status(200).json(updatedCampaign);
+    } catch (error) {
+        logger.error(error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};
+
+export const updateCampaignMessageStatus: RequestHandler = async (req, res) => {
+    try {
+        const id = req.params.campaignMessageId;
+        const status = req.body.status;
+
+        if (!isUUID(id)) {
+            return res.status(400).json({ message: 'Invalid campaignmessageId' });
+        }
+        const updatedCampaignMessage = await prisma.campaignMessage.update({
+            where: { id },
+            data: {
+                status,
+                updatedAt: new Date(),
+            },
+        });
+
+        res.status(200).json(updatedCampaignMessage);
+    } catch (error) {
+        logger.error(error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};
+
 export const deleteCampaigns: RequestHandler = async (req, res) => {
     const campaignIds = req.body.campaignIds;
 
@@ -955,6 +1001,7 @@ schedule.scheduleJob('*', async () => {
                 schedule: {
                     lte: new Date(),
                 },
+                status: true,
                 isSent: false,
             },
             include: {
@@ -1075,6 +1122,7 @@ schedule.scheduleJob('*', async () => {
                 schedule: {
                     lte: new Date(),
                 },
+                status: true,
                 isSent: false,
             },
             include: {

@@ -332,6 +332,29 @@ export const updateBroadcast: RequestHandler = async (req, res) => {
     }
 };
 
+export const updateBroadcastStatus: RequestHandler = async (req, res) => {
+    try {
+        const id = req.params.id;
+        const status = req.body.status;
+
+        if (!isUUID(id)) {
+            return res.status(400).json({ message: 'Invalid broadcastId' });
+        }
+        const updatedBroadcast = await prisma.broadcast.update({
+            where: { id },
+            data: {
+                status,
+                updatedAt: new Date(),
+            },
+        });
+
+        res.status(200).json(updatedBroadcast);
+    } catch (error) {
+        logger.error(error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};
+
 export const deleteBroadcasts: RequestHandler = async (req, res) => {
     const broadcastIds = req.body.broadcastIds;
 
@@ -359,6 +382,7 @@ schedule.scheduleJob('*', async () => {
                 schedule: {
                     lte: new Date(),
                 },
+                status: true,
                 isSent: false,
             },
             include: {
