@@ -64,6 +64,27 @@ export const getDeviceLabels: RequestHandler = async (req, res) => {
     }
 };
 
+export const generateApiKeyDevice: RequestHandler = async (req, res) => {
+    try {
+        const deviceId = req.params.deviceId;
+        if (!isUUID(deviceId)) {
+            return res.status(400).json({ message: 'Invalid deviceId' });
+        }
+        const apiKey = generateUuid();
+
+        await prisma.device.update({
+            where: { id: deviceId },
+            data: {
+                apiKey,
+            },
+        });
+        res.status(200).json({ apiKey });
+    } catch (error) {
+        logger.error(error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};
+
 export const createDevice: RequestHandler = async (req, res) => {
     const { name, labels } = req.body;
     const apiKey = generateUuid();

@@ -216,7 +216,7 @@ export const getMessages: RequestHandler = async (req, res) => {
 export const getIncomingMessages: RequestHandler = async (req, res) => {
     try {
         const { sessionId } = req.params;
-        const { page = 1, pageSize = 25, phoneNumber } = req.query;
+        const { page = 1, pageSize = 25, phoneNumber, message, contactName } = req.query;
         const offset = (Number(page) - 1) * Number(pageSize);
 
         const messages = (
@@ -225,7 +225,29 @@ export const getIncomingMessages: RequestHandler = async (req, res) => {
                 skip: offset,
                 where: {
                     sessionId,
-                    from: phoneNumber ? phoneNumber.toString() + '@s.whatsapp.net' : undefined,
+                    from: { contains: phoneNumber ? phoneNumber.toString() : undefined },
+                    message: {
+                        contains: message ? message.toString() : undefined,
+                        mode: 'insensitive',
+                    },
+                    contact: {
+                        OR: contactName
+                            ? [
+                                  {
+                                      firstName: {
+                                          contains: contactName.toString(),
+                                          mode: 'insensitive',
+                                      },
+                                  },
+                                  {
+                                      lastName: {
+                                          contains: contactName.toString(),
+                                          mode: 'insensitive',
+                                      },
+                                  },
+                              ]
+                            : undefined,
+                    },
                 },
                 include: {
                     contact: {
@@ -237,7 +259,32 @@ export const getIncomingMessages: RequestHandler = async (req, res) => {
         ).map((m) => serializePrisma(m));
 
         const totalMessages = await prisma.incomingMessage.count({
-            where: { sessionId },
+            where: {
+                sessionId,
+                from: { contains: phoneNumber ? phoneNumber.toString() : undefined },
+                message: {
+                    contains: message ? message.toString() : undefined,
+                    mode: 'insensitive',
+                },
+                contact: {
+                    OR: contactName
+                        ? [
+                              {
+                                  firstName: {
+                                      contains: contactName.toString(),
+                                      mode: 'insensitive',
+                                  },
+                              },
+                              {
+                                  lastName: {
+                                      contains: contactName.toString(),
+                                      mode: 'insensitive',
+                                  },
+                              },
+                          ]
+                        : undefined,
+                },
+            },
         });
 
         const currentPage = Math.max(1, Number(page) || 1);
@@ -262,7 +309,7 @@ export const getIncomingMessages: RequestHandler = async (req, res) => {
 export const getOutgoingMessages: RequestHandler = async (req, res) => {
     try {
         const { sessionId } = req.params;
-        const { page = 1, pageSize = 25, phoneNumber } = req.query;
+        const { page = 1, pageSize = 25, phoneNumber, message, contactName } = req.query;
         const offset = (Number(page) - 1) * Number(pageSize);
 
         const messages = (
@@ -271,7 +318,29 @@ export const getOutgoingMessages: RequestHandler = async (req, res) => {
                 skip: offset,
                 where: {
                     sessionId,
-                    to: phoneNumber ? phoneNumber.toString() + '@s.whatsapp.net' : undefined,
+                    to: { contains: phoneNumber ? phoneNumber.toString() : undefined },
+                    message: {
+                        contains: message ? message.toString() : undefined,
+                        mode: 'insensitive',
+                    },
+                    contact: {
+                        OR: contactName
+                            ? [
+                                  {
+                                      firstName: {
+                                          contains: contactName.toString(),
+                                          mode: 'insensitive',
+                                      },
+                                  },
+                                  {
+                                      lastName: {
+                                          contains: contactName.toString(),
+                                          mode: 'insensitive',
+                                      },
+                                  },
+                              ]
+                            : undefined,
+                    },
                 },
                 include: {
                     contact: {
@@ -283,7 +352,32 @@ export const getOutgoingMessages: RequestHandler = async (req, res) => {
         ).map((m) => serializePrisma(m));
 
         const totalMessages = await prisma.outgoingMessage.count({
-            where: { sessionId },
+            where: {
+                sessionId,
+                to: { contains: phoneNumber ? phoneNumber.toString() : undefined },
+                message: {
+                    contains: message ? message.toString() : undefined,
+                    mode: 'insensitive',
+                },
+                contact: {
+                    OR: contactName
+                        ? [
+                              {
+                                  firstName: {
+                                      contains: contactName.toString(),
+                                      mode: 'insensitive',
+                                  },
+                              },
+                              {
+                                  lastName: {
+                                      contains: contactName.toString(),
+                                      mode: 'insensitive',
+                                  },
+                              },
+                          ]
+                        : undefined,
+                },
+            },
         });
 
         const currentPage = Math.max(1, Number(page) || 1);
@@ -309,14 +403,36 @@ export const getOutgoingMessages: RequestHandler = async (req, res) => {
 export const getConversationMessages: RequestHandler = async (req, res) => {
     try {
         const { sessionId } = req.params;
-        const { page = 1, pageSize = 25, phoneNumber } = req.query;
+        const { page = 1, pageSize = 25, phoneNumber, message, contactName } = req.query;
         const sort = req.query.sort as string;
         const offset = (Number(page) - 1) * Number(pageSize);
 
         const incomingMessages = await prisma.incomingMessage.findMany({
             where: {
                 sessionId,
-                from: phoneNumber ? phoneNumber.toString() + '@s.whatsapp.net' : undefined,
+                from: { contains: phoneNumber ? phoneNumber.toString() : undefined },
+                message: {
+                    contains: message ? message.toString() : undefined,
+                    mode: 'insensitive',
+                },
+                contact: {
+                    OR: contactName
+                        ? [
+                              {
+                                  firstName: {
+                                      contains: contactName.toString(),
+                                      mode: 'insensitive',
+                                  },
+                              },
+                              {
+                                  lastName: {
+                                      contains: contactName.toString(),
+                                      mode: 'insensitive',
+                                  },
+                              },
+                          ]
+                        : undefined,
+                },
             },
             include: {
                 contact: {
@@ -328,7 +444,29 @@ export const getConversationMessages: RequestHandler = async (req, res) => {
         const outgoingMessages = await prisma.outgoingMessage.findMany({
             where: {
                 sessionId,
-                to: phoneNumber ? phoneNumber.toString() + '@s.whatsapp.net' : undefined,
+                to: { contains: phoneNumber ? phoneNumber.toString() : undefined },
+                message: {
+                    contains: message ? message.toString() : undefined,
+                    mode: 'insensitive',
+                },
+                contact: {
+                    OR: contactName
+                        ? [
+                              {
+                                  firstName: {
+                                      contains: contactName.toString(),
+                                      mode: 'insensitive',
+                                  },
+                              },
+                              {
+                                  lastName: {
+                                      contains: contactName.toString(),
+                                      mode: 'insensitive',
+                                  },
+                              },
+                          ]
+                        : undefined,
+                },
             },
             include: {
                 contact: {
