@@ -765,6 +765,7 @@ export const addContactToGroup: RequestHandler = async (req, res) => {
 };
 
 // back here: replace 0 to country code format (such as: +62)
+// back here: handle invalid google credentials
 export const syncGoogle: RequestHandler = async (req, res) => {
     const accessToken = req.body.accessToken;
     const deviceId = req.body.deviceId;

@@ -175,9 +175,11 @@ export const refreshToken: RequestHandler = async (req, res) => {
             if (err) {
                 return res.status(401).json({ message: 'Invalid refresh token' });
             }
-            if (!decoded) {
+            if (!decoded || !(decoded as refreshTokenPayload).id) {
                 return res.status(401).json({ message: 'Decoded token is missing' });
             }
+
+            console.log(decoded);
 
             const userId = (decoded as refreshTokenPayload).id;
 
