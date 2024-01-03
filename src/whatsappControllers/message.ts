@@ -53,10 +53,12 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                             const jid = jidNormalizedUser(message.key.remoteJid!);
                             // back here: what's transformPrisma() for?
                             const data = transformPrisma(message);
+                            console.log(data);
                             const messageText =
                                 data.message?.conversation ||
                                 data.message?.extendedTextMessage?.text ||
                                 data.message?.imageMessage?.caption ||
+                                data.message?.documentMessage?.caption ||
                                 '';
 
                             await prisma.message.upsert({

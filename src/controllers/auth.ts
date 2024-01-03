@@ -179,8 +179,6 @@ export const refreshToken: RequestHandler = async (req, res) => {
                 return res.status(401).json({ message: 'Decoded token is missing' });
             }
 
-            console.log(decoded);
-
             const userId = (decoded as refreshTokenPayload).id;
 
             const user = await prisma.user.findUnique({
