@@ -1,4 +1,4 @@
-export function forgotTemplateEmail(url: string, name: string) {
+export function otpTemplate(otpToken: string, name: string) {
     return `<!DOCTYPE HTML PUBLIC "-//W3C//DTD XHTML 1.0 Transitional //EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
     <html xmlns="http://www.w3.org/1999/xhtml" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office">
     
@@ -89,11 +89,6 @@ export function forgotTemplateEmail(url: string, name: string) {
           color: #000000;
         }
         
-        #u_body a {
-          color: #0000ee;
-          text-decoration: underline;
-        }
-        
         @media (max-width: 480px) {
           #u_content_image_8 .v-container-padding-padding {
             padding: 10px !important;
@@ -106,6 +101,9 @@ export function forgotTemplateEmail(url: string, name: string) {
           }
           #u_content_text_6 .v-text-align {
             text-align: left !important;
+          }
+          #u_content_text_11 .v-text-align {
+            text-align: center !important;
           }
           #u_content_text_10 .v-container-padding-padding {
             padding: 10px 20px 18px !important;
@@ -127,7 +125,7 @@ export function forgotTemplateEmail(url: string, name: string) {
     <body class="clean-body u_body" style="margin: 0;padding: 0;-webkit-text-size-adjust: 100%;background-color: #f9f9f9;color: #000000">
       <!--[if IE]><div class="ie-container"><![endif]-->
       <!--[if mso]><div class="mso-container"><![endif]-->
-      <table id="u_body" style="border-collapse: collapse;table-layout: fixed;border-spacing: 0;mso-table-lspace: 0pt;mso-table-rspace: 0pt;vertical-align: top;min-width: 320px;Margin: 0 auto;background-color: #f9f9f9;width:100%" cellpadding="0" cellspacing="0">
+      <table style="border-collapse: collapse;table-layout: fixed;border-spacing: 0;mso-table-lspace: 0pt;mso-table-rspace: 0pt;vertical-align: top;min-width: 320px;Margin: 0 auto;background-color: #f9f9f9;width:100%" cellpadding="0" cellspacing="0">
         <tbody>
           <tr style="vertical-align: top">
             <td style="word-break: break-word;border-collapse: collapse !important;vertical-align: top">
@@ -174,7 +172,7 @@ export function forgotTemplateEmail(url: string, name: string) {
                                 <td class="v-container-padding-padding" style="overflow-wrap:break-word;word-break:break-word;padding:10px;font-family:'Cabin',sans-serif;" align="left">
     
                                   <div class="v-text-align" style="font-size: 14px; color: #e5eaf5; line-height: 140%; text-align: center; word-wrap: break-word;">
-                                    <p style="line-height: 140%;"><span style="font-size: 16px; line-height: 30.8px;"><strong>Please reset your password !</strong></span></p>
+                                    <p style="font-size: 14px; line-height: 140%;"><strong>T H A N K S&nbsp; &nbsp;F O R&nbsp; &nbsp;S I G N U P !</strong></p>
                                   </div>
     
                                 </td>
@@ -216,9 +214,7 @@ export function forgotTemplateEmail(url: string, name: string) {
     
                                   <div class="v-text-align" style="font-size: 14px; line-height: 160%; text-align: left; word-wrap: break-word;">
                                     <p style="font-size: 14px; line-height: 160%;"><span style="font-size: 20px; line-height: 35.2px;">Hi ${name}, </span></p>
-                                    <div>
-                                      <div>We received a request to reset your password. To reset your password, click the link below</div>
-                                    </div>
+                                    <p style="font-size: 14px; line-height: 160%;">To complete your registration, please use the following 6-digit verification code:</p>
                                   </div>
     
                                 </td>
@@ -226,18 +222,15 @@ export function forgotTemplateEmail(url: string, name: string) {
                             </tbody>
                           </table>
     
-                          <table style="font-family:'Cabin',sans-serif;" role="presentation" cellpadding="0" cellspacing="0" width="100%" border="0">
+                          <table id="u_content_text_11" style="font-family:'Cabin',sans-serif;" role="presentation" cellpadding="0" cellspacing="0" width="100%" border="0">
                             <tbody>
                               <tr>
-                                <td class="v-container-padding-padding" style="overflow-wrap:break-word;word-break:break-word;padding:10px;font-family:'Cabin',sans-serif;" align="left">
+                                <td class="v-container-padding-padding" style="overflow-wrap:break-word;word-break:break-word;padding:33px 55px;font-family:'Cabin',sans-serif;" align="left">
     
-                                  <!--[if mso]><style>.v-button {background: transparent !important;}</style><![endif]-->
-                                  <div class="v-text-align" align="center">
-                                    <!--[if mso]><v:roundrect xmlns:v="urn:schemas-microsoft-com:vml" xmlns:w="urn:schemas-microsoft-com:office:word" href="" style="height:37px; v-text-anchor:middle; width:132px;" arcsize="11%"  stroke="f" fillcolor="#e03a3a"><w:anchorlock/><center style="color:#FFFFFF;"><![endif]-->
-                                    <a href="${process.env.URL_DEV}/auth/reset-password?token=${url}" target="_blank" class="v-button" style="box-sizing: border-box;display: inline-block;text-decoration: none;-webkit-text-size-adjust: none;text-align: center;color: #FFFFFF; background-color: #e03a3a; border-radius: 4px;-webkit-border-radius: 4px; -moz-border-radius: 4px; width:auto; max-width:100%; overflow-wrap: break-word; word-break: break-word; word-wrap:break-word; mso-border-alt: none;font-size: 14px;">
-                                      <span style="display:block;padding:10px 20px;line-height:120%;"><span style="line-height: 16.8px;">Reset Password</span></span>
-                                    </a>
-                                    <!--[if mso]></center></v:roundrect><![endif]-->
+                                  <div class="v-text-align" style="font-size: 14px; line-height: 10%; text-align: center; word-wrap: break-word;">
+                                    <p style="line-height: 10%;">&nbsp;</p>
+                                    <p style="line-height: 10%;"><strong><span style="font-size: 20px; line-height: 2px; font-family: 'arial black', AvenirNext-Heavy, 'avant garde', arial;">${otpToken}</span></strong></p>
+                                    <p style="line-height: 10%;">&nbsp;</p>
                                   </div>
     
                                 </td>
@@ -251,16 +244,10 @@ export function forgotTemplateEmail(url: string, name: string) {
                                 <td class="v-container-padding-padding" style="overflow-wrap:break-word;word-break:break-word;padding:10px 55px 22px;font-family:'Cabin',sans-serif;" align="left">
     
                                   <div class="v-text-align" style="font-size: 14px; line-height: 160%; text-align: left; word-wrap: break-word;">
-                                    <div>
-                                      <div><strong>Note: </strong>This reset link will expire in 1 hour. If you didn't request a password reset, you can safely ignore this email.</div>
-                                      <div>&nbsp;</div>
-                                      <div>
-                                        <div>
-                                          <div><span style="font-size: 12px; line-height: 19.2px;">If you have any questions or need further assistance, please contact our support team.</span></div>
-                                          <div>&nbsp;</div>
-                                        </div>
-                                      </div>
-                                    </div>
+                                    <p style="line-height: 160%;"><span style="line-height: 22.4px; font-family: inherit; font-size: 14px;"><span style="line-height: 22.4px;"><span style="color: #222222; font-family: Arial, sans-serif; font-size: small; white-space: normal; background-color: #ffffff; float: none; display: inline; line-height: 20.8px;">This verification code will expire in 30 seconds. If you didn't sign up for our service, you can safely ignore this email.</span>&nbsp;</span>
+                                      </span>
+                                    </p>
+                                    <p style="line-height: 160%;">&nbsp;</p>
                                     <p style="color: #222222; font-family: Arial, sans-serif; font-size: small; white-space: normal; background-color: #ffffff; line-height: 160%;"><span style="font-family: inherit; line-height: 22.4px;">Best regards,</span></p>
                                     <p style="color: #222222; font-family: Arial, sans-serif; font-size: small; white-space: normal; background-color: #ffffff; line-height: 160%;"><span style="font-family: inherit; line-height: 22.4px;">Forwardin</span></p>
                                   </div>
@@ -333,5 +320,6 @@ export function forgotTemplateEmail(url: string, name: string) {
       <!--[if IE]></div><![endif]-->
     </body>
     
-    </html>`;
+    </html>
+      `;
 }

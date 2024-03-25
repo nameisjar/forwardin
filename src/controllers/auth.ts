@@ -12,7 +12,8 @@ import axios from 'axios';
 import logger from '../config/logger';
 import { refreshTokenPayload } from '../types';
 import refresh from 'passport-oauth2-refresh';
-import { otpTemplate } from '../utils/templateEmail';
+import { otpTemplate } from '../utils/templateEmailOtp';
+import { forgotTemplateEmail } from '../utils/templateEmail';
 
 export const register: RequestHandler = async (req, res) => {
     try {
@@ -225,31 +226,6 @@ export const sendVerificationEmail: RequestHandler = async (req, res) => {
 
         const otpSecret = generateOTPSecret();
         const otpToken = generateOTPToken(otpSecret);
-        // const body = `<!DOCTYPE html>
-        // <html lang="en">
-        // <head>
-        //     <meta charset="UTF-8">
-        //     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        //     <title>Email Verification</title>
-        // </head>
-        // <body>
-        //     <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
-        //         <h2>Email Verification</h2>
-        //         <p>Hello, ${user.firstName}!</p>
-        //         <p>
-        //             Thank you for signing up! To complete your registration, please use the following 6-digit verification code:
-        //         </p>
-        //         <h1 style="font-size: 36px; font-weight: bold; color: #007BFF;">${otpToken}</h1>
-        //         <p>
-        //             This verification code will expire in 30 seconds. If you didn't sign up for our service, you can safely ignore this email.
-        //         </p>
-        //         <p>Best regards,</p>
-        //         <p>Forwardin</p>
-        //     </div>
-        // </body>
-        // </html>
-        // `;
-
         const template = otpTemplate(otpToken, user.firstName);
 
         await prisma.user.update({
@@ -308,43 +284,7 @@ export const forgotPassword: RequestHandler = async (req, res) => {
         }
 
         const resetTokenSecret = generateOTPSecret();
-        // const resetToken = generateOTPToken(resetTokenSecret);
-        const body = `
-    <!DOCTYPE html>
-    <html lang="en">
-    <head>
-        <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Password Reset</title>
-    </head>
-    <body>
-        <table align="center" cellpadding="0" cellspacing="0" width="600">
-            <tr>
-                <td align="center" bgcolor="#0073e6" style="padding: 40px 0;">
-                    <h1 style="color: #ffffff;">Password Reset</h1>
-                </td>
-            </tr>
-            <tr>
-                <td style="padding: 20px;">
-                    <p>Hello, ${user.firstName}!</p>
-                    <p>We received a request to reset your password. To reset your password, click the link below:</p>
-                    <p>
-                        <a href="${process.env.URL_DEV}/auth/reset-password?token=${resetTokenSecret} style="background-color: #0073e6; color: #ffffff; padding: 10px 20px; text-decoration: none; border-radius: 5px;">Reset Password</a>
-                    </p>
-                    <p><strong>Note:</strong> This reset link will expire in 1 hour. If you didn't request a password reset, you can safely ignore this email.</p>
-                    <p>If you have any questions or need further assistance, please contact our support team.</p>
-                    <p>Thank you!</p>
-                </td>
-            </tr>
-            <tr>
-                <td align="center" bgcolor="#f4f4f4" style="padding: 20px;">
-                    <p style="color: #333333; font-size: 12px;">&copy; 2023 Forwardin</p>
-                </td>
-            </tr>
-        </table>
-    </body>
-    </html>
-`;
+        const body = forgotTemplateEmail(resetTokenSecret, user.firstName);
         await prisma.passwordReset.upsert({
             where: { email },
             create: {
