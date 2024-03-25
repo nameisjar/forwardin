@@ -207,7 +207,6 @@ export const updateDevice: RequestHandler = async (req, res) => {
                     updatedAt: new Date(),
                 },
             });
-
             // await transaction.label.update({
             //     where: { slug: `device${existingDevice.name}` },
             //     data: {
