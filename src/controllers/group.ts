@@ -42,10 +42,26 @@ export const getGroups: RequestHandler = async (req, res) => {
 };
 
 export const createGroup: RequestHandler = async (req, res) => {
-    const { name } = req.body;
-    const userId = req.authenticatedUser.pkId;
-
     try {
+        const { name } = req.body;
+        const userId = req.authenticatedUser.pkId;
+
+        if (!name) {
+            return res.status(400).json({ message: 'Group name is required' });
+        }
+
+        if (name.length < 3) {
+            return res.status(400).json({ message: 'Group name must be at least 3 characters' });
+        }
+
+        const existingGroup = await prisma.group.findFirst({
+            where: { name, userId },
+        });
+
+        if (existingGroup) {
+            return res.status(400).json({ message: 'Group name already exists' });
+        }
+
         await prisma.group.create({
             data: {
                 name,

@@ -208,13 +208,13 @@ export const updateDevice: RequestHandler = async (req, res) => {
                 },
             });
 
-            await transaction.label.update({
-                where: { slug: `device${existingDevice.name}` },
-                data: {
-                    name: `device_${updatedDevice.name}`,
-                    slug: generateSlug(`device_${updatedDevice.name}`),
-                },
-            });
+            // await transaction.label.update({
+            //     where: { slug: `device${existingDevice.name}` },
+            //     data: {
+            //         name: `device_${updatedDevice.name}`,
+            //         slug: generateSlug(`device_${updatedDevice.name}`),
+            //     },
+            // });
 
             // update labels
             if (labels && labels.length > 0) {

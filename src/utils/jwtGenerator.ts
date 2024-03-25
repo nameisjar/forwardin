@@ -9,7 +9,7 @@ export function generateAccessToken(user: accessTokenPayload): string {
         email: user.email,
     };
 
-    return jwt.sign(payload, jwtSecretKey, { expiresIn: '15m' });
+    return jwt.sign(payload, jwtSecretKey, { expiresIn: '5h' }); //15m
 }
 
 export function generateRefreshToken(user: refreshTokenPayload): string {

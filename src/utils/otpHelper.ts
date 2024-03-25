@@ -38,22 +38,24 @@ export async function sendEmail(toEmail: string, body: string, subject: string) 
     //     text: `Here's your OTP: ${otpToken}`,
     // };
 
-    const transporter = nodemailer.createTransport({
-        service: 'gmail',
-        auth: {
-            user: process.env.NODEMAILER_EMAIL,
-            pass: process.env.NODEMAILER_PASSWORD,
-        },
-        tls: { rejectUnauthorized: false },
-    });
-
     try {
-        await transporter.sendMail({
+        const transporter = nodemailer.createTransport({
+            // service: 'gmail',
+            host: 'smtp.gmail.com',
+            secure: true,
+            auth: {
+                user: process.env.NODEMAILER_EMAIL,
+                pass: process.env.NODEMAILER_PASSWORD,
+            },
+            // tls: { rejectUnauthorized: false },
+        });
+        const mailOptions = {
             from: process.env.NODEMAILER_EMAIL,
             to: toEmail,
             subject: subject,
             html: body,
-        });
+        };
+        await transporter.sendMail(mailOptions);
 
         // await mg.messages.create(process.env.MAILGUN_DOMAIN!, data);
     } catch (error) {
