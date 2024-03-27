@@ -300,9 +300,31 @@ export const getTransactions: RequestHandler = async (req, res, next) => {
 export const updateTransaction: RequestHandler = async (req, res, next) => {
     try {
         const id = req.params.transactionId;
-        const { status } = req.body;
+        const { status, transaction_time } = req.body;
 
-        const updatedTransaction = await prisma.transaction.update({
+        const existingTransaction = await prisma.transaction.findUnique({
+            where: { id },
+            include: {
+                user: true,
+                subscriptionPlan: true,
+            },
+        });
+
+        if (!existingTransaction) {
+            return res.status(404).json({ message: 'Transaction not found' });
+        }
+
+        const transaction_time_iso = new Date(transaction_time).toISOString();
+        const oneMonthLater = new Date(
+            new Date(transaction_time).setMonth(new Date(transaction_time).getMonth() + 1),
+        );
+        const oneMonthLaterISO = oneMonthLater.toISOString();
+        const oneYearLater = new Date(
+            new Date(transaction_time).setFullYear(new Date(transaction_time).getFullYear() + 1),
+        );
+        const oneYearLaterISO = oneYearLater.toISOString();
+
+        const transaction = await prisma.transaction.update({
             where: { id },
             data: {
                 status,
@@ -310,10 +332,28 @@ export const updateTransaction: RequestHandler = async (req, res, next) => {
             },
         });
 
-        res.status(200).json({
-            message: 'Transaction updated successfully',
-            data: updatedTransaction,
-        });
+        if (transaction.status == 'paid') {
+            await prisma.$transaction(async (transaction) => {
+                await transaction.subscription.create({
+                    data: {
+                        startDate: transaction_time_iso,
+                        endDate:
+                            existingTransaction.paidPrice ==
+                            existingTransaction.subscriptionPlan.yearlyPrice
+                                ? oneYearLaterISO
+                                : oneMonthLaterISO,
+                        autoReplyMax: existingTransaction.subscriptionPlan.autoReplyQuota || 0,
+                        deviceMax: existingTransaction.subscriptionPlan.deviceQuota || 0,
+                        contactMax: existingTransaction.subscriptionPlan.contactQuota || 0,
+                        broadcastMax: existingTransaction.subscriptionPlan.broadcastQuota || 0,
+                        userId: existingTransaction.user.pkId,
+                        subscriptionPlanId: existingTransaction.subscriptionPlan.pkId,
+                    },
+                });
+            });
+            return res.status(200).json({ message: 'Subscription created successfully' });
+        }
+        return res.status(200).json({ message: 'Transaction status updated successfully' });
     } catch (error) {
         logger.error(error);
         next(error);
