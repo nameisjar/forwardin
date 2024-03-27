@@ -28,31 +28,30 @@ export const createTemplate: RequestHandler = async (req, res) => {
     }
 };
 
-export const getTemplates: RequestHandler = async (req, res) => {
-    const userId = req.authenticatedUser.pkId;
-    const privilegeId = req.privilege.pkId;
-
+export const getTemplates: RequestHandler = async (req, res, next) => {
     try {
+        const userId = req.authenticatedUser.pkId;
+        const privilegeId = req.privilege.pkId;
         const templates = await prisma.template.findMany({
             where: {
                 userId: privilegeId !== Number(process.env.ADMIN_ID) ? undefined : userId,
-                user: {
-                    customerServices: {
-                        some: {
-                            pkId: privilegeId !== Number(process.env.CS_ID) ? undefined : userId,
-                        },
-                    },
-                },
+                // user: {
+                //     customerServices: {
+                //         some: {
+                //             pkId: privilegeId !== Number(process.env.CS_ID) ? undefined : userId,
+                //         },
+                //     },
+                // },
             },
         });
         res.status(200).json(templates);
     } catch (error) {
         logger.error(error);
-        res.status(500).json({ message: 'Internal server error' });
+        next(error);
     }
 };
 
-export const deleteTemplates: RequestHandler = async (req, res) => {
+export const deleteTemplates: RequestHandler = async (req, res, next) => {
     const templateIds = req.body.templateIds;
 
     try {
@@ -68,6 +67,6 @@ export const deleteTemplates: RequestHandler = async (req, res) => {
         res.status(200).json({ message: 'Template(s) deleted successfully' });
     } catch (error) {
         logger.error(error);
-        res.status(500).json({ message: 'Internal server error' });
+        next(error);
     }
 };

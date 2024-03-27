@@ -5,10 +5,10 @@ import axios from 'axios';
 import moment from 'moment-timezone';
 import { isUUID } from '../utils/uuidChecker';
 
-export const pay: RequestHandler = async (req, res) => {
+export const pay: RequestHandler = async (req, res, next) => {
     try {
-        const url = 'https://app.sandbox.midtrans.com/snap/v1/transactions';
-        const apiKey = process.env.MIDTRANS_KEY!;
+        // const url = 'https://app.sandbox.midtrans.com/snap/v1/transactions';
+        // const apiKey = process.env.MIDTRANS_KEY!;
         const user = req.authenticatedUser;
 
         const { subscriptionPlanId, subscriptionPlanType } = req.body;
@@ -36,146 +36,150 @@ export const pay: RequestHandler = async (req, res) => {
 
         const order_id = `ORDER-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
 
-        const start_time = moment().tz('Asia/Jakarta').format('YYYY-MM-DD HH:mm:ss ZZ');
+        // const start_time = moment().tz('Asia/Jakarta').format('YYYY-MM-DD HH:mm:ss ZZ');
 
-        const requestBody = {
-            transaction_details: {
-                order_id,
-                gross_amount: paidPrice,
-            },
-            item_details: [
-                {
-                    id: subscriptionPlanId,
-                    price: paidPrice,
-                    quantity: 1,
-                    name: subscriptionPlan?.name,
-                    brand: 'Forwardin',
-                    category: 'Subscription',
-                    merchant_name: 'Forwardin',
-                },
-            ],
-            customer_details: {
-                first_name: user.firstName,
-                last_name: user.lastName,
-                email: user.email,
-                phone: user.phone,
-                billing_address: {
-                    first_name: user.firstName,
-                    last_name: user.lastName,
-                    email: user.email,
-                    phone: user.phone,
-                    address: 'Sudirman',
-                    city: 'Jakarta',
-                    postal_code: '12190',
-                    country_code: 'IDN',
-                },
-                shipping_address: {
-                    first_name: user.firstName,
-                    last_name: user.lastName,
-                    email: user.email,
-                    phone: user.phone,
-                    address: 'Sudirman',
-                    city: 'Jakarta',
-                    postal_code: '12190',
-                    country_code: 'IDN',
-                },
-            },
-            enabled_payments: [
-                'credit_card',
-                'mandiri_clickpay',
-                'cimb_clicks',
-                'bca_klikbca',
-                'bca_klikpay',
-                'bri_epay',
-                'echannel',
-                'mandiri_ecash',
-                'permata_va',
-                'bca_va',
-                'bni_va',
-                'other_va',
-                'gopay',
-                'indomaret',
-                'alfamart',
-                'danamon_online',
-                'akulaku',
-            ],
-            credit_card: {
-                secure: true,
-                bank: 'bca',
-                installment: {
-                    required: false,
-                    terms: {
-                        bni: [3, 6, 12],
-                        mandiri: [3, 6, 12],
-                        cimb: [3],
-                        bca: [3, 6, 12],
-                        offline: [6, 12],
-                    },
-                },
-                whitelist_bins: ['48111111', '41111111'],
-            },
-            bca_va: {
-                va_number: '12345678911',
-                sub_company_code: '00000',
-                free_text: {
-                    inquiry: [
-                        {
-                            en: 'text in English',
-                            id: 'text in Bahasa Indonesia',
-                        },
-                    ],
-                    payment: [
-                        {
-                            en: 'text in English',
-                            id: 'text in Bahasa Indonesia',
-                        },
-                    ],
-                },
-            },
-            bni_va: {
-                va_number: '12345678',
-            },
-            permata_va: {
-                va_number: '1234567890',
-                recipient_name: 'SUDARSONO',
-            },
-            callbacks: {
-                finish: 'https://forwardin.adslink.id',
-            },
-            expiry: {
-                start_time,
-                unit: 'minutes',
-                duration: 10,
-            },
-            custom_field1: user.id,
-            custom_field2: subscriptionPlanId,
-            custom_field3: subscriptionPlanType,
-        };
+        // const requestBody = {
+        //     transaction_details: {
+        //         order_id,
+        //         gross_amount: paidPrice,
+        //     },
+        //     item_details: [
+        //         {
+        //             id: subscriptionPlanId,
+        //             price: paidPrice,
+        //             quantity: 1,
+        //             name: subscriptionPlan?.name,
+        //             brand: 'Forwardin',
+        //             category: 'Subscription',
+        //             merchant_name: 'Forwardin',
+        //         },
+        //     ],
+        //     customer_details: {
+        //         first_name: user.firstName,
+        //         last_name: user.lastName,
+        //         email: user.email,
+        //         phone: user.phone,
+        //         billing_address: {
+        //             first_name: user.firstName,
+        //             last_name: user.lastName,
+        //             email: user.email,
+        //             phone: user.phone,
+        //             address: 'Sudirman',
+        //             city: 'Jakarta',
+        //             postal_code: '12190',
+        //             country_code: 'IDN',
+        //         },
+        //         shipping_address: {
+        //             first_name: user.firstName,
+        //             last_name: user.lastName,
+        //             email: user.email,
+        //             phone: user.phone,
+        //             address: 'Sudirman',
+        //             city: 'Jakarta',
+        //             postal_code: '12190',
+        //             country_code: 'IDN',
+        //         },
+        //     },
+        //     enabled_payments: [
+        //         'credit_card',
+        //         'mandiri_clickpay',
+        //         'cimb_clicks',
+        //         'bca_klikbca',
+        //         'bca_klikpay',
+        //         'bri_epay',
+        //         'echannel',
+        //         'mandiri_ecash',
+        //         'permata_va',
+        //         'bca_va',
+        //         'bni_va',
+        //         'other_va',
+        //         'gopay',
+        //         'indomaret',
+        //         'alfamart',
+        //         'danamon_online',
+        //         'akulaku',
+        //     ],
+        //     credit_card: {
+        //         secure: true,
+        //         bank: 'bca',
+        //         installment: {
+        //             required: false,
+        //             terms: {
+        //                 bni: [3, 6, 12],
+        //                 mandiri: [3, 6, 12],
+        //                 cimb: [3],
+        //                 bca: [3, 6, 12],
+        //                 offline: [6, 12],
+        //             },
+        //         },
+        //         whitelist_bins: ['48111111', '41111111'],
+        //     },
+        //     bca_va: {
+        //         va_number: '12345678911',
+        //         sub_company_code: '00000',
+        //         free_text: {
+        //             inquiry: [
+        //                 {
+        //                     en: 'text in English',
+        //                     id: 'text in Bahasa Indonesia',
+        //                 },
+        //             ],
+        //             payment: [
+        //                 {
+        //                     en: 'text in English',
+        //                     id: 'text in Bahasa Indonesia',
+        //                 },
+        //             ],
+        //         },
+        //     },
+        //     bni_va: {
+        //         va_number: '12345678',
+        //     },
+        //     permata_va: {
+        //         va_number: '1234567890',
+        //         recipient_name: 'SUDARSONO',
+        //     },
+        //     callbacks: {
+        //         finish: 'https://forwardin.adslink.id',
+        //     },
+        //     expiry: {
+        //         start_time,
+        //         unit: 'minutes',
+        //         duration: 10,
+        //     },
+        //     custom_field1: user.id,
+        //     custom_field2: subscriptionPlanId,
+        //     custom_field3: subscriptionPlanType,
+        // };
 
-        logger.debug(requestBody);
+        // logger.debug(requestBody);
 
-        const config = {
-            headers: {
-                Authorization: `Basic ${Buffer.from(apiKey).toString('base64')}`,
-                'Content-Type': 'application/json',
-            },
-        };
+        // const config = {
+        //     headers: {
+        //         Authorization: `Basic ${Buffer.from(apiKey).toString('base64')}`,
+        //         'Content-Type': 'application/json',
+        //     },
+        // };
 
-        await prisma.transaction.create({
+        const transaction = await prisma.transaction.create({
             data: {
                 id: order_id,
                 paidPrice,
-                status: 'pending',
+                status: 'unpaid',
                 userId: user.pkId,
                 subscriptionPlanId: subscriptionPlan.pkId,
             },
         });
 
-        const response = await axios.post(url, requestBody, config);
-        res.status(200).json(response.data);
+        res.status(200).json({
+            message: 'Payment created successfully',
+            data: transaction,
+        });
+        // const response = await axios.post(url, requestBody, config);
+        // res.status(200).json(response.data);
     } catch (error) {
         logger.error(error);
-        res.status(500).json({ message: 'Internal server error' });
+        next(error);
     }
 };
 
@@ -372,9 +376,9 @@ export const getTransactionStatus: RequestHandler = async (req, res) => {
     try {
         const id = req.params.transactionId;
 
-        if (!isUUID(id)) {
-            return res.status(400).json({ message: 'Invalid subscriptionId' });
-        }
+        // if (!isUUID(id)) {
+        //     return res.status(400).json({ message: 'Invalid subscriptionId' });
+        // }
 
         const transactions = await prisma.transaction.findUnique({
             where: { id },

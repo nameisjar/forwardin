@@ -8,6 +8,8 @@ import { init } from './whatsapp';
 import bodyParser from 'body-parser';
 import { initSocketServer } from './socket';
 import http from 'http';
+import { error } from 'console';
+import { internalServerErrorHandler, notFoundHandler } from './middleware/errorHandler';
 
 const app = express();
 app.use(pinoHttp({ logger }));
@@ -18,7 +20,8 @@ app.use(bodyParser.urlencoded({ extended: true, limit: '500mb' }));
 app.use(express.json());
 
 app.use('/', routes);
-app.all('*', (req, res) => res.status(404).json({ error: 'URL not found' }));
+app.use(notFoundHandler);
+app.use(internalServerErrorHandler);
 
 const server: http.Server = initSocketServer(app);
 

@@ -267,3 +267,55 @@ export const deleteCS: RequestHandler = async (req, res) => {
         res.status(500).json({ message: 'Internal server error' });
     }
 };
+
+export const getTransactions: RequestHandler = async (req, res, next) => {
+    try {
+        const transaction = await prisma.transaction.findMany({
+            select: {
+                pkId: true,
+                id: true,
+                status: true,
+                createdAt: true,
+                updatedAt: true,
+                paidPrice: true,
+                subscriptionPlan: {
+                    select: {
+                        name: true,
+                    },
+                },
+                user: {
+                    select: {
+                        email: true,
+                    },
+                },
+            },
+        });
+        res.status(200).json(transaction);
+    } catch (error) {
+        logger.error(error);
+        next(error);
+    }
+};
+
+export const updateTransaction: RequestHandler = async (req, res, next) => {
+    try {
+        const id = req.params.transactionId;
+        const { status } = req.body;
+
+        const updatedTransaction = await prisma.transaction.update({
+            where: { id },
+            data: {
+                status,
+                updatedAt: new Date(),
+            },
+        });
+
+        res.status(200).json({
+            message: 'Transaction updated successfully',
+            data: updatedTransaction,
+        });
+    } catch (error) {
+        logger.error(error);
+        next(error);
+    }
+};
