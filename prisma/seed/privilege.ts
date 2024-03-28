@@ -60,7 +60,7 @@ async function seedPrivileges(prisma: PrismaClient, logger: Logger) {
         for (const privilegeId of privilegeIds) {
             for (const [controllerName, moduleId] of moduleIdMap) {
                 const isSuperAdmin = privilegeId === Number(process.env.SUPER_ADMIN_ID);
-                const superAdminOnlyControllers = ['subscriptionPlan'];
+                const superAdminOnlyControllers = ['subscriptionPlan', 'superAdmin'];
                 const isSuperAdminOnlyController =
                     superAdminOnlyControllers.includes(controllerName);
                 const isCS = privilegeId === Number(process.env.CS_ID);
