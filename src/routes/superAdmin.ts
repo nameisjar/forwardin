@@ -9,5 +9,6 @@ router.use(superAdminOnly);
 // router.use(checkPrivilege('superAdmin'));
 router.get('/transaction', controller.getTransactions);
 router.put('/transaction/:transactionId/status', controller.updateStatusTransaction);
+router.post('/transaction', controller.createUser);
 
 export default router;

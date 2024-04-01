@@ -147,7 +147,7 @@ export const login: RequestHandler = async (req, res) => {
             return res.status(401).json({ message: 'Account not found or has been deleted' });
         }
 
-        const passwordMatch = await bcrypt.compare(password, user.password);
+        const passwordMatch = await bcrypt.compare(password, user.password || '');
         if (!passwordMatch) {
             return res.status(401).json({ message: 'Email or Password is incorrect' });
         }
@@ -371,7 +371,7 @@ export const changePassword: RequestHandler = async (req, res) => {
             return res.status(400).json({ message: 'Passwords do not match' });
         }
 
-        const passwordMatch = await bcrypt.compare(currentPassword, user.password);
+        const passwordMatch = await bcrypt.compare(currentPassword, user.password || '');
 
         if (!passwordMatch) {
             return res.status(401).json({ message: 'Current password is incorrect' });
