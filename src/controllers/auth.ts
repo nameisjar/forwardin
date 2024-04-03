@@ -395,177 +395,177 @@ export const changePassword: RequestHandler = async (req, res) => {
 };
 
 // mock get google access token by client
-const strategy = new GoogleStrategy(
-    {
-        clientID: process.env.GOOGLE_CLIENT_ID!,
-        clientSecret: process.env.GOOGLE_CLIENT_SECRET!,
-        callbackURL:
-            process.env.NODE_ENV !== 'production'
-                ? `http://${process.env.HOST}:${process.env.PORT}/auth/google/callback`
-                : `https://${process.env.BASE_URL}/auth/google/callback`,
-    },
-    async (accessToken: any, refreshToken: any, profile: Profile, done: any) => {
-        try {
-            logger.warn(refreshToken);
-            return done(null, accessToken);
-        } catch (error: any) {
-            return done(error, false);
-        }
-    },
-);
+// const strategy = new GoogleStrategy(
+//     {
+//         clientID: process.env.GOOGLE_CLIENT_ID!,
+//         clientSecret: process.env.GOOGLE_CLIENT_SECRET!,
+//         callbackURL:
+//             process.env.NODE_ENV !== 'production'
+//                 ? `http://${process.env.HOST}:${process.env.PORT}/auth/google/callback`
+//                 : `https://${process.env.BASE_URL}/auth/google/callback`,
+//     },
+//     async (accessToken: any, refreshToken: any, profile: Profile, done: any) => {
+//         try {
+//             logger.warn(refreshToken);
+//             return done(null, accessToken);
+//         } catch (error: any) {
+//             return done(error, false);
+//         }
+//     },
+// );
 
-passport.use(strategy);
-refresh.use(strategy);
+// passport.use(strategy);
+// refresh.use(strategy);
 
-export const googleAuth = passport.authenticate('google', {
-    scope: [
-        'profile',
-        'email',
-        'https://www.googleapis.com/auth/user.phonenumbers.read',
-        'https://www.googleapis.com/auth/contacts',
-        'https://www.googleapis.com/auth/contacts.readonly',
-    ],
-});
-export const googleAuthCallback: RequestHandler = (req, res, next) => {
-    passport.authenticate('google', { session: true }, async (err, accessToken) => {
-        try {
-            if (err) {
-                return res.status(500).json({ message: err.message });
-            }
+// export const googleAuth = passport.authenticate('google', {
+//     scope: [
+//         'profile',
+//         'email',
+//         'https://www.googleapis.com/auth/user.phonenumbers.read',
+//         'https://www.googleapis.com/auth/contacts',
+//         'https://www.googleapis.com/auth/contacts.readonly',
+//     ],
+// });
+// export const googleAuthCallback: RequestHandler = (req, res, next) => {
+//     passport.authenticate('google', { session: true }, async (err, accessToken) => {
+//         try {
+//             if (err) {
+//                 return res.status(500).json({ message: err.message });
+//             }
 
-            if (!accessToken) {
-                return res.status(401).json({ message: 'Authentication failed' });
-            }
+//             if (!accessToken) {
+//                 return res.status(401).json({ message: 'Authentication failed' });
+//             }
 
-            res.status(200).json({ accessToken });
-        } catch (error) {
-            return res.status(500).json({ message: 'Internal erver error' });
-        }
-    })(req, res, next);
-};
+//             res.status(200).json({ accessToken });
+//         } catch (error) {
+//             return res.status(500).json({ message: 'Internal erver error' });
+//         }
+//     })(req, res, next);
+// };
 
-// back here: separate email account & oAuth google email
-export const loginRegisterByGoogle: RequestHandler = async (req, res) => {
-    const accessToken = req.body.accessToken;
-    const apiEndpoint =
-        'https://people.googleapis.com/v1/people/me?personFields=names,emailAddresses,photos,phoneNumbers,birthdays';
-    try {
-        const response = await axios.get(apiEndpoint, {
-            headers: {
-                Authorization: `Bearer ${accessToken}`,
-            },
-        });
+// // back here: separate email account & oAuth google email
+// export const loginRegisterByGoogle: RequestHandler = async (req, res) => {
+//     const accessToken = req.body.accessToken;
+//     const apiEndpoint =
+//         'https://people.googleapis.com/v1/people/me?personFields=names,emailAddresses,photos,phoneNumbers,birthdays';
+//     try {
+//         const response = await axios.get(apiEndpoint, {
+//             headers: {
+//                 Authorization: `Bearer ${accessToken}`,
+//             },
+//         });
 
-        if (response.status === 200) {
-            const profileData = response.data;
+//         if (response.status === 200) {
+//             const profileData = response.data;
 
-            const existingPrivilege = await prisma.privilege.findUnique({
-                where: { pkId: Number(process.env.ADMIN_ID) },
-            });
+//             const existingPrivilege = await prisma.privilege.findUnique({
+//                 where: { pkId: Number(process.env.ADMIN_ID) },
+//             });
 
-            if (!profileData.emailAddresses || !profileData.names) {
-                return res.status(400).json({ message: 'Missing some profile data' });
-            }
+//             if (!profileData.emailAddresses || !profileData.names) {
+//                 return res.status(400).json({ message: 'Missing some profile data' });
+//             }
 
-            const googleId = profileData.names[0].metadata.source.id;
-            const username = profileData.emailAddresses[0].value.split('@')[0];
-            const email = profileData.emailAddresses[0].value;
-            const phones = profileData.phoneNumbers || [];
-            const phone = phones.length > 0 ? phones[0].canonicalForm?.replace(/\+/g, '') : null;
-            const nameParts = profileData.names[0].displayNameLastFirst.split(',');
-            const lastName = nameParts.length > 1 ? nameParts[0].trim() : null;
-            const firstName = lastName ? nameParts[1].trim() : nameParts[0].trim();
+//             const googleId = profileData.names[0].metadata.source.id;
+//             const username = profileData.emailAddresses[0].value.split('@')[0];
+//             const email = profileData.emailAddresses[0].value;
+//             const phones = profileData.phoneNumbers || [];
+//             const phone = phones.length > 0 ? phones[0].canonicalForm?.replace(/\+/g, '') : null;
+//             const nameParts = profileData.names[0].displayNameLastFirst.split(',');
+//             const lastName = nameParts.length > 1 ? nameParts[0].trim() : null;
+//             const firstName = lastName ? nameParts[1].trim() : nameParts[0].trim();
 
-            const user = await prisma.user.findFirst({
-                where: {
-                    OR: [
-                        { email, deletedAt: null },
-                        { phone, deletedAt: null },
-                        { username, deletedAt: null },
-                        { googleId, deletedAt: null },
-                    ],
-                },
-            });
+//             const user = await prisma.user.findFirst({
+//                 where: {
+//                     OR: [
+//                         { email, deletedAt: null },
+//                         { phone, deletedAt: null },
+//                         { username, deletedAt: null },
+//                         { googleId, deletedAt: null },
+//                     ],
+//                 },
+//             });
 
-            // forbid deleted user
-            if (!user) {
-                return res.status(401).json({ message: 'Account not found or has been deleted' });
-            }
+//             // forbid deleted user
+//             if (!user) {
+//                 return res.status(401).json({ message: 'Account not found or has been deleted' });
+//             }
 
-            const oAuthRegisteredUser = await prisma.user.findUnique({
-                where: { googleId },
-            });
+//             const oAuthRegisteredUser = await prisma.user.findUnique({
+//                 where: { googleId },
+//             });
 
-            // login
-            if (oAuthRegisteredUser) {
-                const accessToken = generateAccessToken(oAuthRegisteredUser);
-                // const refreshToken = oAuthRegisteredUser.refreshToken;
-                const refreshToken = generateRefreshToken(oAuthRegisteredUser);
-                const id = oAuthRegisteredUser.id;
+//             // login
+//             if (oAuthRegisteredUser) {
+//                 const accessToken = generateAccessToken(oAuthRegisteredUser);
+//                 // const refreshToken = oAuthRegisteredUser.refreshToken;
+//                 const refreshToken = generateRefreshToken(oAuthRegisteredUser);
+//                 const id = oAuthRegisteredUser.id;
 
-                await prisma.user.update({
-                    where: { pkId: oAuthRegisteredUser.pkId },
-                    data: { refreshToken },
-                });
-                return res
-                    .status(200)
-                    .json({ accessToken, refreshToken, id, role: oAuthRegisteredUser.privilegeId });
-            }
+//                 await prisma.user.update({
+//                     where: { pkId: oAuthRegisteredUser.pkId },
+//                     data: { refreshToken },
+//                 });
+//                 return res
+//                     .status(200)
+//                     .json({ accessToken, refreshToken, id, role: oAuthRegisteredUser.privilegeId });
+//             }
 
-            if (!existingPrivilege) {
-                return res.status(404).json({
-                    error: 'Privilege or role not found',
-                });
-            }
+//             if (!existingPrivilege) {
+//                 return res.status(404).json({
+//                     error: 'Privilege or role not found',
+//                 });
+//             }
 
-            // register user from start or connect existing user to google
-            const newUser = await prisma.user.upsert({
-                where: { email },
-                create: {
-                    googleId,
-                    username,
-                    firstName,
-                    lastName,
-                    accountApiKey: generateUuid(),
-                    phone,
-                    affiliationCode: username,
-                    privilege: { connect: { pkId: existingPrivilege.pkId } },
-                    email,
-                    password: '',
-                    emailVerifiedAt: new Date(),
-                },
-                update: {
-                    googleId,
-                },
-            });
+//             // register user from start or connect existing user to google
+//             const newUser = await prisma.user.upsert({
+//                 where: { email },
+//                 create: {
+//                     googleId,
+//                     username,
+//                     firstName,
+//                     lastName,
+//                     accountApiKey: generateUuid(),
+//                     phone,
+//                     affiliationCode: username,
+//                     privilege: { connect: { pkId: existingPrivilege.pkId } },
+//                     email,
+//                     password: '',
+//                     emailVerifiedAt: new Date(),
+//                 },
+//                 update: {
+//                     googleId,
+//                 },
+//             });
 
-            const accessToken = generateAccessToken(newUser);
-            const accountApiKey = newUser.accountApiKey;
-            const id = newUser.id;
-            let refreshToken;
+//             const accessToken = generateAccessToken(newUser);
+//             const accountApiKey = newUser.accountApiKey;
+//             const id = newUser.id;
+//             let refreshToken;
 
-            if (!newUser.refreshToken) {
-                refreshToken = generateRefreshToken(newUser);
-                await prisma.user.update({
-                    where: { pkId: newUser.pkId },
-                    data: { refreshToken },
-                });
-            } else {
-                refreshToken = newUser.refreshToken;
-            }
-            res.status(201).json({
-                accessToken,
-                refreshToken,
-                accountApiKey,
-                id,
-                role: newUser.privilegeId,
-            });
-        } else {
-            const errorMessage = response.data?.error?.message || 'Unknown Error';
-            res.status(response.status).json({ error: errorMessage });
-        }
-    } catch (error) {
-        logger.error(error);
-        res.status(500).json({ message: 'Internal server error' });
-    }
-};
+//             if (!newUser.refreshToken) {
+//                 refreshToken = generateRefreshToken(newUser);
+//                 await prisma.user.update({
+//                     where: { pkId: newUser.pkId },
+//                     data: { refreshToken },
+//                 });
+//             } else {
+//                 refreshToken = newUser.refreshToken;
+//             }
+//             res.status(201).json({
+//                 accessToken,
+//                 refreshToken,
+//                 accountApiKey,
+//                 id,
+//                 role: newUser.privilegeId,
+//             });
+//         } else {
+//             const errorMessage = response.data?.error?.message || 'Unknown Error';
+//             res.status(response.status).json({ error: errorMessage });
+//         }
+//     } catch (error) {
+//         logger.error(error);
+//         res.status(500).json({ message: 'Internal server error' });
+//     }
+// };
