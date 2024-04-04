@@ -4,11 +4,157 @@ import logger from '../config/logger';
 import { generateUuid } from '../utils/keyGenerator';
 import { generatePassword, sendEmail } from '../utils/otpHelper';
 import bcrypt from 'bcrypt';
-import { otpTemplate } from '../utils/templateEmailOtp';
-import { generateRefreshToken } from '../utils/jwtGenerator';
+import { generateAccessToken, generateRefreshToken } from '../utils/jwtGenerator';
 import { passwordTemplate } from '../utils/templateEmailPassword';
 
-export const createUser: RequestHandler = async (req, res, next) => {
+export const addSuperAdmin: RequestHandler = async (req, res, next) => {
+    try {
+        const {
+            firstName,
+            lastName,
+            username,
+            phone,
+            email,
+            role = Number(process.env.SUPER_ADMIN_ID),
+        } = req.body;
+
+        const existingUser = await prisma.user.findFirst({
+            where: {
+                OR: [{ username }, { email }, { phone }],
+            },
+        });
+        if (existingUser) {
+            return res
+                .status(400)
+                .json({ message: 'User with this username, email, or phone already exists' });
+        }
+
+        const existingPrivilege = await prisma.privilege.findUnique({
+            where: { pkId: role },
+        });
+        if (!existingPrivilege) {
+            return res.status(404).json({
+                error: 'Privilege or role not found',
+            });
+        }
+        const newUser = await prisma.user.create({
+            data: {
+                username,
+                firstName,
+                lastName,
+                phone,
+                email,
+                accountApiKey: generateUuid(),
+                affiliationCode: username,
+                privilege: { connect: { pkId: role } },
+            },
+        });
+
+        await prisma.$transaction(async (transaction) => {
+            const password = generatePassword();
+            const passwordHash = await bcrypt.hash(password, 10);
+            const refreshToken = generateRefreshToken(newUser);
+            await transaction.user.update({
+                where: { pkId: newUser.pkId },
+                data: {
+                    password: passwordHash,
+                    refreshToken,
+                    emailVerifiedAt: new Date(),
+                },
+            });
+            const template = passwordTemplate(password, 'Admin' + '' + newUser.firstName);
+            await sendEmail(
+                email,
+                template,
+                'Your password for login to the Forwardin App as Super Admin',
+            );
+        });
+
+        res.status(201).json({
+            message: 'SuperAdmin account created successfully with password sent to email',
+        });
+    } catch (error) {
+        logger.error(error);
+        next(error);
+    }
+};
+
+export const getSuperAdmins: RequestHandler = async (req, res, next) => {
+    try {
+        const { page = 1, pageSize = 10 } = req.query;
+        const offset = (Number(page) - 1) * Number(pageSize);
+
+        const superAdmins = await prisma.user.findMany({
+            take: Number(pageSize),
+            skip: offset,
+            where: {
+                privilegeId: Number(process.env.SUPER_ADMIN_ID),
+            },
+            select: {
+                pkId: true,
+                firstName: true,
+                lastName: true,
+                email: true,
+                phone: true,
+                createdAt: true,
+            },
+            orderBy: {
+                createdAt: 'desc',
+            },
+        });
+        res.status(200).json(superAdmins);
+    } catch (error) {
+        logger.error(error);
+        next(error);
+    }
+};
+
+export const login: RequestHandler = async (req, res, next) => {
+    try {
+        const { identifier, password } = req.body;
+
+        const user = await prisma.user.findFirst({
+            where: {
+                OR: [
+                    { email: identifier, deletedAt: null },
+                    { phone: identifier, deletedAt: null },
+                    { username: identifier, deletedAt: null },
+                    { googleId: identifier, deletedAt: null },
+                ],
+            },
+        });
+
+        if (!user) {
+            return res.status(401).json({ message: 'Account not found or has been deleted' });
+        }
+
+        if (user.privilegeId !== Number(process.env.SUPER_ADMIN_ID)) {
+            return res.status(401).json({ message: 'Account not authorized' });
+        }
+
+        const passwordMatch = await bcrypt.compare(password, user.password || '');
+        if (!passwordMatch) {
+            return res.status(401).json({ message: 'Email or Password is incorrect' });
+        }
+
+        const accessToken = generateAccessToken(user);
+        // const refreshToken = user.refreshToken;
+        const refreshToken = generateRefreshToken(user);
+        const id = user.id;
+
+        await prisma.user.update({
+            where: { pkId: user.pkId },
+            data: { refreshToken },
+        });
+
+        return res.status(200).json({ accessToken, refreshToken, id, role: user.privilegeId });
+    } catch (error) {
+        logger.error(error);
+        next(error);
+    }
+};
+
+export const createUserAdmin: RequestHandler = async (req, res, next) => {
     try {
         const {
             firstName,
@@ -73,7 +219,7 @@ export const createUser: RequestHandler = async (req, res, next) => {
 
         const order_id = `ORDER-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
 
-        const user = await prisma.user.create({
+        const newUser = await prisma.user.create({
             data: {
                 firstName,
                 lastName,
@@ -98,7 +244,7 @@ export const createUser: RequestHandler = async (req, res, next) => {
                     status: 'paid',
                     paidPrice,
                     subscriptionPlanId: subscriptionPlan.pkId,
-                    userId: user.pkId,
+                    userId: newUser.pkId,
                     createdAt: new Date(),
                     updatedAt: new Date(),
                 },
@@ -107,9 +253,9 @@ export const createUser: RequestHandler = async (req, res, next) => {
             // Generate password and send email to user
             const password = generatePassword();
             const passwordHash = await bcrypt.hash(password, 10);
-            const refreshToken = generateRefreshToken(user);
+            const refreshToken = generateRefreshToken(newUser);
             await transaction.user.update({
-                where: { pkId: user.pkId },
+                where: { pkId: newUser.pkId },
                 data: {
                     password: passwordHash,
                     updatedAt: new Date(),
@@ -117,8 +263,8 @@ export const createUser: RequestHandler = async (req, res, next) => {
                     emailVerifiedAt: new Date(),
                 },
             });
-            const template = passwordTemplate(password, user.firstName + ' ' + user.lastName);
-            await sendEmail(email, template, 'Your password for login to the system');
+            const template = passwordTemplate(password, newUser.firstName + ' ' + newUser.lastName);
+            await sendEmail(email, template, 'Your password for login to the Forwardin App');
 
             // Create subscription
             const transaction_time_iso = new Date(transaction_time).toISOString();
@@ -141,7 +287,7 @@ export const createUser: RequestHandler = async (req, res, next) => {
                     deviceMax: subscriptionPlan?.deviceQuota || 0,
                     contactMax: subscriptionPlan?.contactQuota || 0,
                     broadcastMax: subscriptionPlan?.broadcastQuota || 0,
-                    userId: user.pkId,
+                    userId: newUser.pkId,
                     subscriptionPlanId: subscriptionPlan.pkId,
                 },
             });
