@@ -2,6 +2,11 @@ import { RequestHandler } from 'express';
 import prisma from '../utils/db';
 import logger from '../config/logger';
 import { generateUuid } from '../utils/keyGenerator';
+import { generatePassword, sendEmail } from '../utils/otpHelper';
+import bcrypt from 'bcrypt';
+import { otpTemplate } from '../utils/templateEmailOtp';
+import { generateRefreshToken } from '../utils/jwtGenerator';
+import { passwordTemplate } from '../utils/templateEmailPassword';
 
 export const createUser: RequestHandler = async (req, res, next) => {
     try {
@@ -72,9 +77,11 @@ export const createUser: RequestHandler = async (req, res, next) => {
             data: {
                 firstName,
                 lastName,
+                username: firstName,
                 email,
                 phone,
                 accountApiKey: generateUuid(),
+                affiliationCode: firstName,
                 privilege: {
                     connect: {
                         pkId: role,
@@ -84,6 +91,7 @@ export const createUser: RequestHandler = async (req, res, next) => {
         });
 
         await prisma.$transaction(async (transaction) => {
+            // Create transaction
             await transaction.transaction.create({
                 data: {
                     id: order_id,
@@ -96,6 +104,23 @@ export const createUser: RequestHandler = async (req, res, next) => {
                 },
             });
 
+            // Generate password and send email to user
+            const password = generatePassword();
+            const passwordHash = await bcrypt.hash(password, 10);
+            const refreshToken = generateRefreshToken(user);
+            await transaction.user.update({
+                where: { pkId: user.pkId },
+                data: {
+                    password: passwordHash,
+                    updatedAt: new Date(),
+                    refreshToken,
+                    emailVerifiedAt: new Date(),
+                },
+            });
+            const template = passwordTemplate(password, user.firstName + ' ' + user.lastName);
+            await sendEmail(email, template, 'Your password for login to the system');
+
+            // Create subscription
             const transaction_time_iso = new Date(transaction_time).toISOString();
             const oneMonthLater = new Date(
                 new Date(transaction_time).setMonth(new Date(transaction_time).getMonth() + 1),
@@ -122,7 +147,7 @@ export const createUser: RequestHandler = async (req, res, next) => {
             });
         });
         res.status(201).json({
-            message: 'User created successfully',
+            message: 'User created successfully with password sent to email',
         });
     } catch (error) {
         logger.error(error);

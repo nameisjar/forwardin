@@ -9,6 +9,17 @@ export function generateOTPSecret(): string {
     return secret.base32;
 }
 
+export function generatePassword(): string {
+    const length = 8;
+    const charset = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+    let password = '';
+    for (let i = 0; i < length; i++) {
+        const at = Math.floor(Math.random() * (charset.length + 1));
+        password += charset.charAt(at);
+    }
+    return password;
+}
+
 export function generateOTPToken(secret: string): string {
     const token = speakeasy.totp({
         secret: secret,
