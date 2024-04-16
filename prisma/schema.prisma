@@ -22,7 +22,7 @@ model User {
   emailOtpSecret   String?           @map("email_otp_secret") @db.VarChar(255)
   refreshToken     String?           @unique @map("refresh_token") @db.VarChar(255)
   createdAt        DateTime          @default(now()) @map("created_at")
-  updatedAt        DateTime          @default(now()) @map("updated_at")
+  updatedAt        DateTime?          @default(now()) @map("updated_at")
   deletedAt        DateTime?         @map("deleted_at")
   emailVerifiedAt  DateTime?         @map("email_verfied_at")
   privilegeId      Int?              @map("privilege_id")
