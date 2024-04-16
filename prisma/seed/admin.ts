@@ -15,6 +15,7 @@ async function seedAdminAccount(prisma: PrismaClient, logger: Logger) {
                 username: 'admin',
                 email: 'admin@gmail.com',
                 password: hashedPassword,
+                affiliationCode: 'admin',
                 accountApiKey: generateUuid(),
                 emailVerifiedAt: new Date(),
                 createdAt: new Date(),
