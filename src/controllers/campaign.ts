@@ -804,7 +804,7 @@ export const deleteCampaignMessages: RequestHandler = async (req, res) => {
 
 export const updateCampaign: RequestHandler = async (req, res) => {
     try {
-        const id = req.params.campaignMessageId;
+        const id = req.params.campaignId;
 
         if (!isUUID(id)) {
             return res.status(400).json({ message: 'Invalid campaignMessageId' });
