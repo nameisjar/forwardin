@@ -89,6 +89,7 @@ export const getSuperAdmins: RequestHandler = async (req, res, next) => {
             skip: offset,
             where: {
                 privilegeId: Number(process.env.SUPER_ADMIN_ID),
+                deletedAt: null,
             },
             select: {
                 pkId: true,
@@ -159,6 +160,7 @@ export const createUserAdmin: RequestHandler = async (req, res, next) => {
         const {
             firstName,
             lastName,
+            username,
             email,
             phone,
             subscriptionPlanId,
@@ -170,6 +172,7 @@ export const createUserAdmin: RequestHandler = async (req, res, next) => {
         if (
             !firstName ||
             !lastName ||
+            !username ||
             !email ||
             !phone ||
             !subscriptionPlanId ||
@@ -180,13 +183,14 @@ export const createUserAdmin: RequestHandler = async (req, res, next) => {
 
         const existingUser = await prisma.user.findFirst({
             where: {
-                OR: [{ email }, { phone }],
+                OR: [{ username }, { email }, { phone }],
             },
         });
+
         if (existingUser) {
             return res
                 .status(400)
-                .json({ message: 'User with this username, email, or phone already exists' });
+                .json({ message: 'User with this username, email or phone already exists' });
         }
 
         const existingPrivilege = await prisma.privilege.findUnique({
@@ -223,7 +227,7 @@ export const createUserAdmin: RequestHandler = async (req, res, next) => {
             data: {
                 firstName,
                 lastName,
-                username: firstName,
+                username,
                 email,
                 phone,
                 accountApiKey: generateUuid(),
@@ -304,11 +308,15 @@ export const createUserAdmin: RequestHandler = async (req, res, next) => {
 export const getUsers: RequestHandler = async (req, res, next) => {
     try {
         const users = await prisma.user.findMany({
+            where: {
+                deletedAt: null,
+            },
             select: {
                 pkId: true,
                 id: true,
                 firstName: true,
                 lastName: true,
+                username: true,
                 email: true,
                 phone: true,
                 googleId: true,
@@ -365,21 +373,29 @@ export const getTransactions: RequestHandler = async (req, res, next) => {
 export const updateUser: RequestHandler = async (req, res, next) => {
     try {
         const id = req.params.userId;
-        const { firstName, lastName, email, phone, role = Number(process.env.ADMIN_ID) } = req.body;
+        const {
+            firstName,
+            lastName,
+            username,
+            email,
+            phone,
+            role = Number(process.env.ADMIN_ID),
+        } = req.body;
         if (!firstName || !lastName || !email || !phone) {
             return res.status(400).json({ message: 'Missing required fields' });
         }
 
         const existingUser = await prisma.user.findFirst({
             where: {
-                OR: [{ email }, { phone }],
+                OR: [{ username }, { email }, { phone }],
                 NOT: { id: id },
             },
         });
+
         if (existingUser) {
             return res
                 .status(400)
-                .json({ message: 'User with this email or phone already exists' });
+                .json({ message: 'User with this username, email or phone already exists' });
         }
 
         const existingPrivilege = await prisma.privilege.findUnique({
@@ -403,7 +419,7 @@ export const updateUser: RequestHandler = async (req, res, next) => {
             data: {
                 firstName,
                 lastName,
-                username: firstName,
+                username,
                 email,
                 phone,
                 accountApiKey: generateUuid(),
@@ -596,6 +612,49 @@ export const updateStatusTransaction: RequestHandler = async (req, res, next) =>
             return res.status(200).json({ message: 'Subscription created successfully' });
         }
         return res.status(200).json({ message: 'Transaction status updated successfully' });
+    } catch (error) {
+        logger.error(error);
+        next(error);
+    }
+};
+
+export const deleteUser: RequestHandler = async (req, res, next) => {
+    try {
+        const userId = req.params.userId;
+
+        if (!userId) {
+            return res.status(400).json({ message: 'Missing required fields' });
+        }
+
+        const user = await prisma.user.findUnique({
+            where: {
+                id: userId,
+            },
+        });
+
+        if (!user) {
+            return res.status(404).json({ message: 'User not found' });
+        }
+
+        // await prisma.user.delete({
+        //     where: {
+        //         id: userId,
+        //     },
+        // });
+
+        // soft delete
+        await prisma.user.update({
+            where: {
+                id: userId,
+            },
+            data: {
+                // make acc api key null so user can't access via api
+                accountApiKey: null,
+                deletedAt: new Date(),
+            },
+        });
+
+        return res.status(200).json({ message: 'User deleted successfully' });
     } catch (error) {
         logger.error(error);
         next(error);
