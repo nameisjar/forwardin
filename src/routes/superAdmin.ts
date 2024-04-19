@@ -11,8 +11,11 @@ router.use(superAdminOnly);
 router.use(checkPrivilege('superAdmin'));
 router.post('/add', controller.addSuperAdmin);
 router.get('/', controller.getSuperAdmins);
-router.get('/transaction', controller.getTransactions);
+// router.get('/transaction', controller.getTransactions);
 router.put('/transaction/:transactionId/status', controller.updateStatusTransaction);
 router.post('/transaction', controller.createUserAdmin);
+router.get('/users', controller.getUsers);
+router.put('/users/:userId', controller.updateUser);
+router.put('/users/:userId/subscriptions', controller.updateSubscription);
 
 export default router;

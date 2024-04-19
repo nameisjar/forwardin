@@ -306,6 +306,7 @@ export const getUsers: RequestHandler = async (req, res, next) => {
         const users = await prisma.user.findMany({
             select: {
                 pkId: true,
+                id: true,
                 firstName: true,
                 lastName: true,
                 email: true,
@@ -355,6 +356,181 @@ export const getTransactions: RequestHandler = async (req, res, next) => {
             },
         });
         res.status(200).json(transaction);
+    } catch (error) {
+        logger.error(error);
+        next(error);
+    }
+};
+
+export const updateUser: RequestHandler = async (req, res, next) => {
+    try {
+        const id = req.params.userId;
+        const { firstName, lastName, email, phone, role = Number(process.env.ADMIN_ID) } = req.body;
+        if (!firstName || !lastName || !email || !phone) {
+            return res.status(400).json({ message: 'Missing required fields' });
+        }
+
+        const existingUser = await prisma.user.findFirst({
+            where: {
+                OR: [{ email }, { phone }],
+                NOT: { id: id },
+            },
+        });
+        if (existingUser) {
+            return res
+                .status(400)
+                .json({ message: 'User with this email or phone already exists' });
+        }
+
+        const existingPrivilege = await prisma.privilege.findUnique({
+            where: { pkId: role },
+        });
+        if (!existingPrivilege) {
+            return res.status(404).json({
+                error: 'Privilege or role not found',
+            });
+        }
+
+        const user = await prisma.user.findUnique({
+            where: { id: id },
+        });
+        if (!user) {
+            return res.status(404).json({ message: 'User not found' });
+        }
+
+        const updateUser = await prisma.user.update({
+            where: { id },
+            data: {
+                firstName,
+                lastName,
+                username: firstName,
+                email,
+                phone,
+                accountApiKey: generateUuid(),
+                affiliationCode: firstName,
+                privilege: {
+                    connect: {
+                        pkId: role,
+                    },
+                },
+            },
+        });
+
+        await prisma.$transaction(async (transaction) => {
+            // Generate password and send email to user
+            const password = generatePassword();
+            const passwordHash = await bcrypt.hash(password, 10);
+            const refreshToken = generateRefreshToken(updateUser);
+            await transaction.user.update({
+                where: { pkId: updateUser.pkId },
+                data: {
+                    password: passwordHash,
+                    updatedAt: new Date(),
+                    refreshToken,
+                    emailVerifiedAt: new Date(),
+                },
+            });
+
+            if (email !== user.email) {
+                const template = passwordTemplate(
+                    password,
+                    updateUser.firstName + ' ' + updateUser.lastName,
+                );
+                await sendEmail(
+                    email,
+                    template,
+                    'Your new password for login to the Forwardin App',
+                );
+            }
+        });
+
+        res.status(200).json({ message: 'User updated successfully' });
+    } catch (error) {
+        logger.error(error);
+        next(error);
+    }
+};
+
+export const updateSubscription: RequestHandler = async (req, res, next) => {
+    try {
+        const id = req.params.userId;
+        const { subscriptionPlanId, subscriptionPlanType } = req.body;
+
+        const transaction_time = new Date();
+
+        const user = await prisma.user.findUnique({
+            where: { id },
+            include: {
+                Subscription: true,
+            },
+        });
+
+        if (!user) {
+            return res.status(404).json({ message: 'User not found' });
+        }
+
+        const subscriptionPlan = await prisma.subscriptionPlan.findUnique({
+            where: { id: subscriptionPlanId },
+        });
+
+        if (!subscriptionPlan) {
+            return res.status(404).json({
+                error: 'Subscription plan not found',
+            });
+        }
+
+        const paidPrice =
+            subscriptionPlanType === 'monthly'
+                ? subscriptionPlan?.monthlyPrice
+                : subscriptionPlan?.yearlyPrice;
+
+        if (paidPrice === null || paidPrice === undefined) {
+            return res.status(400).json({ error: 'Invalid subscriptionType' });
+        }
+
+        const order_id = `ORDER-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
+
+        await prisma.$transaction(async (transaction) => {
+            // Create transaction
+            await transaction.transaction.create({
+                data: {
+                    id: order_id,
+                    status: 'paid',
+                    paidPrice,
+                    subscriptionPlanId: subscriptionPlan.pkId,
+                    userId: user.pkId,
+                    createdAt: new Date(),
+                    updatedAt: new Date(),
+                },
+            });
+
+            // Create subscription
+            const transaction_time_iso = new Date(transaction_time).toISOString();
+            const oneMonthLater = new Date(
+                new Date(transaction_time).setMonth(new Date(transaction_time).getMonth() + 1),
+            );
+            const oneMonthLaterISO = oneMonthLater.toISOString();
+            const oneYearLater = new Date(
+                new Date(transaction_time).setFullYear(
+                    new Date(transaction_time).getFullYear() + 1,
+                ),
+            );
+            const oneYearLaterISO = oneYearLater.toISOString();
+
+            await transaction.subscription.create({
+                data: {
+                    startDate: transaction_time_iso,
+                    endDate: subscriptionPlanType === 'yearly' ? oneYearLaterISO : oneMonthLaterISO,
+                    autoReplyMax: subscriptionPlan?.autoReplyQuota || 0,
+                    deviceMax: subscriptionPlan?.deviceQuota || 0,
+                    contactMax: subscriptionPlan?.contactQuota || 0,
+                    broadcastMax: subscriptionPlan?.broadcastQuota || 0,
+                    userId: user.pkId,
+                    subscriptionPlanId: subscriptionPlan.pkId,
+                },
+            });
+        });
+        res.status(200).json({ message: 'Subscription updated successfully' });
     } catch (error) {
         logger.error(error);
         next(error);
