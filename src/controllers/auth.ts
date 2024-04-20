@@ -147,6 +147,10 @@ export const login: RequestHandler = async (req, res) => {
             return res.status(401).json({ message: 'Account not found or has been deleted' });
         }
 
+        if (user.privilegeId !== Number(process.env.SUPER_ADMIN_ID)) {
+            return res.status(401).json({ message: 'Account not authorized' });
+        }
+
         const passwordMatch = await bcrypt.compare(password, user.password || '');
         if (!passwordMatch) {
             return res.status(401).json({ message: 'Email or Password is incorrect' });

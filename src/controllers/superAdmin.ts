@@ -310,6 +310,7 @@ export const getUsers: RequestHandler = async (req, res, next) => {
         const users = await prisma.user.findMany({
             where: {
                 deletedAt: null,
+                NOT: { privilegeId: Number(process.env.SUPER_ADMIN_ID) },
             },
             select: {
                 pkId: true,
