@@ -105,6 +105,10 @@ export const login: RequestHandler = async (req, res) => {
             return res.status(404).json({ message: 'CS Account not found' });
         }
 
+        if (cs.privilegeId !== Number(process.env.CS_ID)) {
+            return res.status(401).json({ message: 'Account not authorized' });
+        }
+
         const passwordMatch = await bcrypt.compare(password, cs.password);
         if (!passwordMatch) {
             return res.status(401).json({ message: 'Wrong password' });
