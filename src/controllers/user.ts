@@ -35,6 +35,17 @@ export const getUserProfile: RequestHandler = async (req, res) => {
                 googleId: true,
                 affiliationCode: true,
                 emailVerifiedAt: true,
+                Subscription: {
+                    select: {
+                        subscriptionPlan: {
+                            select: {
+                                name: true,
+                            },
+                        },
+                        startDate: true,
+                        endDate: true,
+                    },
+                },
             },
         });
 

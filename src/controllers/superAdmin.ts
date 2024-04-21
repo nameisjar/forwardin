@@ -342,6 +342,9 @@ export const getUsers: RequestHandler = async (req, res, next) => {
                             },
                         },
                     },
+                    orderBy: {
+                        createdAt: 'desc',
+                    },
                 },
             },
         });
@@ -520,6 +523,12 @@ export const updateSubscription: RequestHandler = async (req, res, next) => {
         const order_id = `ORDER-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
 
         await prisma.$transaction(async (transaction) => {
+            //delete subscription
+            await transaction.subscription.deleteMany({
+                where: {
+                    userId: user.pkId,
+                },
+            });
             // Create transaction
             await transaction.transaction.create({
                 data: {
@@ -594,6 +603,19 @@ export const updateStatusTransaction: RequestHandler = async (req, res, next) =>
             new Date(transaction_time).setFullYear(new Date(transaction_time).getFullYear() + 1),
         );
         const oneYearLaterISO = oneYearLater.toISOString();
+
+        const existingSubscription = await prisma.subscription.findFirst({
+            where: { userId: existingTransaction.user.pkId },
+        });
+
+        //delete subscription
+        if (existingSubscription) {
+            await prisma.subscription.deleteMany({
+                where: {
+                    userId: existingTransaction.user.pkId,
+                },
+            });
+        }
 
         const transaction = await prisma.transaction.update({
             where: { id },
