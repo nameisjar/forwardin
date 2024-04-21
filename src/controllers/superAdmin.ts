@@ -322,6 +322,15 @@ export const getUsers: RequestHandler = async (req, res, next) => {
                 phone: true,
                 googleId: true,
                 createdAt: true,
+                Subscription: {
+                    select: {
+                        subscriptionPlan: {
+                            select: {
+                                name: true,
+                            },
+                        },
+                    },
+                },
                 transactions: {
                     select: {
                         id: true,
