@@ -4,10 +4,9 @@ import logger from '../config/logger';
 import { isUUID } from '../utils/uuidChecker';
 
 export const getGroups: RequestHandler = async (req, res) => {
-    const userId = req.authenticatedUser.pkId;
-    const privilegeId = req.privilege.pkId;
-
     try {
+        const userId = req.authenticatedUser.pkId;
+        const privilegeId = req.privilege.pkId;
         const rawGroups = await prisma.group.findMany({
             where: {
                 userId: privilegeId !== Number(process.env.ADMIN_ID) ? undefined : userId,
