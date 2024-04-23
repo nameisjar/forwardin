@@ -283,3 +283,30 @@ export const deleteGroups: RequestHandler = async (req, res) => {
         res.status(500).json({ message: 'Internal server error' });
     }
 };
+
+export const deleteGroupById: RequestHandler = async (req, res) => {
+    try {
+        const groupId = req.params.groupId;
+
+        if (!isUUID(groupId)) {
+            return res.status(400).json({ message: 'Invalid groupId' });
+        }
+
+        const group = await prisma.group.findUnique({
+            where: { id: groupId },
+        });
+
+        if (!group) {
+            return res.status(404).json({ message: 'Group not found' });
+        }
+
+        await prisma.group.delete({
+            where: { id: groupId },
+        });
+
+        res.status(200).json({ message: 'Group deleted successfully' });
+    } catch (error) {
+        logger.error(error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};
