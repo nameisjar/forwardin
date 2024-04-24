@@ -653,7 +653,7 @@ export const updateStatusTransaction: RequestHandler = async (req, res, next) =>
     }
 };
 
-export const deleteUser: RequestHandler = async (req, res, next) => {
+export const deleteUserById: RequestHandler = async (req, res, next) => {
     try {
         const userId = req.params.userId;
 
@@ -664,6 +664,7 @@ export const deleteUser: RequestHandler = async (req, res, next) => {
         const user = await prisma.user.findUnique({
             where: {
                 id: userId,
+                deletedAt: null,
             },
         });
 
@@ -690,6 +691,47 @@ export const deleteUser: RequestHandler = async (req, res, next) => {
         });
 
         return res.status(200).json({ message: 'User deleted successfully' });
+    } catch (error) {
+        logger.error(error);
+        next(error);
+    }
+};
+
+export const deleteUsers: RequestHandler = async (req, res, next) => {
+    try {
+        const userIds = req.body.userIds;
+
+        if (!userIds) {
+            return res.status(400).json({ message: 'Missing required fields' });
+        }
+
+        await prisma.$transaction(async (transaction) => {
+            for (let i = 0; i < userIds.length; i++) {
+                const user = await prisma.user.findUnique({
+                    where: {
+                        id: userIds[i],
+                    },
+                });
+
+                if (!user) {
+                    return res.status(404).json({ message: 'User not found' });
+                }
+
+                // soft delete
+                await transaction.user.update({
+                    where: {
+                        id: userIds[i],
+                    },
+                    data: {
+                        // make acc api key null so user can't access via api
+                        accountApiKey: null,
+                        deletedAt: new Date(),
+                    },
+                });
+            }
+        });
+
+        return res.status(200).json({ message: 'Users deleted successfully' });
     } catch (error) {
         logger.error(error);
         next(error);

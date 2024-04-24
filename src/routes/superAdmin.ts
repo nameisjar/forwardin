@@ -17,6 +17,7 @@ router.post('/user', controller.createUserAdmin);
 router.get('/users', controller.getUsers);
 router.put('/users/:userId', controller.updateUser);
 router.put('/users/:userId/subscriptions', controller.updateSubscription);
-router.delete('/users/:userId', controller.deleteUser);
+router.delete('/users', controller.deleteUsers);
+router.delete('/users/:userId', controller.deleteUserById);
 
 export default router;
