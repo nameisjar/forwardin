@@ -57,7 +57,7 @@ export const getAllSubscriptionPlans: RequestHandler = async (req, res) => {
 
 export const getSubscriptionPlanById: RequestHandler = async (req, res) => {
     try {
-        const subscriptionPlanId = req.params.subscriptionPlanId;
+        const subscriptionPlanId = req.params.id;
 
         if (!isUUID(subscriptionPlanId)) {
             return res.status(400).json({ message: 'Invalid subscriptionPlanId' });
@@ -80,7 +80,7 @@ export const getSubscriptionPlanById: RequestHandler = async (req, res) => {
 
 export const updateSubscriptionPlan: RequestHandler = async (req, res) => {
     try {
-        const subscriptionPlanId = req.params.subscriptionPlanId;
+        const subscriptionPlanId = req.params.id;
 
         if (!isUUID(subscriptionPlanId)) {
             return res.status(400).json({ message: 'Invalid subscriptionPlanId' });
@@ -130,7 +130,7 @@ export const updateSubscriptionPlan: RequestHandler = async (req, res) => {
 
 export const deleteSubscriptionPlan: RequestHandler = async (req, res) => {
     try {
-        const subscriptionPlanId = req.params.subscriptionPlanId;
+        const subscriptionPlanId = req.params.id;
 
         if (!isUUID(subscriptionPlanId)) {
             return res.status(400).json({ message: 'Invalid subscriptionPlanId' });

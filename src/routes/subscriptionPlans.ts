@@ -15,9 +15,9 @@ router.use(superAdminOnly);
 router.use(checkPrivilege('subscriptionPlan'));
 router.post('/', createSubscriptionPlan);
 router.get('/', getAllSubscriptionPlans);
-router.get('/:subscriptionPlanId', getSubscriptionPlanById);
-router.put('/:subscriptionPlanId', updateSubscriptionPlan);
-router.delete('/:idsubscriptionPlanId', deleteSubscriptionPlan);
+router.get('/:id', getSubscriptionPlanById);
+router.put('/:id', updateSubscriptionPlan);
+router.delete('/:id', deleteSubscriptionPlan);
 router.delete('/', deleteSubscriptionPlans);
 
 export default router;
