@@ -7,7 +7,7 @@ import bcrypt from 'bcrypt';
 import { generateAccessToken, generateRefreshToken } from '../utils/jwtGenerator';
 import { passwordTemplate } from '../utils/templateEmailPassword';
 
-export const addSuperAdmin: RequestHandler = async (req, res, next) => {
+export const addSuperAdmin: RequestHandler = async (req, res) => {
     try {
         const {
             firstName,
@@ -75,11 +75,11 @@ export const addSuperAdmin: RequestHandler = async (req, res, next) => {
         });
     } catch (error) {
         logger.error(error);
-        next(error);
+        res.status(500).json({ message: 'Internal server error' });
     }
 };
 
-export const getSuperAdmins: RequestHandler = async (req, res, next) => {
+export const getSuperAdmins: RequestHandler = async (req, res) => {
     try {
         const { page = 1, pageSize = 10 } = req.query;
         const offset = (Number(page) - 1) * Number(pageSize);
@@ -106,11 +106,11 @@ export const getSuperAdmins: RequestHandler = async (req, res, next) => {
         res.status(200).json(superAdmins);
     } catch (error) {
         logger.error(error);
-        next(error);
+        res.status(500).json({ message: 'Internal server error' });
     }
 };
 
-export const login: RequestHandler = async (req, res, next) => {
+export const login: RequestHandler = async (req, res) => {
     try {
         const { identifier, password } = req.body;
 
@@ -151,11 +151,11 @@ export const login: RequestHandler = async (req, res, next) => {
         return res.status(200).json({ accessToken, refreshToken, id, role: user.privilegeId });
     } catch (error) {
         logger.error(error);
-        next(error);
+        res.status(500).json({ message: 'Internal server error' });
     }
 };
 
-export const createUserAdmin: RequestHandler = async (req, res, next) => {
+export const createUserAdmin: RequestHandler = async (req, res) => {
     try {
         const {
             firstName,
@@ -301,11 +301,11 @@ export const createUserAdmin: RequestHandler = async (req, res, next) => {
         });
     } catch (error) {
         logger.error(error);
-        next(error);
+        res.status(500).json({ message: 'Internal server error' });
     }
 };
 
-export const getUsers: RequestHandler = async (req, res, next) => {
+export const getUsers: RequestHandler = async (req, res) => {
     try {
         const users = await prisma.user.findMany({
             where: {
@@ -351,10 +351,10 @@ export const getUsers: RequestHandler = async (req, res, next) => {
         res.status(200).json(users);
     } catch (error) {
         logger.error(error);
-        next(error);
+        res.status(500).json({ message: 'Internal server error' });
     }
 };
-export const getTransactions: RequestHandler = async (req, res, next) => {
+export const getTransactions: RequestHandler = async (req, res) => {
     try {
         const transaction = await prisma.transaction.findMany({
             select: {
@@ -382,11 +382,11 @@ export const getTransactions: RequestHandler = async (req, res, next) => {
         res.status(200).json(transaction);
     } catch (error) {
         logger.error(error);
-        next(error);
+        res.status(500).json({ message: 'Internal server error' });
     }
 };
 
-export const updateUser: RequestHandler = async (req, res, next) => {
+export const updateUser: RequestHandler = async (req, res) => {
     try {
         const id = req.params.userId;
         const {
@@ -479,11 +479,11 @@ export const updateUser: RequestHandler = async (req, res, next) => {
         res.status(200).json({ message: 'User updated successfully' });
     } catch (error) {
         logger.error(error);
-        next(error);
+        res.status(500).json({ message: 'Internal server error' });
     }
 };
 
-export const updateSubscription: RequestHandler = async (req, res, next) => {
+export const updateSubscription: RequestHandler = async (req, res) => {
     try {
         const id = req.params.userId;
         const { subscriptionPlanId, subscriptionPlanType } = req.body;
@@ -571,11 +571,11 @@ export const updateSubscription: RequestHandler = async (req, res, next) => {
         res.status(200).json({ message: 'Subscription updated successfully' });
     } catch (error) {
         logger.error(error);
-        next(error);
+        res.status(500).json({ message: 'Internal server error' });
     }
 };
 
-export const updateStatusTransaction: RequestHandler = async (req, res, next) => {
+export const updateStatusTransaction: RequestHandler = async (req, res) => {
     try {
         const id = req.params.transactionId;
         const { status } = req.body;
@@ -649,11 +649,11 @@ export const updateStatusTransaction: RequestHandler = async (req, res, next) =>
         return res.status(200).json({ message: 'Transaction status updated successfully' });
     } catch (error) {
         logger.error(error);
-        next(error);
+        res.status(500).json({ message: 'Internal server error' });
     }
 };
 
-export const deleteUserById: RequestHandler = async (req, res, next) => {
+export const deleteUserById: RequestHandler = async (req, res) => {
     try {
         const userId = req.params.userId;
 
@@ -693,11 +693,11 @@ export const deleteUserById: RequestHandler = async (req, res, next) => {
         return res.status(200).json({ message: 'User deleted successfully' });
     } catch (error) {
         logger.error(error);
-        next(error);
+        res.status(500).json({ message: 'Internal server error' });
     }
 };
 
-export const deleteUsers: RequestHandler = async (req, res, next) => {
+export const deleteUsers: RequestHandler = async (req, res) => {
     try {
         const userIds = req.body.userIds;
 
@@ -734,6 +734,6 @@ export const deleteUsers: RequestHandler = async (req, res, next) => {
         return res.status(200).json({ message: 'Users deleted successfully' });
     } catch (error) {
         logger.error(error);
-        next(error);
+        res.status(500).json({ message: 'Internal server error' });
     }
 };

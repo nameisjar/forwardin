@@ -5,6 +5,7 @@ import {
     getSubscriptionPlanById,
     updateSubscriptionPlan,
     deleteSubscriptionPlan,
+    deleteSubscriptionPlans,
 } from '../controllers/subscriptionPlan';
 import { checkPrivilege, superAdminOnly } from '../middleware/auth';
 
@@ -14,8 +15,9 @@ router.use(superAdminOnly);
 router.use(checkPrivilege('subscriptionPlan'));
 router.post('/', createSubscriptionPlan);
 router.get('/', getAllSubscriptionPlans);
-router.get('/:id', getSubscriptionPlanById);
-router.put('/:id', updateSubscriptionPlan);
-router.delete('/:id', deleteSubscriptionPlan);
+router.get('/:subscriptionPlanId', getSubscriptionPlanById);
+router.put('/:subscriptionPlanId', updateSubscriptionPlan);
+router.delete('/:idsubscriptionPlanId', deleteSubscriptionPlan);
+router.delete('/', deleteSubscriptionPlans);
 
 export default router;

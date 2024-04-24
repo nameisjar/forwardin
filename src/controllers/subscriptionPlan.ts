@@ -57,14 +57,14 @@ export const getAllSubscriptionPlans: RequestHandler = async (req, res) => {
 
 export const getSubscriptionPlanById: RequestHandler = async (req, res) => {
     try {
-        const id = req.params.id;
+        const subscriptionPlanId = req.params.subscriptionPlanId;
 
-        if (!isUUID(id)) {
+        if (!isUUID(subscriptionPlanId)) {
             return res.status(400).json({ message: 'Invalid subscriptionPlanId' });
         }
 
         const subscriptionPlan = await prisma.subscriptionPlan.findUnique({
-            where: { id },
+            where: { id: subscriptionPlanId },
         });
 
         if (subscriptionPlan) {
@@ -80,9 +80,9 @@ export const getSubscriptionPlanById: RequestHandler = async (req, res) => {
 
 export const updateSubscriptionPlan: RequestHandler = async (req, res) => {
     try {
-        const id = req.params.id;
+        const subscriptionPlanId = req.params.subscriptionPlanId;
 
-        if (!isUUID(id)) {
+        if (!isUUID(subscriptionPlanId)) {
             return res.status(400).json({ message: 'Invalid subscriptionPlanId' });
         }
 
@@ -101,7 +101,7 @@ export const updateSubscriptionPlan: RequestHandler = async (req, res) => {
         } = req.body;
 
         const updatedSubscriptionPlan = await prisma.subscriptionPlan.update({
-            where: { id },
+            where: { id: subscriptionPlanId },
             data: {
                 name,
                 monthlyPrice,
@@ -130,16 +130,35 @@ export const updateSubscriptionPlan: RequestHandler = async (req, res) => {
 
 export const deleteSubscriptionPlan: RequestHandler = async (req, res) => {
     try {
-        const id = req.params.id;
+        const subscriptionPlanId = req.params.subscriptionPlanId;
 
-        if (!isUUID(id)) {
+        if (!isUUID(subscriptionPlanId)) {
             return res.status(400).json({ message: 'Invalid subscriptionPlanId' });
         }
         await prisma.subscriptionPlan.delete({
-            where: { id },
+            where: { id: subscriptionPlanId },
         });
 
         res.status(200).json({ message: 'Subscription plan deleted successfully' });
+    } catch (error) {
+        logger.error(error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};
+
+export const deleteSubscriptionPlans: RequestHandler = async (req, res) => {
+    try {
+        const subscriptionPlanIds = req.body.subscriptionPlanIds;
+
+        if (!subscriptionPlanIds || !Array.isArray(subscriptionPlanIds)) {
+            return res.status(400).json({ message: 'Invalid subscriptionPlanIds' });
+        }
+
+        await prisma.subscriptionPlan.deleteMany({
+            where: { id: { in: subscriptionPlanIds } },
+        });
+
+        res.status(200).json({ message: 'Subscription plans deleted successfully' });
     } catch (error) {
         logger.error(error);
         res.status(500).json({ message: 'Internal server error' });

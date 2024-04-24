@@ -28,7 +28,7 @@ export const createTemplate: RequestHandler = async (req, res) => {
     }
 };
 
-export const getTemplates: RequestHandler = async (req, res, next) => {
+export const getTemplates: RequestHandler = async (req, res) => {
     try {
         const userId = req.authenticatedUser.pkId;
         const privilegeId = req.privilege.pkId;
@@ -47,11 +47,11 @@ export const getTemplates: RequestHandler = async (req, res, next) => {
         res.status(200).json(templates);
     } catch (error) {
         logger.error(error);
-        next(error);
+        res.status(500).json({ message: 'Internal server error' });
     }
 };
 
-export const deleteTemplates: RequestHandler = async (req, res, next) => {
+export const deleteTemplates: RequestHandler = async (req, res) => {
     const templateIds = req.body.templateIds;
 
     try {
@@ -67,6 +67,6 @@ export const deleteTemplates: RequestHandler = async (req, res, next) => {
         res.status(200).json({ message: 'Template(s) deleted successfully' });
     } catch (error) {
         logger.error(error);
-        next(error);
+        res.status(500).json({ message: 'Internal server error' });
     }
 };

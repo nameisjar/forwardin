@@ -5,7 +5,7 @@ import axios from 'axios';
 import moment from 'moment-timezone';
 import { isUUID } from '../utils/uuidChecker';
 
-export const pay: RequestHandler = async (req, res, next) => {
+export const pay: RequestHandler = async (req, res) => {
     try {
         // const url = 'https://app.sandbox.midtrans.com/snap/v1/transactions';
         // const apiKey = process.env.MIDTRANS_KEY!;
@@ -179,7 +179,7 @@ export const pay: RequestHandler = async (req, res, next) => {
         // res.status(200).json(response.data);
     } catch (error) {
         logger.error(error);
-        next(error);
+        res.status(500).json({ message: 'Internal server error' });
     }
 };
 
