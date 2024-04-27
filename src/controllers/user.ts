@@ -322,7 +322,7 @@ export const getNotifications: RequestHandler = async (req, res) => {
                     select: {
                         id: true,
                         title: true,
-                        message: true,
+                        body: true,
                     },
                     orderBy: {
                         createdAt: 'desc',
