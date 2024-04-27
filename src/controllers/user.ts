@@ -341,3 +341,45 @@ export const getNotifications: RequestHandler = async (req, res) => {
         res.status(500).json({ message: 'Internal server error' });
     }
 };
+
+export const getNotificationById: RequestHandler = async (req, res) => {
+    try {
+        const userId = req.params.userId;
+        const notificationId = req.params.notificationId;
+
+        if (!isUUID(userId) || !isUUID(notificationId)) {
+            return res.status(400).json({ message: 'Invalid userId or notificationId' });
+        }
+
+        const user = await prisma.user.findUnique({
+            where: {
+                id: userId,
+            },
+            include: {
+                notifications: {
+                    where: {
+                        id: notificationId,
+                    },
+                },
+            },
+        });
+
+        if (!user?.notifications) {
+            return res.status(404).json({ message: 'Notification not found' });
+        }
+
+        await prisma.notification.update({
+            where: {
+                id: notificationId,
+            },
+            data: {
+                isRead: true,
+            },
+        });
+
+        res.status(200).json(user.notifications);
+    } catch (error) {
+        logger.error(error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};
