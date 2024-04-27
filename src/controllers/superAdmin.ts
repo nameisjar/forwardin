@@ -357,6 +357,9 @@ export const getUsers: RequestHandler = async (req, res) => {
 export const getTransactions: RequestHandler = async (req, res) => {
     try {
         const transaction = await prisma.transaction.findMany({
+            where: {
+                status: 'unpaid',
+            },
             select: {
                 pkId: true,
                 id: true,

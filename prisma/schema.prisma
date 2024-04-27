@@ -33,6 +33,7 @@ model User {
   Group            Group[]
   Subscription     Subscription[]
   Template         Template[]
+  notifications    Notification[]
 }
 
 model CustomerService {
@@ -516,4 +517,16 @@ model Message {
 
   @@unique([sessionId, remoteJid, id], map: "unique_message_key_per_session_id")
   @@index([sessionId])
+}
+
+model Notification {
+  pkId      Int      @id @default(autoincrement())
+  id        String   @unique @default(uuid()) @db.Uuid
+  title     String
+  message   String
+  isRead    Boolean  @default(false) @map("is_read")
+  userId    Int
+  user      User     @relation(fields: [userId], references: [pkId], onDelete: Cascade)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @default(now()) @map("updated_at")
 }

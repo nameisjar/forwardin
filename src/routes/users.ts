@@ -11,6 +11,7 @@ router.patch('/:userId', controller.updateUser);
 router.patch('/change-email/:userId', controller.changeEmail);
 router.patch('/change-phone-number/:userId', controller.changePhoneNumber);
 router.get('/customer-services/:userId', controller.getCustomerServices);
+router.get('/:userId/notifications', controller.getNotifications);
 
 router.use(isEmailVerified);
 router.delete('/:userId/delete', controller.deleteUser);

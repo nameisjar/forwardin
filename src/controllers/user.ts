@@ -304,3 +304,40 @@ export const getUserSubscriptionDetail: RequestHandler = async (req, res) => {
         res.status(500).json({ message: 'Internal server error' });
     }
 };
+
+export const getNotifications: RequestHandler = async (req, res) => {
+    try {
+        const userId = req.params.userId;
+
+        if (!isUUID(userId)) {
+            return res.status(400).json({ message: 'Invalid userId' });
+        }
+
+        const user = await prisma.user.findUnique({
+            where: {
+                id: userId,
+            },
+            include: {
+                notifications: {
+                    select: {
+                        id: true,
+                        title: true,
+                        message: true,
+                    },
+                    orderBy: {
+                        createdAt: 'desc',
+                    },
+                },
+            },
+        });
+
+        if (!user?.notifications) {
+            return res.status(404).json({ message: 'Notification not found' });
+        }
+
+        res.status(200).json(user.notifications);
+    } catch (error) {
+        logger.error(error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};
