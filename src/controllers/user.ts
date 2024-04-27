@@ -377,7 +377,7 @@ export const getNotificationById: RequestHandler = async (req, res) => {
             },
         });
 
-        res.status(200).json(user.notifications);
+        res.status(200).json({ message: 'Notification read' });
     } catch (error) {
         logger.error(error);
         res.status(500).json({ message: 'Internal server error' });
