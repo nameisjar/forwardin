@@ -646,9 +646,25 @@ export const updateStatusTransaction: RequestHandler = async (req, res) => {
                         subscriptionPlanId: existingTransaction.subscriptionPlan.pkId,
                     },
                 });
+                await transaction.notification.create({
+                    data: {
+                        title: 'Subscription Created',
+                        body: `Your subscription has been created successfully with ${existingTransaction.subscriptionPlan.name} plan for date ${transaction_time_iso} to ${oneYearLaterISO}`,
+                        userId: existingTransaction.user.pkId,
+                    },
+                });
             });
             return res.status(200).json({ message: 'Subscription created successfully' });
         }
+
+        await prisma.notification.create({
+            data: {
+                title: 'Subscription Disabled',
+                body: `Your subscription has been disabled with ${existingTransaction.subscriptionPlan.name} plan for date ${transaction_time_iso} to ${oneYearLaterISO}`,
+                userId: existingTransaction.user.pkId,
+            },
+        });
+
         return res.status(200).json({ message: 'Transaction status updated successfully' });
     } catch (error) {
         logger.error(error);
