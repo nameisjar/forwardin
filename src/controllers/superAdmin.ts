@@ -648,7 +648,7 @@ export const updateStatusTransaction: RequestHandler = async (req, res) => {
                 });
                 await transaction.notification.create({
                     data: {
-                        title: 'Subscription Created',
+                        title: 'Paymen Success',
                         body: `Your subscription has been created successfully with ${existingTransaction.subscriptionPlan.name} plan for date ${transaction_time_iso} to ${oneYearLaterISO}`,
                         userId: existingTransaction.user.pkId,
                     },

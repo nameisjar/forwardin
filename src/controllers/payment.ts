@@ -171,6 +171,16 @@ export const pay: RequestHandler = async (req, res) => {
             },
         });
 
+        await prisma.$transaction(async (transaction) => {
+            await transaction.notification.create({
+                data: {
+                    title: 'Payment Request',
+                    body: `Please complete your payment for subscription plan ${subscriptionPlan.name} with contact person 08999999943`,
+                    userId: user.pkId,
+                },
+            });
+        });
+
         res.status(200).json({
             message: 'Payment created successfully',
             data: transaction,

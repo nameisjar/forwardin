@@ -309,10 +309,6 @@ export const getNotifications: RequestHandler = async (req, res) => {
     try {
         const userId = req.params.userId;
 
-        if (!isUUID(userId)) {
-            return res.status(400).json({ message: 'Invalid userId' });
-        }
-
         const user = await prisma.user.findUnique({
             where: {
                 id: userId,
