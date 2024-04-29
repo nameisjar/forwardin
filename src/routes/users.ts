@@ -17,7 +17,4 @@ router.get('/:userId/notifications/:notificationId', controller.getNotificationB
 router.use(isEmailVerified);
 router.delete('/:userId/delete', controller.deleteUser);
 
-router.use(superAdminOnly);
-router.get('/', controller.getUsers);
-
 export default router;
