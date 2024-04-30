@@ -356,6 +356,12 @@ export const getNotificationById: RequestHandler = async (req, res) => {
                     where: {
                         id: notificationId,
                     },
+                    select: {
+                        id: true,
+                        title: true,
+                        body: true,
+                        createdAt: true,
+                    },
                 },
             },
         });
@@ -373,7 +379,7 @@ export const getNotificationById: RequestHandler = async (req, res) => {
             },
         });
 
-        res.status(200).json({ message: 'Notification read' });
+        res.status(200).json(user.notifications);
     } catch (error) {
         logger.error(error);
         res.status(500).json({ message: 'Internal server error' });
