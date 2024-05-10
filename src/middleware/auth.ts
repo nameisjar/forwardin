@@ -183,4 +183,40 @@ export const isEmailVerified: RequestHandler = async (req, res, next) => {
     }
 };
 
+export const apiKeyDevice: RequestHandler = async (req, res, next) => {
+    const apiKey = req.header('X-Forwardin-Key-Device');
+
+    if (!apiKey) {
+        return res.status(401).json({ message: 'Authentication failed: Missing API key' });
+    }
+    const device = await prisma.device.findUnique({
+        where: {
+            apiKey,
+        },
+        include: { user: true },
+    });
+
+    if (!device) {
+        return res.status(401).json({ message: 'Authentication failed: Invalid API key' });
+    }
+
+    const existingSession = await prisma.session.findFirst({
+        where: {
+            deviceId: device.pkId,
+            id: { contains: 'config' },
+        },
+    });
+
+    console.log(existingSession);
+    console.log('==============================================');
+
+    if (!existingSession) {
+        return res.status(401).json({ message: 'Authentication failed: Session not found' });
+    }
+
+    req.authenticatedDevice = existingSession;
+    req.authenticatedUser = device.user;
+    next();
+};
+
 export default authMiddleware;

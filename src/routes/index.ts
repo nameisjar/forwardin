@@ -18,8 +18,9 @@ import privilegeRoutes from './privileges';
 import customerServiceRoutes from './customerServices';
 import businessHourRoutes from './businessHours';
 import analyticsRoutes from './analytics';
-import authMiddleware from '../middleware/auth';
+import { authMiddleware, apiKeyDevice } from '../middleware/auth';
 import superAdminRoutes from './superAdmin';
+import deviceApi from './deviceApi';
 
 const router = Router();
 
@@ -47,6 +48,7 @@ router.use('/subscription-plans', authMiddleware, subsPlanRoutes);
 router.use('/customer-services', customerServiceRoutes);
 router.use('/analytics', authMiddleware, analyticsRoutes);
 router.use('/super-admin', superAdminRoutes);
+router.use('/api', apiKeyDevice, deviceApi);
 router.use('/media', express.static('media'));
 
 export default router;

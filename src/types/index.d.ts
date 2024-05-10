@@ -1,5 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { Privilege, Subscription } from '@prisma/client';
+import { Privilege, Subscription, Session } from '@prisma/client';
+import { Session } from 'inspector';
 
 type authenticatedUser = {
     pkId;
@@ -23,6 +24,7 @@ type authenticatedUser = {
     deletedAt?;
     emailVerifiedAt?;
 };
+
 type accessTokenPayload = {
     email: string;
 };
@@ -37,6 +39,7 @@ declare global {
             authenticatedUser: authenticatedUser;
             privilege: Privilege;
             subscription: Subscription;
+            authenticatedDevice: Session;
         }
     }
 }
