@@ -6,6 +6,8 @@ const router = Router();
 router.post('/messages/send', controller.sendMessages);
 router.post('/messages/send/image', controller.sendImageMessages);
 router.post('/messages/send/doc', controller.sendDocumentMessages);
+router.post('/messages/send/audio', controller.sendAudioMessages);
+router.post('/messages/send/video', controller.sendVideoMessages);
 router.post('/messages/send/button', controller.sendButton);
 router.get('/messages', controller.getConversationMessages);
 router.get('/messages/incoming', controller.getIncomingMessages);

@@ -171,6 +171,124 @@ export const sendDocumentMessages: RequestHandler = async (req, res) => {
     }
 };
 
+export const sendAudioMessages: RequestHandler = async (req, res) => {
+    try {
+        const sessionId = req.authenticatedDevice.sessionId;
+        const session = getInstance(sessionId)!;
+
+        if (!isUUID(sessionId)) {
+            return res.status(400).json({ message: 'Invalid sessionId' });
+        }
+
+        memoryUpload.single('audio')(req, res, async (err) => {
+            if (err) {
+                const message = 'An error occurred during file upload';
+                logger.error(err, message);
+                return res.status(500).json({ error: message });
+            }
+
+            const recipients: string[] = req.body.recipients || [];
+
+            if (!recipients.length) {
+                return res.status(400).json({ error: 'Recipient JIDs are required' });
+            }
+
+            const fileData = {
+                mimetype: req.file?.mimetype,
+                buffer: req.file?.buffer,
+                newName: req.file?.filename,
+                originalName: req.file?.originalname,
+                url: req.file?.path,
+            };
+
+            const fileType = 'audio';
+            const caption = req.body.caption || '';
+            const delay = req.body.delay || 5000;
+
+            const startTime = new Date().getTime();
+            if (recipients.length > 0) await delayMs(delay);
+            const endTime = new Date().getTime();
+            const delayElapsed = endTime - startTime;
+            logger.info(`Delay of ${delay} milliseconds elapsed: ${delayElapsed} milliseconds`);
+
+            const { results, errors } = await sendMediaFile(
+                session,
+                recipients,
+                fileData,
+                fileType,
+                caption,
+            );
+
+            res.status(errors.length > 0 ? 500 : 200).json({
+                results,
+                errors,
+            });
+        });
+    } catch (error) {
+        logger.error(error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};
+
+export const sendVideoMessages: RequestHandler = async (req, res) => {
+    try {
+        const sessionId = req.authenticatedDevice.sessionId;
+        const session = getInstance(sessionId)!;
+
+        if (!isUUID(sessionId)) {
+            return res.status(400).json({ message: 'Invalid sessionId' });
+        }
+
+        memoryUpload.single('video')(req, res, async (err) => {
+            if (err) {
+                const message = 'An error occurred during file upload';
+                logger.error(err, message);
+                return res.status(500).json({ error: message });
+            }
+
+            const recipients: string[] = req.body.recipients || [];
+
+            if (!recipients.length) {
+                return res.status(400).json({ error: 'Recipient JIDs are required' });
+            }
+
+            const fileData = {
+                mimetype: req.file?.mimetype,
+                buffer: req.file?.buffer,
+                newName: req.file?.filename,
+                originalName: req.file?.originalname,
+                url: req.file?.path,
+            };
+
+            const fileType = 'video';
+            const caption = req.body.caption || '';
+            const delay = req.body.delay || 5000;
+
+            const startTime = new Date().getTime();
+            if (recipients.length > 0) await delayMs(delay);
+            const endTime = new Date().getTime();
+            const delayElapsed = endTime - startTime;
+            logger.info(`Delay of ${delay} milliseconds elapsed: ${delayElapsed} milliseconds`);
+
+            const { results, errors } = await sendMediaFile(
+                session,
+                recipients,
+                fileData,
+                fileType,
+                caption,
+            );
+
+            res.status(errors.length > 0 ? 500 : 200).json({
+                results,
+                errors,
+            });
+        });
+    } catch (error) {
+        logger.error(error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};
+
 export const sendButton: RequestHandler = async (req, res) => {
     try {
         const sessionId = req.authenticatedDevice.sessionId;
