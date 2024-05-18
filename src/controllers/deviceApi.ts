@@ -4,7 +4,7 @@ import logger from '../config/logger';
 import prisma, { serializePrisma } from '../utils/db';
 import { delay as delayMs } from '../utils/delay';
 import { proto } from '@whiskeysockets/baileys';
-import { memoryUpload } from '../config/multer';
+import { diskUpload, memoryUpload } from '../config/multer';
 import { isUUID } from '../utils/uuidChecker';
 
 export const sendMessages: RequestHandler = async (req, res) => {
@@ -714,6 +714,62 @@ export const getMessengerList: RequestHandler = async (req, res) => {
                 totalPages,
                 hasMore,
             },
+        });
+    } catch (error) {
+        logger.error(error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};
+
+export const createBroadcast: RequestHandler = async (req, res) => {
+    try {
+        diskUpload.single('media')(req, res, async (err: any) => {
+            if (err) {
+                return res.status(400).json({ message: 'Error uploading file' });
+            }
+            const { deviceId } = req.authenticatedDevice;
+            const { name, recipients, message, schedule } = req.body;
+            const delay = Number(req.body.delay) ?? 5000;
+
+            if (
+                recipients.includes('all') &&
+                recipients.some((recipient: { startsWith: (arg0: string) => string }) =>
+                    recipient.startsWith('label'),
+                )
+            ) {
+                return res.status(400).json({
+                    message:
+                        "Recipients can't contain both all contacts and contact labels at the same input",
+                });
+            }
+
+            const device = await prisma.device.findUnique({
+                where: { pkId: deviceId },
+                include: { sessions: { select: { sessionId: true } } },
+            });
+
+            if (!device) {
+                return res.status(404).json({ message: 'Device not found' });
+            }
+            if (!device.sessions[0]) {
+                return res.status(404).json({ message: 'Session not found' });
+            }
+            await prisma.$transaction(async (transaction) => {
+                await transaction.broadcast.create({
+                    data: {
+                        name,
+                        message,
+                        schedule,
+                        deviceId: device.pkId,
+                        delay,
+                        recipients: {
+                            set: recipients,
+                        },
+                        mediaPath: req.file?.path,
+                    },
+                });
+                res.status(201).json({ message: 'Broadcast created successfully' });
+            });
         });
     } catch (error) {
         logger.error(error);
