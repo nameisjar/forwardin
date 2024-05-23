@@ -3,6 +3,7 @@ import { seedSubscriptionPlans } from './subscriptionPlan';
 import { seedPrivileges } from './privilege';
 import { seedAdminAccount } from './admin';
 import logger from '../../src/config/logger';
+import { seedUserAccount } from './user';
 
 async function seedDatabase() {
     const prisma = new PrismaClient();
@@ -15,6 +16,7 @@ async function seedDatabase() {
         await seedSubscriptionPlans(prisma, logger);
         await seedPrivileges(prisma, logger);
         await seedAdminAccount(prisma, logger);
+        await seedUserAccount(prisma, logger);
     } catch (error) {
         logger.error(error);
     } finally {
