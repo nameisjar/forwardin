@@ -852,3 +852,27 @@ export const deleteAllMessages: RequestHandler = async (req, res) => {
         res.status(500).json({ message: 'Internal server error' });
     }
 };
+
+export const getBroadcasts: RequestHandler = async (req, res) => {
+    try {
+        const { deviceId } = req.authenticatedDevice;
+        const broadcasts = await prisma.broadcast.findMany({
+            where: { deviceId },
+        });
+        res.status(200).json(broadcasts);
+    } catch (error) {
+        logger.error(error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};
+
+export const deleteAllBroadcasts: RequestHandler = async (req, res) => {
+    try {
+        const { deviceId } = req.authenticatedDevice;
+        await prisma.broadcast.deleteMany({ where: { deviceId } });
+        res.status(200).json({ message: 'All broadcasts deleted successfully' });
+    } catch (error) {
+        logger.error(error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};
