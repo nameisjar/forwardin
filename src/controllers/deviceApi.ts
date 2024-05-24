@@ -837,3 +837,18 @@ export const createAutoReplies: RequestHandler = async (req, res) => {
         res.status(500).json({ message: 'Internal server error' });
     }
 };
+
+export const deleteAllMessages: RequestHandler = async (req, res) => {
+    try {
+        const { sessionId } = req.authenticatedDevice;
+        await prisma.$transaction(async (transaction) => {
+            await transaction.message.deleteMany({ where: { sessionId } });
+            await transaction.incomingMessage.deleteMany({ where: { sessionId } });
+            await transaction.outgoingMessage.deleteMany({ where: { sessionId } });
+        });
+        res.status(200).json({ message: 'All messages deleted successfully' });
+    } catch (error) {
+        logger.error(error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};
