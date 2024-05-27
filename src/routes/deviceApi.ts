@@ -10,6 +10,7 @@ router.post('/messages/send/audio', controller.sendAudioMessages);
 router.post('/messages/send/video', controller.sendVideoMessages);
 router.post('/messages/send/button', controller.sendButton);
 router.post('/messages/broadcasts', controller.createBroadcast);
+router.post('/messages/auto-replies', controller.createAutoReplies);
 router.get('/messages', controller.getConversationMessages);
 router.get('/messages/incoming', controller.getIncomingMessages);
 router.get('/messages/outgoing', controller.getOutgoingMessages);

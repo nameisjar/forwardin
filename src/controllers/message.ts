@@ -6,6 +6,7 @@ import { delay as delayMs } from '../utils/delay';
 import { proto } from '@whiskeysockets/baileys';
 import { memoryUpload } from '../config/multer';
 import { isUUID } from '../utils/uuidChecker';
+import { createZipFile } from '../utils/zip';
 
 export const sendMessages: RequestHandler = async (req, res) => {
     try {
@@ -505,6 +506,94 @@ export const getConversationMessages: RequestHandler = async (req, res) => {
         const message = 'An error occurred during message list';
         logger.error(e, message);
         res.status(500).json({ error: message });
+    }
+};
+
+export const exportMessagesToZip: RequestHandler = async (req, res) => {
+    try {
+        const { sessionId } = req.params;
+        const { phoneNumber, contactName } = req.query;
+        const sort = req.query.sort as string;
+
+        const incomingMessages = await prisma.incomingMessage.findMany({
+            where: {
+                sessionId,
+                from: { contains: phoneNumber ? phoneNumber.toString() : undefined },
+                contact: {
+                    OR: contactName
+                        ? [
+                              {
+                                  firstName: {
+                                      contains: contactName.toString(),
+                                      mode: 'insensitive',
+                                  },
+                              },
+                              {
+                                  lastName: {
+                                      contains: contactName.toString(),
+                                      mode: 'insensitive',
+                                  },
+                              },
+                          ]
+                        : undefined,
+                },
+            },
+            select: { from: true, createdAt: true, contact: true, message: true },
+        });
+
+        const outgoingMessages = await prisma.outgoingMessage.findMany({
+            where: {
+                sessionId,
+                to: { contains: phoneNumber ? phoneNumber.toString() : undefined },
+                contact: {
+                    OR: contactName
+                        ? [
+                              {
+                                  firstName: {
+                                      contains: contactName.toString(),
+                                      mode: 'insensitive',
+                                  },
+                              },
+                              {
+                                  lastName: {
+                                      contains: contactName.toString(),
+                                      mode: 'insensitive',
+                                  },
+                              },
+                          ]
+                        : undefined,
+                },
+            },
+            select: { to: true, createdAt: true, contact: true, message: true },
+        });
+
+        // Combine incoming and outgoing messages into one array
+        const allMessages = [...incomingMessages, ...outgoingMessages];
+        logger.debug(allMessages);
+
+        // Sort the combined messages by timestamp (receivedAt or createdAt)
+        sort == 'asc'
+            ? allMessages.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
+            : allMessages.sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
+
+        const messages = allMessages.map((m) => serializePrisma(m));
+        const dataMessages = JSON.stringify(messages); // Convert messages to a string
+        const phone = phoneNumber?.toString() || 'unknown';
+        // Generate ZIP file
+        const zipBuffer = await createZipFile(phone, dataMessages);
+
+        // Set headers for file download
+        res.setHeader(
+            'Content-Disposition',
+            `attachment; filename=WhatsApp_Chat_with_Contact_${phone}.zip`,
+        );
+        res.setHeader('Content-Type', 'application/zip');
+
+        // Send the ZIP file as a response
+        res.status(200).send(zipBuffer);
+    } catch (error) {
+        logger.error(error);
+        res.status(500).json({ message: 'Internal server error' });
     }
 };
 

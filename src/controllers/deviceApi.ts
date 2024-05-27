@@ -776,3 +776,64 @@ export const createBroadcast: RequestHandler = async (req, res) => {
         res.status(500).json({ message: 'Internal server error' });
     }
 };
+
+export const createAutoReplies: RequestHandler = async (req, res) => {
+    try {
+        diskUpload.single('media')(req, res, async (err: any) => {
+            if (err) {
+                return res.status(400).json({ message: 'Error uploading file' });
+            }
+            const { deviceId } = req.authenticatedDevice;
+            const { name, recipients, requests, response } = req.body;
+
+            if (
+                recipients.includes('all') &&
+                recipients.some((recipient: { startsWith: (arg0: string) => string }) =>
+                    recipient.startsWith('label'),
+                )
+            ) {
+                return res.status(400).json({
+                    message:
+                        "Recipients can't contain both all contacts and contact labels at the same input",
+                });
+            }
+
+            const device = await prisma.device.findUnique({
+                where: { pkId: deviceId },
+            });
+
+            if (!device) {
+                return res.status(404).json({ message: 'Device not found' });
+            }
+
+            const existingRequest = await prisma.autoReply.findFirst({
+                where: { requests: { hasSome: requests }, deviceId: device.pkId },
+            });
+
+            if (existingRequest) {
+                return res.status(400).json({ message: 'Request keywords already defined' });
+            }
+
+            await prisma.$transaction(async (transaction) => {
+                const autoReply = await transaction.autoReply.create({
+                    data: {
+                        name,
+                        requests: {
+                            set: requests,
+                        },
+                        response,
+                        deviceId: device.pkId,
+                        recipients: {
+                            set: recipients,
+                        },
+                        mediaPath: req.file?.path,
+                    },
+                });
+                res.status(201).json(autoReply);
+            });
+        });
+    } catch (error) {
+        logger.error(error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};
