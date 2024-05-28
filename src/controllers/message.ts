@@ -538,7 +538,7 @@ export const exportMessagesToZip: RequestHandler = async (req, res) => {
                         : undefined,
                 },
             },
-            select: { from: true, createdAt: true, contact: true, message: true },
+            select: { from: true, receivedAt: true, createdAt: true, contact: true, message: true },
         });
 
         const outgoingMessages = await prisma.outgoingMessage.findMany({
@@ -567,8 +567,37 @@ export const exportMessagesToZip: RequestHandler = async (req, res) => {
             select: { to: true, createdAt: true, contact: true, message: true },
         });
 
+        const phoneSend = await prisma.session.findFirst({
+            where: { sessionId: sessionId },
+            select: {
+                device: {
+                    select: {
+                        phone: true,
+                    },
+                },
+            },
+        });
+
+        type Message = {
+            from?: string;
+            createdAt: Date;
+            receivedAt?: Date;
+            to?: string;
+            phone?: string;
+        };
         // Combine incoming and outgoing messages into one array
-        const allMessages = [...incomingMessages, ...outgoingMessages];
+        const allMessages: Message[] = [...incomingMessages, ...outgoingMessages];
+        for (const message of allMessages) {
+            if ('from' in message) {
+                message.receivedAt = message.receivedAt;
+                message.phone = message.from?.replace('@s.whatsapp.net', '') || 'Unknown';
+                delete message.from;
+            } else if ('to' in message) {
+                const senderName = phoneSend?.device.phone?.toString() || 'Unknown';
+                message.phone = senderName;
+                delete message.to;
+            }
+        }
         logger.debug(allMessages);
 
         // Sort the combined messages by timestamp (receivedAt or createdAt)
@@ -576,21 +605,18 @@ export const exportMessagesToZip: RequestHandler = async (req, res) => {
             ? allMessages.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
             : allMessages.sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
 
-        const messages = allMessages.map((m) => serializePrisma(m));
-        const dataMessages = JSON.stringify(messages); // Convert messages to a string
-        const phone = phoneNumber?.toString() || 'unknown';
-        // Generate ZIP file
-        const zipBuffer = await createZipFile(phone, dataMessages);
+        // // Generate ZIP file
+        // const zipBuffer = await createZipFile(phone, dataMessages);
 
-        // Set headers for file download
-        res.setHeader(
-            'Content-Disposition',
-            `attachment; filename=WhatsApp_Chat_with_Contact_${phone}.zip`,
-        );
-        res.setHeader('Content-Type', 'application/zip');
+        // // Set headers for file download
+        // res.setHeader(
+        //     'Content-Disposition',
+        //     `attachment; filename=WhatsApp_Chat_with_Contact_${phone}.zip`,
+        // );
+        // res.setHeader('Content-Type', 'application/zip');
 
         // Send the ZIP file as a response
-        res.status(200).send(zipBuffer);
+        res.status(200).send(allMessages);
     } catch (error) {
         logger.error(error);
         res.status(500).json({ message: 'Internal server error' });
