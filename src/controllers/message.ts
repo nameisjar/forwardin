@@ -584,6 +584,7 @@ export const exportMessagesToZip: RequestHandler = async (req, res) => {
             receivedAt?: Date;
             to?: string;
             phone?: string;
+            message?: string | null;
         };
         // Combine incoming and outgoing messages into one array
         const allMessages: Message[] = [...incomingMessages, ...outgoingMessages];
@@ -605,18 +606,29 @@ export const exportMessagesToZip: RequestHandler = async (req, res) => {
             ? allMessages.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
             : allMessages.sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
 
-        // // Generate ZIP file
-        // const zipBuffer = await createZipFile(phone, dataMessages);
+        // Convert the messages to a string
+        let dataMessages = '';
+        for (const message of allMessages) {
+            if ('receivedAt' in message) {
+                dataMessages += `${message.receivedAt} - ${message.phone}: ${message.message}\n`;
+            } else {
+                dataMessages += `${message.createdAt} - ${message.phone}: ${message.message}\n`;
+            }
+        }
 
-        // // Set headers for file download
-        // res.setHeader(
-        //     'Content-Disposition',
-        //     `attachment; filename=WhatsApp_Chat_with_Contact_${phone}.zip`,
-        // );
-        // res.setHeader('Content-Type', 'application/zip');
+        const phone = phoneNumber?.toString() || 'Unknown';
+        // Generate ZIP file
+        const zipBuffer = await createZipFile(phone, dataMessages);
+
+        // Set headers for file download
+        res.setHeader(
+            'Content-Disposition',
+            `attachment; filename=WhatsApp_Chat_with_Contact_${phone}.zip`,
+        );
+        res.setHeader('Content-Type', 'application/zip');
 
         // Send the ZIP file as a response
-        res.status(200).send(allMessages);
+        res.status(200).send(zipBuffer);
     } catch (error) {
         logger.error(error);
         res.status(500).json({ message: 'Internal server error' });
