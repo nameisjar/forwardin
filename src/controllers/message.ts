@@ -538,7 +538,14 @@ export const exportMessagesToZip: RequestHandler = async (req, res) => {
                         : undefined,
                 },
             },
-            select: { from: true, receivedAt: true, createdAt: true, contact: true, message: true },
+            select: {
+                from: true,
+                receivedAt: true,
+                createdAt: true,
+                contact: true,
+                message: true,
+                mediaPath: true,
+            },
         });
 
         const outgoingMessages = await prisma.outgoingMessage.findMany({
@@ -564,7 +571,7 @@ export const exportMessagesToZip: RequestHandler = async (req, res) => {
                         : undefined,
                 },
             },
-            select: { to: true, createdAt: true, contact: true, message: true },
+            select: { to: true, createdAt: true, contact: true, message: true, mediaPath: true },
         });
 
         const phoneSend = await prisma.session.findFirst({
@@ -585,6 +592,7 @@ export const exportMessagesToZip: RequestHandler = async (req, res) => {
             to?: string;
             phone?: string;
             message?: string | null;
+            mediaPath?: string | null;
         };
         // Combine incoming and outgoing messages into one array
         const allMessages: Message[] = [...incomingMessages, ...outgoingMessages];
@@ -613,6 +621,13 @@ export const exportMessagesToZip: RequestHandler = async (req, res) => {
                 dataMessages += `${message.receivedAt} - ${message.phone}: ${message.message}\n`;
             } else {
                 dataMessages += `${message.createdAt} - ${message.phone}: ${message.message}\n`;
+            }
+        }
+        let mediaPath = [];
+        // jangan tampilkan data yang null dan masukkan dalam array
+        for (const message of allMessages) {
+            if (message.mediaPath) {
+                mediaPath.push(message.mediaPath);
             }
         }
 
@@ -720,6 +735,25 @@ export const getMessengerList: RequestHandler = async (req, res) => {
                 hasMore,
             },
         });
+    } catch (error) {
+        logger.error(error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};
+
+export const getStatusOutgoingMessagesById: RequestHandler = async (req, res) => {
+    try {
+        const { sessionId, messageId } = req.params;
+        const message = await prisma.outgoingMessage.findFirst({
+            where: { sessionId, id: messageId },
+            select: { status: true },
+        });
+
+        if (!message) {
+            return res.status(404).json({ message: 'Message not found' });
+        }
+
+        res.status(200).json(serializePrisma(message));
     } catch (error) {
         logger.error(error);
         res.status(500).json({ message: 'Internal server error' });

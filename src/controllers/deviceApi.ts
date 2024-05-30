@@ -837,3 +837,24 @@ export const createAutoReplies: RequestHandler = async (req, res) => {
         res.status(500).json({ message: 'Internal server error' });
     }
 };
+
+export const getStatusOutgoingMessagesById: RequestHandler = async (req, res) => {
+    try {
+        const { sessionId } = req.authenticatedDevice;
+        const { messageId } = req.params;
+
+        const message = await prisma.outgoingMessage.findFirst({
+            where: { sessionId, id: messageId },
+            select: { status: true },
+        });
+
+        if (!message) {
+            return res.status(404).json({ message: 'Message not found' });
+        }
+
+        res.status(200).json(message);
+    } catch (error) {
+        logger.error(error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};

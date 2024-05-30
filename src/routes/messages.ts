@@ -14,5 +14,6 @@ router.get('/:sessionId/export-zip', controller.exportMessagesToZip);
 router.get('/:sessionId/incoming', controller.getIncomingMessages);
 router.get('/:sessionId/outgoing', controller.getOutgoingMessages);
 router.get('/:sessionId/messenger-list', controller.getMessengerList);
+router.get('/:sessionId/outgoing-status/:messageId', controller.getStatusOutgoingMessagesById);
 
 export default router;
