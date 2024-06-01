@@ -6,7 +6,7 @@ import { delay as delayMs } from '../utils/delay';
 import { proto } from '@whiskeysockets/baileys';
 import { memoryUpload } from '../config/multer';
 import { isUUID } from '../utils/uuidChecker';
-import { createZipFile } from '../utils/zip';
+import fs from 'fs';
 
 export const sendMessages: RequestHandler = async (req, res) => {
     try {
@@ -614,7 +614,7 @@ export const exportMessagesToZip: RequestHandler = async (req, res) => {
             ? allMessages.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
             : allMessages.sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
 
-        // Convert the messages to a string
+        // Convert the messages to strings
         let dataMessages = '';
         for (const message of allMessages) {
             if ('receivedAt' in message) {
@@ -623,6 +623,7 @@ export const exportMessagesToZip: RequestHandler = async (req, res) => {
                 dataMessages += `${message.createdAt} - ${message.phone}: ${message.message}\n`;
             }
         }
+
         let mediaPath = [];
         // jangan tampilkan data yang null dan masukkan dalam array
         for (const message of allMessages) {
@@ -631,19 +632,27 @@ export const exportMessagesToZip: RequestHandler = async (req, res) => {
             }
         }
 
-        const phone = phoneNumber?.toString() || 'Unknown';
-        // Generate ZIP file
-        const zipBuffer = await createZipFile(phone, dataMessages);
+        // Create a zip file
+        const JSZip = require('jszip');
+        const zip = new JSZip();
+        // const dataString = JSON.stringify(dataMessages, null, 2);
+        zip.file('messages.txt', dataMessages.toString());
+        zip.folder('media');
+        const folderMedia = zip.folder('media');
+        if (folderMedia) {
+            mediaPath.forEach((image, index) => {
+                // Menambahkan file ke ZIP
+                const imageBuffer = fs.readFileSync(image); // Read the image file
+                folderMedia.file(`${index}.jpg`, imageBuffer); // Add the image file to the ZIP
+            });
+        }
 
-        // Set headers for file download
-        res.setHeader(
-            'Content-Disposition',
-            `attachment; filename=WhatsApp_Chat_with_Contact_${phone}.zip`,
-        );
-        res.setHeader('Content-Type', 'application/zip');
+        const zipContent = await zip.generateAsync({ type: 'nodebuffer' });
 
-        // Send the ZIP file as a response
-        res.status(200).send(zipBuffer);
+        res.set('Content-Type', 'application/zip');
+        res.set('Content-Disposition', `attachment; filename=${sessionId}-messages.zip`);
+        res.set('Content-Length', zipContent.length);
+        res.send(zipContent);
     } catch (error) {
         logger.error(error);
         res.status(500).json({ message: 'Internal server error' });
