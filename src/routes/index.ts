@@ -35,7 +35,7 @@ router.use('/users', authMiddleware, userRoutes);
 router.use('/contacts', authMiddleware, contactRoutes);
 router.use('/groups', authMiddleware, groupRoutes);
 router.use('/templates', authMiddleware, templateRoutes);
-router.use('/messages', authMiddleware, messageRoutes);
+router.use('/messages', messageRoutes);
 router.use('/payment', paymentRoutes);
 router.use('/business-hours', authMiddleware, businessHourRoutes);
 router.use('/auto-replies', authMiddleware, autoReplyRoutes);
