@@ -35,7 +35,7 @@ router.use('/users', authMiddleware, userRoutes);
 router.use('/contacts', authMiddleware, contactRoutes);
 router.use('/groups', authMiddleware, groupRoutes);
 router.use('/templates', authMiddleware, templateRoutes);
-router.use('/messages', messageRoutes);
+router.use('/messages', authMiddleware, messageRoutes);
 router.use('/payment', paymentRoutes);
 router.use('/business-hours', authMiddleware, businessHourRoutes);
 router.use('/auto-replies', authMiddleware, autoReplyRoutes);
@@ -48,7 +48,7 @@ router.use('/subscription-plans', authMiddleware, subsPlanRoutes);
 router.use('/customer-services', customerServiceRoutes);
 router.use('/analytics', authMiddleware, analyticsRoutes);
 router.use('/super-admin', superAdminRoutes);
-router.use('/api', apiKeyDevice, deviceApi);
+router.use('/api', deviceApi);
 router.use('/media', express.static('media'));
 
 export default router;

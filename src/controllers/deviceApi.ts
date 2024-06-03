@@ -880,7 +880,7 @@ export const deleteAllBroadcasts: RequestHandler = async (req, res) => {
 
 export const exportMessagesToZip: RequestHandler = async (req, res) => {
     try {
-        const { sessionId } = req.authenticatedDevice;
+        const { sessionId } = req.params;
         const { phoneNumber, contactName } = req.query;
         const sort = req.query.sort as string;
 
