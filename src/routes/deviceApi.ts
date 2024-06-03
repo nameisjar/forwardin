@@ -15,7 +15,7 @@ router.get('/messages', controller.getConversationMessages);
 router.get('/messages/incoming', controller.getIncomingMessages);
 router.get('/messages/outgoing', controller.getOutgoingMessages);
 router.get('/messages/messenger-list', controller.getMessengerList);
-router.get('/messages/export-zip/:sessionId', controller.exportMessagesToZip);
+router.get('/messages/export-zip/', controller.exportMessagesToZip);
 router.get('/messages/broadcasts', controller.getBroadcasts);
 router.delete('/messages/broadcasts', controller.deleteAllBroadcasts);
 router.delete('/messages', controller.deleteAllMessages);
