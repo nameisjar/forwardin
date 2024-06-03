@@ -7,6 +7,7 @@ import { proto } from '@whiskeysockets/baileys';
 import { memoryUpload } from '../config/multer';
 import { isUUID } from '../utils/uuidChecker';
 import fs from 'fs';
+import { createZipFile } from '../utils/zip';
 
 export const sendMessages: RequestHandler = async (req, res) => {
     try {
@@ -512,8 +513,7 @@ export const getConversationMessages: RequestHandler = async (req, res) => {
 export const exportMessagesToZip: RequestHandler = async (req, res) => {
     try {
         const { sessionId } = req.params;
-        const { phoneNumber, contactName } = req.query;
-        const sort = req.query.sort as string;
+        const { phoneNumber, contactName, sort } = req.query;
 
         const incomingMessages = await prisma.incomingMessage.findMany({
             where: {
@@ -575,12 +575,10 @@ export const exportMessagesToZip: RequestHandler = async (req, res) => {
         });
 
         const phoneSend = await prisma.session.findFirst({
-            where: { sessionId: sessionId },
+            where: { sessionId },
             select: {
                 device: {
-                    select: {
-                        phone: true,
-                    },
+                    select: { phone: true },
                 },
             },
         });
@@ -594,7 +592,7 @@ export const exportMessagesToZip: RequestHandler = async (req, res) => {
             message?: string | null;
             mediaPath?: string | null;
         };
-        // Combine incoming and outgoing messages into one array
+
         const allMessages: Message[] = [...incomingMessages, ...outgoingMessages];
         for (const message of allMessages) {
             if ('from' in message) {
@@ -609,14 +607,14 @@ export const exportMessagesToZip: RequestHandler = async (req, res) => {
         }
         logger.debug(allMessages);
 
-        // Sort the combined messages by timestamp (receivedAt or createdAt)
-        sort == 'asc'
-            ? allMessages.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
-            : allMessages.sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
+        const sortedMessages = allMessages.sort((a, b) =>
+            sort === 'asc'
+                ? a.createdAt.getTime() - b.createdAt.getTime()
+                : b.createdAt.getTime() - a.createdAt.getTime(),
+        );
 
-        // Convert the messages to strings
         let dataMessages = '';
-        for (const message of allMessages) {
+        for (const message of sortedMessages) {
             if ('receivedAt' in message) {
                 dataMessages += `${message.receivedAt} - ${message.phone}: ${message.message}\n`;
             } else {
@@ -624,34 +622,18 @@ export const exportMessagesToZip: RequestHandler = async (req, res) => {
             }
         }
 
-        let mediaPath = [];
-        // jangan tampilkan data yang null dan masukkan dalam array
-        for (const message of allMessages) {
-            if (message.mediaPath) {
-                mediaPath.push(message.mediaPath);
-            }
-        }
+        const mediaPaths = sortedMessages
+            .filter((m) => m.mediaPath)
+            .map((m) => m.mediaPath as string);
 
-        // Create a zip file
-        const JSZip = require('jszip');
-        const zip = new JSZip();
-        // const dataString = JSON.stringify(dataMessages, null, 2);
-        zip.file('messages.txt', dataMessages.toString());
-        zip.folder('media');
-        const folderMedia = zip.folder('media');
-        if (folderMedia) {
-            mediaPath.forEach((image, index) => {
-                // Menambahkan file ke ZIP
-                const imageBuffer = fs.readFileSync(image); // Read the image file
-                folderMedia.file(`${index}.jpg`, imageBuffer); // Add the image file to the ZIP
-            });
-        }
-
-        const zipContent = await zip.generateAsync({ type: 'nodebuffer' });
+        const zipContent = await createZipFile(dataMessages, mediaPaths);
 
         res.set('Content-Type', 'application/zip');
-        res.set('Content-Disposition', `attachment; filename=${sessionId}-messages.zip`);
-        res.set('Content-Length', zipContent.length);
+        res.set(
+            'Content-Disposition',
+            `attachment; filename=WhatsApp Chat With Contact +${phoneNumber}.zip`,
+        );
+        res.set('Content-Length', zipContent.length.toString());
         res.send(zipContent);
     } catch (error) {
         logger.error(error);
