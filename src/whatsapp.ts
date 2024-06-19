@@ -22,6 +22,8 @@ import { processButton } from './utils/processBtn';
 import { getSocketIO } from './socket';
 import { Server } from 'socket.io';
 import fs from 'fs';
+import { connect } from 'http2';
+import { de } from 'date-fns/locale';
 
 type Instance = WASocket & {
     destroy: () => Promise<void>;
@@ -33,8 +35,8 @@ const retries = new Map<string, number>();
 const SSEQRGenerations = new Map<string, number>();
 
 const RECONNECT_INTERVAL = Number(process.env.RECONNECT_INTERVAL || 0);
-const MAX_RECONNECT_RETRIES = Number(process.env.MAX_RECONNECT_RETRIES || 5);
-const SSE_MAX_QR_GENERATION = Number(process.env.SSE_MAX_QR_GENERATION || 5);
+const MAX_RECONNECT_RETRIES = Number(process.env.MAX_RECONNECT_RETRIES || 1);
+const SSE_MAX_QR_GENERATION = Number(process.env.SSE_MAX_QR_GENERATION || 1);
 const SESSION_CONFIG_ID = 'session-config';
 
 export async function init() {
@@ -101,13 +103,18 @@ export async function createInstance(options: createInstanceOptions) {
                 prisma.message.updateMany({ where: { sessionId }, data: { sessionId: null } }),
                 prisma.incomingMessage.updateMany({
                     where: { sessionId },
-                    data: { sessionId: null },
+                    data: {
+                        sessionId: null,
+                    },
                 }),
                 prisma.outgoingMessage.updateMany({
                     where: { sessionId },
-                    data: { sessionId: null },
+                    data: {
+                        sessionId: null,
+                    },
                 }),
                 prisma.session.deleteMany({ where: { sessionId } }),
+
                 fs.rm(subDirectoryPath, { recursive: true }, (err) => {
                     if (err) {
                         console.error(`Error deleting sub-directory: ${err}`);

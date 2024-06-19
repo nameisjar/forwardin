@@ -616,7 +616,7 @@ export const exportMessagesToZip: RequestHandler = async (req, res) => {
         let dataMessages = '';
         for (const message of sortedMessages) {
             if ('receivedAt' in message) {
-                dataMessages += `${message.receivedAt} - ${message.phone}: ${message.message}\n`;
+                dataMessages += `${message.receivedAt} - ${message.phone}: ${message.message} \n`;
             } else {
                 dataMessages += `${message.createdAt} - ${message.phone}: ${message.message}\n`;
             }
@@ -640,7 +640,7 @@ export const exportMessagesToZip: RequestHandler = async (req, res) => {
         res.status(500).json({ message: 'Internal server error' });
     }
 };
-
+``;
 export const getMessengerList: RequestHandler = async (req, res) => {
     try {
         const { sessionId } = req.params;

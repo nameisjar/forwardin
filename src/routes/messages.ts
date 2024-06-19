@@ -4,7 +4,7 @@ import { checkPrivilege } from '../middleware/auth';
 
 const router = Router();
 
-router.use(checkPrivilege('message'));
+// router.use(checkPrivilege('message'));
 router.post('/:sessionId/send', controller.sendMessages);
 router.post('/:sessionId/send/image', controller.sendImageMessages);
 router.post('/:sessionId/send/doc', controller.sendDocumentMessages);

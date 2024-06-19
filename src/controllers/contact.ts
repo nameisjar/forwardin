@@ -9,6 +9,7 @@ import { memoryUpload } from '../config/multer';
 import ExcelJS from 'exceljs';
 import axios from 'axios';
 import { isUUID } from '../utils/uuidChecker';
+import fs from 'fs';
 
 export const createContact: RequestHandler = async (req, res) => {
     try {
@@ -1008,6 +1009,120 @@ export const syncGoogle: RequestHandler = async (req, res) => {
             const errorMessage = downloadResponse.data?.error?.message || 'Unknown Error';
             res.status(downloadResponse.status).json({ error: errorMessage });
         }
+    } catch (error) {
+        logger.error(error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};
+
+export const exportContacts: RequestHandler = async (req, res) => {
+    try {
+        const pkId = req.authenticatedUser.pkId;
+        const privilegeId = req.privilege.pkId;
+        const deviceId = req.query.deviceId as string;
+        let contacts;
+        if (privilegeId == Number(process.env.SUPER_ADMIN_ID)) {
+            contacts = await prisma.contact.findMany({
+                where: {
+                    contactDevices: {
+                        some: {
+                            device: {
+                                id: deviceId ?? undefined,
+                            },
+                        },
+                    },
+                },
+                include: {
+                    ContactLabel: {
+                        select: {
+                            label: {
+                                select: { name: true },
+                            },
+                        },
+                    },
+                },
+            });
+        } else if (privilegeId == Number(process.env.CS_ID)) {
+            contacts = await prisma.contact.findMany({
+                where: {
+                    contactDevices: {
+                        some: {
+                            device: {
+                                id: deviceId ?? undefined,
+                                CustomerService: { pkId },
+                            },
+                        },
+                    },
+                },
+                include: {
+                    ContactLabel: {
+                        select: {
+                            label: {
+                                select: { name: true },
+                            },
+                        },
+                    },
+                },
+            });
+        } else {
+            contacts = await prisma.contact.findMany({
+                where: {
+                    contactDevices: {
+                        some: {
+                            device: {
+                                id: deviceId ?? undefined,
+                                userId: pkId,
+                            },
+                        },
+                    },
+                },
+                include: {
+                    ContactLabel: {
+                        select: {
+                            label: {
+                                select: { name: true },
+                            },
+                        },
+                    },
+                },
+            });
+        }
+
+        let workbook = new ExcelJS.Workbook();
+        let worksheet = workbook.addWorksheet('Contacts');
+        worksheet.columns = [
+            { header: 'First Name', key: 'firstName', width: 20 },
+            { header: 'Last Name', key: 'lastName', width: 20 },
+            { header: 'Phone', key: 'phone', width: 20 },
+            { header: 'Email', key: 'email', width: 20 },
+            { header: 'Gender', key: 'gender', width: 20 },
+            { header: 'Date of Birth', key: 'dob', width: 20 },
+            { header: 'Labels', key: 'labels', width: 20 },
+        ];
+
+        contacts.forEach((contact) => {
+            worksheet.addRow({
+                firstName: contact.firstName,
+                lastName: contact.lastName,
+                phone: Number(contact.phone),
+                email: contact.email,
+                gender: contact.gender,
+                dob: contact.dob,
+                labels: contact.ContactLabel.map((label) => label.label.name).join(','),
+            });
+        });
+
+        const date = new Date().toISOString().split('T')[0];
+
+        const filename = `Contacts_${date}.xlsx`;
+
+        res.setHeader(
+            'Content-Type',
+            'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        );
+        res.setHeader('Content-Disposition', `attachment; filename=${filename}`);
+
+        workbook.xlsx.write(res);
     } catch (error) {
         logger.error(error);
         res.status(500).json({ message: 'Internal server error' });
