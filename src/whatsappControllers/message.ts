@@ -61,12 +61,6 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                                 data.message?.documentMessage?.caption ||
                                 '';
 
-                            const device = await prisma.device.findFirst({
-                                where: {
-                                    sessions: { some: { sessionId } },
-                                },
-                            });
-
                             await prisma.message.upsert({
                                 select: { pkId: true },
                                 create: { ...data, remoteJid: jid, id: message.key.id!, sessionId },
@@ -138,7 +132,6 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                                             status,
                                             sessionId,
                                             contactId: contact?.pkId || null,
-                                            // deviceId: device?.pkId || null,
                                         },
                                         include: {
                                             contact: {
@@ -224,7 +217,6 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                                             receivedAt: new Date(data.messageTimestamp * 1000),
                                             sessionId,
                                             contactId: contact?.pkId || null,
-                                            // deviceId: device?.pkId || null,
                                         },
                                         include: {
                                             contact: {

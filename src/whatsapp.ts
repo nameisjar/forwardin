@@ -35,8 +35,8 @@ const retries = new Map<string, number>();
 const SSEQRGenerations = new Map<string, number>();
 
 const RECONNECT_INTERVAL = Number(process.env.RECONNECT_INTERVAL || 0);
-const MAX_RECONNECT_RETRIES = Number(process.env.MAX_RECONNECT_RETRIES || 1);
-const SSE_MAX_QR_GENERATION = Number(process.env.SSE_MAX_QR_GENERATION || 1);
+const MAX_RECONNECT_RETRIES = Number(process.env.MAX_RECONNECT_RETRIES || 5);
+const SSE_MAX_QR_GENERATION = Number(process.env.SSE_MAX_QR_GENERATION || 5);
 const SESSION_CONFIG_ID = 'session-config';
 
 export async function init() {

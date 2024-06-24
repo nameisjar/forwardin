@@ -182,9 +182,6 @@ model Device {
   BusinessHour    BusinessHour[]
   CustomerService CustomerService?
   DeviceLog       DeviceLog[]
-  IncomingMessage IncomingMessage[]
-  OutgoingMessage OutgoingMessage[]
-  Messages        Message[]
 }
 
 model DeviceLog {
@@ -308,9 +305,7 @@ model OutgoingMessage {
   updatedAt DateTime @default(now()) @map("updated_at")
   sessionId String?
   contactId Int?
-  deviceId  Int?
   contact   Contact? @relation(fields: [contactId], references: [pkId], onDelete: Cascade)
-  device    Device?  @relation(fields: [deviceId], references: [pkId], onDelete: SetNull)
 
   @@unique([sessionId, to, id], map: "unique_outgoing_message_key_per_session_id")
 }
@@ -326,9 +321,7 @@ model IncomingMessage {
   updatedAt  DateTime @default(now()) @map("updated_at")
   sessionId  String?
   contactId  Int?
-  deviceId   Int?
   contact    Contact? @relation(fields: [contactId], references: [pkId], onDelete: Cascade)
-  device     Device?  @relation(fields: [deviceId], references: [pkId], onDelete: SetNull)
 }
 
 model Broadcast {
@@ -521,8 +514,6 @@ model Message {
   urlText                         Boolean?
   userReceipt                     Json?
   verifiedBizName                 String?
-  deviceId                        Int?
-  device                          Device?  @relation(fields: [deviceId], references: [pkId], onDelete: Cascade)
 
   @@unique([sessionId, remoteJid, id], map: "unique_message_key_per_session_id")
   @@index([sessionId])
