@@ -497,6 +497,22 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
         }
     };
 
+    const deleteChats: BaileysEventHandler<'chats.delete'> = async (chatIds) => {
+        try {
+            // Lakukan penghapusan percakapan menggunakan Prisma
+            await prisma.message.deleteMany({
+                where: {
+                    id: {
+                        in: chatIds,
+                    },
+                },
+            });
+            logger.info({ chatIds }, 'Deleted chats');
+        } catch (e) {
+            logger.error(e, 'An error occurred during chat delete');
+        }
+    };
+
     const listen = () => {
         if (listening) return;
 
@@ -506,6 +522,7 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
         event.on('messages.delete', del);
         event.on('message-receipt.update', updateReceipt);
         event.on('messages.reaction', updateReaction);
+        event.on('chats.delete', deleteChats);
         listening = true;
     };
 
@@ -518,6 +535,7 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
         event.off('messages.delete', del);
         event.off('message-receipt.update', updateReceipt);
         event.off('messages.reaction', updateReaction);
+        event.off('chats.delete', deleteChats);
         listening = false;
     };
 

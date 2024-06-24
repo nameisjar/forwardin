@@ -750,3 +750,55 @@ export const getStatusOutgoingMessagesById: RequestHandler = async (req, res) =>
         res.status(500).json({ message: 'Internal server error' });
     }
 };
+
+export const deleteMessages: RequestHandler = async (req, res) => {
+    try {
+        const session = getInstance(req.params.sessionId);
+        if (!session) {
+            return res.status(404).json({ message: 'Session not found' });
+        }
+        if (!isUUID(req.params.sessionId)) {
+            return res.status(400).json({ message: 'Invalid sessionId' });
+        }
+
+        const results: { index: number; result?: proto.WebMessageInfo }[] = [];
+        const errors: { index: number; error: string }[] = [];
+
+        for (const [index, { recipient, deleteMessageKey }] of req.body.entries()) {
+            try {
+                const jid = getJid(recipient);
+                await verifyJid(session, jid, 'number');
+
+                if (deleteMessageKey && deleteMessageKey.id) {
+                    // Handle message deletion based on id
+                    const key = {
+                        remoteJid: jid,
+                        id: deleteMessageKey.id,
+                        fromMe: true, // assuming it's from the sender's perspective
+                    };
+
+                    const deleteMessageResult = await session.sendMessage(jid, { delete: key });
+                    results.push({ index, result: deleteMessageResult });
+                    await prisma.outgoingMessage.deleteMany({
+                        where: { sessionId: req.params.sessionId, id: deleteMessageKey.id },
+                    });
+                } else {
+                    throw new Error('deleteMessageKey with id is required to delete a message');
+                }
+            } catch (e) {
+                const errorMessage =
+                    e instanceof Error ? e.message : 'An error occurred during message delete';
+                logger.error(e, errorMessage);
+                errors.push({ index, error: errorMessage });
+            }
+        }
+
+        res.status(errors.length > 0 ? 500 : 200).json({
+            results,
+            errors,
+        });
+    } catch (error) {
+        logger.error(error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};
