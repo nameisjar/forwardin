@@ -969,3 +969,47 @@ export const pinChat: RequestHandler = async (req, res) => {
         res.status(500).json({ message: 'Internal server error' });
     }
 };
+
+export const starMessage: RequestHandler = async (req, res) => {
+    try {
+        const session = getInstance(req.params.sessionId);
+        if (!session) {
+            return res.status(404).json({ message: 'Session not found' });
+        }
+        if (!isUUID(req.params.sessionId)) {
+            return res.status(400).json({ message: 'Invalid sessionId' });
+        }
+
+        const { recipient, messageId, star } = req.body;
+
+        if (!recipient || !messageId || star === undefined) {
+            return res
+                .status(400)
+                .json({ message: 'Recipient, messageId, and star status are required' });
+        }
+
+        const jid = getJid(recipient);
+        // Assuming verifyJid is not necessary for the 'star' operation
+
+        // Construct the message key
+        const key = {
+            id: messageId,
+            fromMe: true, // assuming the message is from the sender's perspective
+        };
+
+        // Perform chat modification to star or unstar the message
+        const modifyParams = {
+            star: {
+                messages: [key],
+                star, // `star` should be either `true` to star or `false` to unstar
+            },
+        };
+
+        await session.chatModify(modifyParams, jid);
+
+        res.status(200).json({ message: `Message ${star ? 'starred' : 'unstarred'}` });
+    } catch (error) {
+        logger.error(error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};

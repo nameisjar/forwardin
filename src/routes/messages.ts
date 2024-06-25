@@ -20,5 +20,6 @@ router.delete('/:sessionId/me', controller.deleteMessagesForMe);
 router.put('/:sessionId/edit', controller.updateMessage);
 router.post('/:sessionId/mute', controller.muteChat);
 router.post('/:sessionId/pin', controller.pinChat);
+router.post('/:sessionId/star', controller.starMessage);
 
 export default router;
