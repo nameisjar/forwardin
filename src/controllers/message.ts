@@ -8,6 +8,7 @@ import { memoryUpload } from '../config/multer';
 import { isUUID } from '../utils/uuidChecker';
 import fs from 'fs';
 import { createZipFile } from '../utils/zip';
+import { time } from 'console';
 
 export const sendMessages: RequestHandler = async (req, res) => {
     try {
@@ -751,7 +752,7 @@ export const getStatusOutgoingMessagesById: RequestHandler = async (req, res) =>
     }
 };
 
-export const deleteMessages: RequestHandler = async (req, res) => {
+export const deleteMessagesForEveryone: RequestHandler = async (req, res) => {
     try {
         const session = getInstance(req.params.sessionId);
         if (!session) {
@@ -797,6 +798,105 @@ export const deleteMessages: RequestHandler = async (req, res) => {
             results,
             errors,
         });
+    } catch (error) {
+        logger.error(error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};
+
+export const deleteMessagesForMe: RequestHandler = async (req, res) => {
+    try {
+        const session = getInstance(req.params.sessionId);
+        if (!session) {
+            return res.status(404).json({ message: 'Session not found' });
+        }
+        if (!isUUID(req.params.sessionId)) {
+            return res.status(400).json({ message: 'Invalid sessionId' });
+        }
+
+        const results: { index: number; result?: any }[] = [];
+        const errors: { index: number; error: string }[] = [];
+
+        for (const [index, { recipient, deleteMessageKey }] of req.body.entries()) {
+            try {
+                const jid = getJid(recipient);
+                await verifyJid(session, jid, 'number');
+
+                if (deleteMessageKey && deleteMessageKey.id) {
+                    const key = {
+                        id: deleteMessageKey.id,
+                        fromMe: true,
+                        timestamp: new Date().getTime(),
+                    };
+
+                    const deleteMessageResult = await session.chatModify(
+                        { clear: { messages: [key] } },
+                        jid,
+                    );
+                    results.push({ index, result: deleteMessageResult });
+                } else {
+                    throw new Error(
+                        'deleteMessageKey with id is required to delete a message for self',
+                    );
+                }
+            } catch (e) {
+                const errorMessage =
+                    e instanceof Error ? e.message : 'An error occurred during message delete';
+                logger.error(e, errorMessage);
+                errors.push({ index, error: errorMessage });
+            }
+        }
+
+        res.status(errors.length > 0 ? 500 : 200).json({ results, errors });
+    } catch (error) {
+        logger.error(error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};
+
+export const updateMessage: RequestHandler = async (req, res) => {
+    try {
+        const session = getInstance(req.params.sessionId);
+        if (!session) {
+            return res.status(404).json({ message: 'Session not found' });
+        }
+        if (!isUUID(req.params.sessionId)) {
+            return res.status(400).json({ message: 'Invalid sessionId' });
+        }
+
+        const results: { index: number; result?: any }[] = [];
+        const errors: { index: number; error: string }[] = [];
+
+        for (const [index, { recipient, messageId, newText }] of req.body.entries()) {
+            try {
+                const jid = getJid(recipient);
+                await verifyJid(session, jid, 'number');
+
+                if (messageId) {
+                    const key = {
+                        remoteJid: jid,
+                        id: messageId,
+                        fromMe: true, // assuming it's from the sender's perspective
+                    };
+
+                    const updateMessageResult = await session.sendMessage(jid, {
+                        text: newText,
+                        edit: key,
+                    });
+
+                    results.push({ index, result: updateMessageResult });
+                } else {
+                    throw new Error('messageId is required to update a message');
+                }
+            } catch (e) {
+                const errorMessage =
+                    e instanceof Error ? e.message : 'An error occurred during message update';
+                logger.error(e, errorMessage);
+                errors.push({ index, error: errorMessage });
+            }
+        }
+
+        res.status(errors.length > 0 ? 500 : 200).json({ results, errors });
     } catch (error) {
         logger.error(error);
         res.status(500).json({ message: 'Internal server error' });

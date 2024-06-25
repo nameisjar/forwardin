@@ -15,6 +15,8 @@ router.get('/:sessionId/incoming', controller.getIncomingMessages);
 router.get('/:sessionId/outgoing', controller.getOutgoingMessages);
 router.get('/:sessionId/messenger-list', controller.getMessengerList);
 router.get('/:sessionId/outgoing-status/:messageId', controller.getStatusOutgoingMessagesById);
-router.delete('/:sessionId', controller.deleteMessages);
+router.delete('/:sessionId/everyone', controller.deleteMessagesForEveryone);
+router.delete('/:sessionId/me', controller.deleteMessagesForMe);
+router.put('/:sessionId/edit', controller.updateMessage);
 
 export default router;
