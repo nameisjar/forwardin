@@ -885,6 +885,10 @@ export const updateMessage: RequestHandler = async (req, res) => {
                     });
 
                     results.push({ index, result: updateMessageResult });
+                    await prisma.outgoingMessage.update({
+                        where: { sessionId: req.params.sessionId, id: messageId },
+                        data: { message: newText },
+                    });
                 } else {
                     throw new Error('messageId is required to update a message');
                 }
