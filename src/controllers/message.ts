@@ -906,3 +906,66 @@ export const updateMessage: RequestHandler = async (req, res) => {
         res.status(500).json({ message: 'Internal server error' });
     }
 };
+
+export const muteChat: RequestHandler = async (req, res) => {
+    try {
+        const session = getInstance(req.params.sessionId);
+        if (!session) {
+            return res.status(404).json({ message: 'Session not found' });
+        }
+        if (!isUUID(req.params.sessionId)) {
+            return res.status(400).json({ message: 'Invalid sessionId' });
+        }
+
+        const { recipient, duration } = req.body;
+
+        if (!recipient || duration === undefined) {
+            return res.status(400).json({ message: 'Recipient and duration are required' });
+        }
+
+        const jid = getJid(recipient);
+        await verifyJid(session, jid, 'number');
+
+        // Calculate mute duration in milliseconds
+        const muteDuration = duration === null ? null : duration * 60 * 60 * 1000;
+
+        // Perform chat modification to mute or unmute the chat
+        await session.chatModify({ mute: muteDuration }, jid);
+
+        res.status(200).json({
+            message: `Chat ${duration === null ? 'unmuted' : 'muted for ' + duration + ' hours'}`,
+        });
+    } catch (error) {
+        logger.error(error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};
+
+export const pinChat: RequestHandler = async (req, res) => {
+    try {
+        const session = getInstance(req.params.sessionId);
+        if (!session) {
+            return res.status(404).json({ message: 'Session not found' });
+        }
+        if (!isUUID(req.params.sessionId)) {
+            return res.status(400).json({ message: 'Invalid sessionId' });
+        }
+
+        const { recipient, pin } = req.body;
+
+        if (!recipient || pin === undefined) {
+            return res.status(400).json({ message: 'Recipient and pin status are required' });
+        }
+
+        const jid = getJid(recipient);
+        await verifyJid(session, jid, 'number');
+
+        // Perform chat modification to pin or unpin the chat
+        await session.chatModify({ pin }, jid);
+
+        res.status(200).json({ message: `Chat ${pin ? 'pinned' : 'unpinned'}` });
+    } catch (error) {
+        logger.error(error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};

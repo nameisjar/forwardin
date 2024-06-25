@@ -18,5 +18,7 @@ router.get('/:sessionId/outgoing-status/:messageId', controller.getStatusOutgoin
 router.delete('/:sessionId/everyone', controller.deleteMessagesForEveryone);
 router.delete('/:sessionId/me', controller.deleteMessagesForMe);
 router.put('/:sessionId/edit', controller.updateMessage);
+router.post('/:sessionId/mute', controller.muteChat);
+router.post('/:sessionId/pin', controller.pinChat);
 
 export default router;
