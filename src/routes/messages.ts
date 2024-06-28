@@ -23,5 +23,6 @@ router.post('/:sessionId/pin', controller.pinChat);
 router.post('/:sessionId/star', controller.starMessage);
 router.post('/:sessionId/status', controller.updateProfileStatus);
 router.post('/:sessionId/profile-name', controller.updateProfileName);
+router.get('/:sessionId/get-profile', controller.getProfilePictureUrl);
 
 export default router;

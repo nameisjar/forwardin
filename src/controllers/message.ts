@@ -1065,3 +1065,34 @@ export const updateProfileName: RequestHandler = async (req, res) => {
         res.status(500).json({ message: 'Internal server error' });
     }
 };
+
+export const getProfilePictureUrl: RequestHandler = async (req, res) => {
+    try {
+        const session = getInstance(req.params.sessionId);
+        if (!session) {
+            return res.status(404).json({ message: 'Session not found' });
+        }
+        if (!isUUID(req.params.sessionId)) {
+            return res.status(400).json({ message: 'Invalid sessionId' });
+        }
+
+        const { recipient, resolution } = req.query as { recipient: string; resolution: string };
+        if (!recipient) {
+            return res.status(400).json({ message: 'Recipient is required' });
+        }
+
+        const jid = getJid(recipient);
+        await verifyJid(session, jid, 'number');
+
+        // Get profile picture URL
+        const ppUrl = await session.profilePictureUrl(
+            jid,
+            resolution === 'high' ? 'image' : undefined,
+        );
+
+        res.status(200).json({ profilePictureUrl: ppUrl });
+    } catch (error) {
+        logger.error(error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};
