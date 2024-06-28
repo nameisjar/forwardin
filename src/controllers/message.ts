@@ -1096,3 +1096,60 @@ export const getProfilePictureUrl: RequestHandler = async (req, res) => {
         res.status(500).json({ message: 'Internal server error' });
     }
 };
+
+export const updateProfilePicture: RequestHandler = async (req, res) => {
+    try {
+        const session = getInstance(req.params.sessionId);
+        if (!session) {
+            return res.status(404).json({ message: 'Session not found' });
+        }
+        if (!isUUID(req.params.sessionId)) {
+            return res.status(400).json({ message: 'Invalid sessionId' });
+        }
+
+        const { myNumber, imageUrl } = req.body;
+
+        if (!myNumber || !imageUrl) {
+            return res.status(400).json({ message: 'myNumber and imageUrl are required' });
+        }
+
+        const jid = getJid(myNumber);
+        await verifyJid(session, jid, 'number');
+
+        // Update profile picture
+        await session.updateProfilePicture(jid, { url: imageUrl });
+
+        res.status(200).json({ message: 'Profile picture updated successfully' });
+    } catch (error) {
+        logger.error(error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};
+
+export const removeProfilePicture: RequestHandler = async (req, res) => {
+    try {
+        const session = getInstance(req.params.sessionId);
+        if (!session) {
+            return res.status(404).json({ message: 'Session not found' });
+        }
+        if (!isUUID(req.params.sessionId)) {
+            return res.status(400).json({ message: 'Invalid sessionId' });
+        }
+
+        const { myNumber } = req.body;
+
+        if (!myNumber) {
+            return res.status(400).json({ message: 'myNumber is required' });
+        }
+
+        const jid = getJid(myNumber);
+        await verifyJid(session, jid, 'number');
+        // Remove profile picture
+        await session.removeProfilePicture(jid);
+
+        res.status(200).json({ message: 'Profile picture removed successfully' });
+    } catch (error) {
+        logger.error(error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};

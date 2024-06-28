@@ -15,6 +15,7 @@ router.get('/:sessionId/incoming', controller.getIncomingMessages);
 router.get('/:sessionId/outgoing', controller.getOutgoingMessages);
 router.get('/:sessionId/messenger-list', controller.getMessengerList);
 router.get('/:sessionId/outgoing-status/:messageId', controller.getStatusOutgoingMessagesById);
+router.get('/:sessionId/get-profile', controller.getProfilePictureUrl);
 router.delete('/:sessionId/everyone', controller.deleteMessagesForEveryone);
 router.delete('/:sessionId/me', controller.deleteMessagesForMe);
 router.put('/:sessionId/edit', controller.updateMessage);
@@ -23,6 +24,7 @@ router.post('/:sessionId/pin', controller.pinChat);
 router.post('/:sessionId/star', controller.starMessage);
 router.post('/:sessionId/status', controller.updateProfileStatus);
 router.post('/:sessionId/profile-name', controller.updateProfileName);
-router.get('/:sessionId/get-profile', controller.getProfilePictureUrl);
+router.post('/:sessionId/profile-picture', controller.updateProfilePicture);
+router.delete('/:sessionId/profile-picture', controller.removeProfilePicture);
 
 export default router;
