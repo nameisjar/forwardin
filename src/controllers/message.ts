@@ -1153,3 +1153,33 @@ export const removeProfilePicture: RequestHandler = async (req, res) => {
         res.status(500).json({ message: 'Internal server error' });
     }
 };
+
+export const updateBlockStatus: RequestHandler = async (req, res) => {
+    try {
+        const session = getInstance(req.params.sessionId);
+        if (!session) {
+            return res.status(404).json({ message: 'Session not found' });
+        }
+        if (!isUUID(req.params.sessionId)) {
+            return res.status(400).json({ message: 'Invalid sessionId' });
+        }
+
+        const { contactId, action } = req.body;
+
+        if (!contactId || !action) {
+            return res.status(400).json({ message: 'contactId and action are required' });
+        }
+
+        if (action !== 'block' && action !== 'unblock') {
+            return res.status(400).json({ message: 'action must be "block" or "unblock"' });
+        }
+
+        // Update block status
+        await session.updateBlockStatus(contactId, action);
+
+        res.status(200).json({ message: `User ${action}ed successfully` });
+    } catch (error) {
+        logger.error(error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};

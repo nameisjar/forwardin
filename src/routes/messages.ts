@@ -26,5 +26,6 @@ router.post('/:sessionId/status', controller.updateProfileStatus);
 router.post('/:sessionId/profile-name', controller.updateProfileName);
 router.post('/:sessionId/profile-picture', controller.updateProfilePicture);
 router.delete('/:sessionId/profile-picture', controller.removeProfilePicture);
+router.post('/:sessionId/block-unblock', controller.updateBlockStatus);
 
 export default router;
