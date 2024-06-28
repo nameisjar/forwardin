@@ -1013,3 +1013,55 @@ export const starMessage: RequestHandler = async (req, res) => {
         res.status(500).json({ message: 'Internal server error' });
     }
 };
+
+export const updateProfileStatus: RequestHandler = async (req, res) => {
+    try {
+        const session = getInstance(req.params.sessionId);
+        if (!session) {
+            return res.status(404).json({ message: 'Session not found' });
+        }
+        if (!isUUID(req.params.sessionId)) {
+            return res.status(400).json({ message: 'Invalid sessionId' });
+        }
+
+        const { status } = req.body;
+
+        if (!status) {
+            return res.status(400).json({ message: 'Status is required' });
+        }
+
+        // Update profile status
+        await session.updateProfileStatus(status);
+
+        res.status(200).json({ message: 'Profile status updated successfully' });
+    } catch (error) {
+        logger.error(error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};
+
+export const updateProfileName: RequestHandler = async (req, res) => {
+    try {
+        const session = getInstance(req.params.sessionId);
+        if (!session) {
+            return res.status(404).json({ message: 'Session not found' });
+        }
+        if (!isUUID(req.params.sessionId)) {
+            return res.status(400).json({ message: 'Invalid sessionId' });
+        }
+
+        const { name } = req.body;
+
+        if (!name) {
+            return res.status(400).json({ message: 'Name is required' });
+        }
+
+        // Update profile name
+        await session.updateProfileName(name);
+
+        res.status(200).json({ message: 'Profile name updated successfully' });
+    } catch (error) {
+        logger.error(error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};

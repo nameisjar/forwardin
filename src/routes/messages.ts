@@ -21,5 +21,7 @@ router.put('/:sessionId/edit', controller.updateMessage);
 router.post('/:sessionId/mute', controller.muteChat);
 router.post('/:sessionId/pin', controller.pinChat);
 router.post('/:sessionId/star', controller.starMessage);
+router.post('/:sessionId/status', controller.updateProfileStatus);
+router.post('/:sessionId/profile-name', controller.updateProfileName);
 
 export default router;
