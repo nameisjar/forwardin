@@ -1107,14 +1107,11 @@ export const updateProfilePicture: RequestHandler = async (req, res) => {
             return res.status(400).json({ message: 'Invalid sessionId' });
         }
 
-        const { myNumber, imageUrl } = req.body;
+        const { jid, imageUrl } = req.body;
 
-        if (!myNumber || !imageUrl) {
-            return res.status(400).json({ message: 'myNumber and imageUrl are required' });
+        if (!jid || !imageUrl) {
+            return res.status(400).json({ message: 'jid and imageUrl are required' });
         }
-
-        const jid = getJid(myNumber);
-        await verifyJid(session, jid, 'number');
 
         // Update profile picture
         await session.updateProfilePicture(jid, { url: imageUrl });
