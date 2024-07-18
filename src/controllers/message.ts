@@ -1180,3 +1180,36 @@ export const updateBlockStatus: RequestHandler = async (req, res) => {
         res.status(500).json({ message: 'Internal server error' });
     }
 };
+
+export const getBusinessProfile: RequestHandler = async (req, res) => {
+    try {
+        const session = getInstance(req.params.sessionId);
+        if (!session) {
+            return res.status(404).json({ message: 'Session not found' });
+        }
+        if (!isUUID(req.params.sessionId)) {
+            return res.status(400).json({ message: 'Invalid sessionId' });
+        }
+
+        const { contactId } = req.query as { contactId: string };
+
+        if (!contactId) {
+            return res.status(400).json({ message: 'contactId query parameter is required' });
+        }
+
+        // Get business profile
+        const profile = await session.getBusinessProfile(contactId);
+
+        if (!profile) {
+            return res.status(404).json({ message: 'Business profile not found' });
+        }
+
+        res.status(200).json({
+            description: profile.description,
+            category: profile.category,
+        });
+    } catch (error) {
+        logger.error(error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};

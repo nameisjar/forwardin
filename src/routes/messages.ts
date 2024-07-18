@@ -4,7 +4,7 @@ import { checkPrivilege } from '../middleware/auth';
 
 const router = Router();
 
-// router.use(checkPrivilege('message'));
+router.use(checkPrivilege('message'));
 router.post('/:sessionId/send', controller.sendMessages);
 router.post('/:sessionId/send/image', controller.sendImageMessages);
 router.post('/:sessionId/send/doc', controller.sendDocumentMessages);
@@ -16,6 +16,7 @@ router.get('/:sessionId/outgoing', controller.getOutgoingMessages);
 router.get('/:sessionId/messenger-list', controller.getMessengerList);
 router.get('/:sessionId/outgoing-status/:messageId', controller.getStatusOutgoingMessagesById);
 router.get('/:sessionId/get-profile', controller.getProfilePictureUrl);
+router.get('/:sessionId/business-profile', controller.getBusinessProfile);
 router.delete('/:sessionId/everyone', controller.deleteMessagesForEveryone);
 router.delete('/:sessionId/me', controller.deleteMessagesForMe);
 router.put('/:sessionId/edit', controller.updateMessage);
