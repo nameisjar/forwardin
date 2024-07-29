@@ -48,7 +48,7 @@ router.use('/subscription-plans', authMiddleware, subsPlanRoutes);
 router.use('/customer-services', customerServiceRoutes);
 router.use('/analytics', authMiddleware, analyticsRoutes);
 router.use('/super-admin', superAdminRoutes);
-router.use('/api', apiKeyDevice, deviceApi);
+router.use('/api', deviceApi);
 router.use('/media', express.static('media'));
 
 export default router;

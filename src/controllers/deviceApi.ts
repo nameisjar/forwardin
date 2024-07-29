@@ -6,6 +6,7 @@ import { delay as delayMs } from '../utils/delay';
 import { proto } from '@whiskeysockets/baileys';
 import { diskUpload, memoryUpload } from '../config/multer';
 import { isUUID } from '../utils/uuidChecker';
+import fs from 'fs';
 
 export const sendMessages: RequestHandler = async (req, res) => {
     try {
@@ -838,21 +839,189 @@ export const createAutoReplies: RequestHandler = async (req, res) => {
     }
 };
 
-export const getStatusOutgoingMessagesById: RequestHandler = async (req, res) => {
+export const deleteAllMessages: RequestHandler = async (req, res) => {
     try {
         const { sessionId } = req.authenticatedDevice;
-        const { messageId } = req.params;
+        await prisma.$transaction(async (transaction) => {
+            await transaction.message.deleteMany({ where: { sessionId } });
+            await transaction.incomingMessage.deleteMany({ where: { sessionId } });
+            await transaction.outgoingMessage.deleteMany({ where: { sessionId } });
+        });
+        res.status(200).json({ message: 'All messages deleted successfully' });
+    } catch (error) {
+        logger.error(error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};
 
-        const message = await prisma.outgoingMessage.findFirst({
-            where: { sessionId, id: messageId },
-            select: { status: true },
+export const getBroadcasts: RequestHandler = async (req, res) => {
+    try {
+        const { deviceId } = req.authenticatedDevice;
+        const broadcasts = await prisma.broadcast.findMany({
+            where: { deviceId },
+        });
+        res.status(200).json(broadcasts);
+    } catch (error) {
+        logger.error(error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};
+
+export const deleteAllBroadcasts: RequestHandler = async (req, res) => {
+    try {
+        const { deviceId } = req.authenticatedDevice;
+        await prisma.broadcast.deleteMany({ where: { deviceId } });
+        res.status(200).json({ message: 'All broadcasts deleted successfully' });
+    } catch (error) {
+        logger.error(error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};
+
+export const exportMessagesToZip: RequestHandler = async (req, res) => {
+    try {
+        const { sessionId } = req.params;
+        const { phoneNumber, contactName } = req.query;
+        const sort = req.query.sort as string;
+
+        const incomingMessages = await prisma.incomingMessage.findMany({
+            where: {
+                sessionId,
+                from: { contains: phoneNumber ? phoneNumber.toString() : undefined },
+                contact: {
+                    OR: contactName
+                        ? [
+                              {
+                                  firstName: {
+                                      contains: contactName.toString(),
+                                      mode: 'insensitive',
+                                  },
+                              },
+                              {
+                                  lastName: {
+                                      contains: contactName.toString(),
+                                      mode: 'insensitive',
+                                  },
+                              },
+                          ]
+                        : undefined,
+                },
+            },
+            select: {
+                from: true,
+                receivedAt: true,
+                createdAt: true,
+                contact: true,
+                message: true,
+                mediaPath: true,
+            },
         });
 
-        if (!message) {
-            return res.status(404).json({ message: 'Message not found' });
+        const outgoingMessages = await prisma.outgoingMessage.findMany({
+            where: {
+                sessionId,
+                to: { contains: phoneNumber ? phoneNumber.toString() : undefined },
+                contact: {
+                    OR: contactName
+                        ? [
+                              {
+                                  firstName: {
+                                      contains: contactName.toString(),
+                                      mode: 'insensitive',
+                                  },
+                              },
+                              {
+                                  lastName: {
+                                      contains: contactName.toString(),
+                                      mode: 'insensitive',
+                                  },
+                              },
+                          ]
+                        : undefined,
+                },
+            },
+            select: { to: true, createdAt: true, contact: true, message: true, mediaPath: true },
+        });
+
+        const phoneSend = await prisma.session.findFirst({
+            where: { sessionId: sessionId },
+            select: {
+                device: {
+                    select: {
+                        phone: true,
+                    },
+                },
+            },
+        });
+
+        type Message = {
+            from?: string;
+            createdAt: Date;
+            receivedAt?: Date;
+            to?: string;
+            phone?: string;
+            message?: string | null;
+            mediaPath?: string | null;
+        };
+        // Combine incoming and outgoing messages into one array
+        const allMessages: Message[] = [...incomingMessages, ...outgoingMessages];
+        for (const message of allMessages) {
+            if ('from' in message) {
+                message.receivedAt = message.receivedAt;
+                message.phone = message.from?.replace('@s.whatsapp.net', '') || 'Unknown';
+                delete message.from;
+            } else if ('to' in message) {
+                const senderName = phoneSend?.device.phone?.toString() || 'Unknown';
+                message.phone = senderName;
+                delete message.to;
+            }
+        }
+        logger.debug(allMessages);
+
+        // Sort the combined messages by timestamp (receivedAt or createdAt)
+        sort == 'asc'
+            ? allMessages.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
+            : allMessages.sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
+
+        // Convert the messages to strings
+        let dataMessages = '';
+        for (const message of allMessages) {
+            if ('receivedAt' in message) {
+                dataMessages += `${message.receivedAt} - ${message.phone}: ${message.message}\n`;
+            } else {
+                dataMessages += `${message.createdAt} - ${message.phone}: ${message.message}\n`;
+            }
         }
 
-        res.status(200).json(message);
+        let mediaPath = [];
+        // jangan tampilkan data yang null dan masukkan dalam array
+        for (const message of allMessages) {
+            if (message.mediaPath) {
+                mediaPath.push(message.mediaPath);
+            }
+        }
+
+        // Create a zip file
+        const JSZip = require('jszip');
+        const zip = new JSZip();
+        // const dataString = JSON.stringify(dataMessages, null, 2);
+        zip.file('messages.txt', dataMessages.toString());
+        zip.folder('media');
+        const folderMedia = zip.folder('media');
+        if (folderMedia) {
+            mediaPath.forEach((image, index) => {
+                // Menambahkan file ke ZIP
+                const imageBuffer = fs.readFileSync(image); // Read the image file
+                folderMedia.file(`${index}.jpg`, imageBuffer); // Add the image file to the ZIP
+            });
+        }
+
+        const zipContent = await zip.generateAsync({ type: 'nodebuffer' });
+
+        res.set('Content-Type', 'application/zip');
+        res.set('Content-Disposition', `attachment; filename=${sessionId}-messages.zip`);
+        res.set('Content-Length', zipContent.length);
+        res.send(zipContent);
     } catch (error) {
         logger.error(error);
         res.status(500).json({ message: 'Internal server error' });
