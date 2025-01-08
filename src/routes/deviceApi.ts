@@ -10,6 +10,8 @@ router.post('/messages/send/audio', controller.sendAudioMessages);
 router.post('/messages/send/video', controller.sendVideoMessages);
 router.post('/messages/send/button', controller.sendButton);
 router.post('/messages/broadcasts', controller.createBroadcast);
+router.post('/messages/broadcasts/reminder', controller.createBroadcastReminder);
+router.post('/messages/broadcasts/feedback', controller.createBroadcastFeedback);
 router.post('/messages/auto-replies', controller.createAutoReplies);
 router.get('/messages', controller.getConversationMessages);
 router.get('/messages/incoming', controller.getIncomingMessages);
@@ -19,5 +21,6 @@ router.get('/messages/export-zip/', controller.exportMessagesToZip);
 router.get('/messages/broadcasts', controller.getBroadcasts);
 router.delete('/messages/broadcasts', controller.deleteAllBroadcasts);
 router.delete('/messages', controller.deleteAllMessages);
+router.get('/messages/get-groups', controller.getGroups);
 
 export default router;

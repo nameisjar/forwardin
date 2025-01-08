@@ -7,6 +7,7 @@ import { proto } from '@whiskeysockets/baileys';
 import { diskUpload, memoryUpload } from '../config/multer';
 import { isUUID } from '../utils/uuidChecker';
 import fs from 'fs';
+import { addWeeks, format } from 'date-fns'; // Anda bisa menggunakan date-fns atau moment.js untuk manipulasi tanggal
 
 export const sendMessages: RequestHandler = async (req, res) => {
     try {
@@ -1027,3 +1028,293 @@ export const exportMessagesToZip: RequestHandler = async (req, res) => {
         res.status(500).json({ message: 'Internal server error' });
     }
 };
+
+export const getGroups: RequestHandler = async (req, res) => {
+    try {
+        const { sessionId } = req.authenticatedDevice;
+
+        if (!sessionId || !isUUID(sessionId)) {
+            return res.status(400).json({ message: 'Invalid or missing sessionId' });
+        }
+
+        try {
+            const session = getInstance(sessionId);
+            if (!session) {
+                return res.status(404).json({ message: 'Session not found' });
+            }
+
+            // Mendapatkan semua grup dari sesi
+            const groups = await session.groupFetchAllParticipating();
+
+            // Format hasil grup
+            const results = Object.entries(groups).map(([groupId, groupInfo]) => ({
+                id: groupId,
+                name: groupInfo.subject || 'Unnamed Group',
+            }));
+
+            return res.status(200).json({ results });
+        } catch (error) {
+            const message =
+                error instanceof Error ? error.message : 'An error occurred while fetching groups';
+            logger.error(error, message);
+            return res.status(500).json({ message });
+        }
+    } catch (error) {
+        logger.error(error);
+        return res.status(500).json({ message: 'Internal server error' });
+    }
+};
+
+export const createBroadcastFeedback: RequestHandler = async (req, res) => {
+    try {
+        diskUpload.single('media')(req, res, async (err: any) => {
+            if (err) {
+                return res.status(400).json({ message: 'Error uploading file' });
+            }
+
+            const { deviceId } = req.authenticatedDevice;
+            const { courseName, startLesson = 1, recipients } = req.body;
+            const delay = Number(req.body.delay) ?? 5000;
+
+            if (!courseName || !recipients) {
+                return res.status(400).json({ message: 'Missing required fields' });
+            }
+
+            if (
+                recipients.includes('all') &&
+                recipients.some((recipient: { startsWith: (arg0: string) => string }) =>
+                    recipient.startsWith('label'),
+                )
+            ) {
+                return res.status(400).json({
+                    message:
+                        "Recipients can't contain both all contacts and contact labels at the same input",
+                });
+            }
+
+            const device = await prisma.device.findUnique({
+                where: { pkId: deviceId },
+                include: { sessions: { select: { sessionId: true } } },
+            });
+
+            if (!device) {
+                return res.status(404).json({ message: 'Device not found' });
+            }
+            if (!device.sessions[0]) {
+                return res.status(404).json({ message: 'Session not found' });
+            }
+
+            const courseFeedbacks = await prisma.courseFeedback.findMany({
+                where: {
+                    courseName,
+                    lesson: { gte: Number(startLesson) },
+                },
+                orderBy: { lesson: 'asc' },
+            });
+
+            if (courseFeedbacks.length === 0) {
+                return res
+                    .status(404)
+                    .json({ message: 'No lessons found for the specified course' });
+            }
+
+            const now = new Date();
+
+            await prisma.$transaction(async (transaction) => {
+                for (let i = 0; i < courseFeedbacks.length; i++) {
+                    const feedback = courseFeedbacks[i];
+                    const schedule = new Date(now);
+                    schedule.setDate(schedule.getDate() + i * 7); // Tambahkan 1 minggu untuk setiap lesson
+
+                    await transaction.broadcast.create({
+                        data: {
+                            name: `${courseName} - Lesson ${feedback.lesson}`,
+                            message: feedback.message,
+                            schedule,
+                            deviceId: device.pkId,
+                            delay,
+                            recipients: {
+                                set: recipients,
+                            },
+                            mediaPath: req.file?.path,
+                        },
+                    });
+                }
+            });
+
+            res.status(201).json({ message: 'Broadcasts created successfully' });
+        });
+    } catch (error) {
+        logger.error(error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};
+
+export const createBroadcastReminder: RequestHandler = async (req, res) => {
+    try {
+        diskUpload.single('media')(req, res, async (err: any) => {
+            if (err) {
+                return res.status(400).json({ message: 'Error uploading file' });
+            }
+
+            const { deviceId } = req.authenticatedDevice;
+            const { courseName, startLesson = 1, recipients } = req.body;
+            const delay = Number(req.body.delay) ?? 5000;
+
+            if (!courseName || !recipients) {
+                return res.status(400).json({ message: 'Missing required fields' });
+            }
+
+            if (
+                recipients.includes('all') &&
+                recipients.some((recipient: { startsWith: (arg0: string) => string }) =>
+                    recipient.startsWith('label'),
+                )
+            ) {
+                return res.status(400).json({
+                    message:
+                        "Recipients can't contain both all contacts and contact labels at the same input",
+                });
+            }
+
+            const device = await prisma.device.findUnique({
+                where: { pkId: deviceId },
+                include: { sessions: { select: { sessionId: true } } },
+            });
+
+            if (!device) {
+                return res.status(404).json({ message: 'Device not found' });
+            }
+            if (!device.sessions[0]) {
+                return res.status(404).json({ message: 'Session not found' });
+            }
+
+            const courseReminders = await prisma.courseReminder.findMany({
+                where: {
+                    courseName,
+                    lesson: { gte: Number(startLesson) },
+                },
+                orderBy: { lesson: 'asc' },
+            });
+
+            if (courseReminders.length === 0) {
+                return res
+                    .status(404)
+                    .json({ message: 'No lessons found for the specified course' });
+            }
+
+            const now = new Date();
+
+            await prisma.$transaction(async (transaction) => {
+                for (let i = 0; i < courseReminders.length; i++) {
+                    const reminder = courseReminders[i];
+                    const schedule = new Date(now);
+                    schedule.setDate(schedule.getDate() + i * 7); // Tambahkan 1 minggu untuk setiap lesson
+
+                    await transaction.broadcast.create({
+                        data: {
+                            name: `${courseName} - Lesson ${reminder.lesson}`,
+                            message: reminder.message,
+                            schedule,
+                            deviceId: device.pkId,
+                            delay,
+                            recipients: {
+                                set: recipients,
+                            },
+                            mediaPath: req.file?.path,
+                        },
+                    });
+                }
+            });
+
+            res.status(201).json({ message: 'Broadcasts created successfully' });
+        });
+    } catch (error) {
+        logger.error(error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};
+
+// untuk testing
+// export const createBroadcastRecurring: RequestHandler = async (req, res) => {
+//     try {
+//         diskUpload.single('media')(req, res, async (err: any) => {
+//             if (err) {
+//                 return res.status(400).json({ message: 'Error uploading file' });
+//             }
+
+//             const { deviceId } = req.authenticatedDevice;
+//             const { courseName, startLesson = 1, recipients } = req.body;
+//             const delay = Number(req.body.delay) ?? 5000;
+
+//             if (!courseName || !recipients) {
+//                 return res.status(400).json({ message: 'Missing required fields' });
+//             }
+
+//             if (
+//                 recipients.includes('all') &&
+//                 recipients.some((recipient: { startsWith: (arg0: string) => string }) =>
+//                     recipient.startsWith('label'),
+//                 )
+//             ) {
+//                 return res.status(400).json({
+//                     message:
+//                         "Recipients can't contain both all contacts and contact labels at the same input",
+//                 });
+//             }
+
+//             const device = await prisma.device.findUnique({
+//                 where: { pkId: deviceId },
+//                 include: { sessions: { select: { sessionId: true } } },
+//             });
+
+//             if (!device) {
+//                 return res.status(404).json({ message: 'Device not found' });
+//             }
+//             if (!device.sessions[0]) {
+//                 return res.status(404).json({ message: 'Session not found' });
+//             }
+
+//             const courseReminders = await prisma.courseReminder.findMany({
+//                 where: {
+//                     courseName,
+//                     lesson: { gte: Number(startLesson) },
+//                 },
+//                 orderBy: { lesson: 'asc' },
+//             });
+
+//             if (courseReminders.length === 0) {
+//                 return res.status(404).json({ message: 'No lessons found for the specified course' });
+//             }
+
+//             const now = new Date();
+
+//             await prisma.$transaction(async (transaction) => {
+//                 for (let i = 0; i < courseReminders.length; i++) {
+//                     const reminder = courseReminders[i];
+//                     const schedule = new Date(now);
+//                     schedule.setMinutes(schedule.getMinutes() + i * 2); // Tambahkan 2 menit untuk setiap lesson
+
+//                     await transaction.broadcast.create({
+//                         data: {
+//                             name: `${courseName} - Lesson ${reminder.lesson}`,
+//                             message: reminder.message,
+//                             schedule,
+//                             deviceId: device.pkId,
+//                             delay,
+//                             recipients: {
+//                                 set: recipients,
+//                             },
+//                             mediaPath: req.file?.path,
+//                         },
+//                     });
+//                 }
+//             });
+
+//             res.status(201).json({ message: 'Broadcasts created successfully (Test Mode: 2-min Interval)' });
+//         });
+//     } catch (error) {
+//         logger.error(error);
+//         res.status(500).json({ message: 'Internal server error' });
+//     }
+// };

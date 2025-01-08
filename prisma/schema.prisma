@@ -330,7 +330,7 @@ model Broadcast {
   name       String   @db.VarChar(128)
   status     Boolean  @default(true)
   recipients String[]
-  message    String   @db.VarChar(255)
+  message    String   @db.Text
   schedule   DateTime
   delay      Int
   isSent     Boolean  @default(false)
@@ -530,3 +530,25 @@ model Notification {
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @default(now()) @map("updated_at")
 }
+
+
+model CourseReminder {
+    pkId        Int      @id @default(autoincrement())
+    id          String   @unique @default(uuid()) @db.Uuid
+    courseName  String   
+    lesson      Int      
+    message     String   @db.Text
+    createdAt   DateTime @default(now())
+    updatedAt   DateTime @updatedAt
+}
+
+model CourseFeedback {
+    pkId        Int      @id @default(autoincrement())
+    id          String   @unique @default(uuid()) @db.Uuid
+    courseName  String   
+    lesson      Int      
+    message     String   @db.Text   
+    createdAt   DateTime @default(now())
+    updatedAt   DateTime @updatedAt
+}
+
