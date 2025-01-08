@@ -22,6 +22,7 @@ router.post(
 router.post('/import', checkSubscriptionQuota, isContactQuotaAvailable, controller.importContacts);
 router.post('/sync-google', checkSubscriptionQuota, isGoogleContactSync, controller.syncGoogle);
 router.get('/', controller.getContacts);
+router.get('/export-contacts', controller.exportContacts);
 router.get('/labels', controller.getContactLabels);
 router.get('/:contactId', controller.getContact);
 router.put('/:contactId', dateRules, validate, controller.updateContact);

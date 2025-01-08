@@ -6,6 +6,9 @@ import { delay as delayMs } from '../utils/delay';
 import { proto } from '@whiskeysockets/baileys';
 import { memoryUpload } from '../config/multer';
 import { isUUID } from '../utils/uuidChecker';
+import fs from 'fs';
+import { createZipFile } from '../utils/zip';
+import { time } from 'console';
 
 export const sendMessages: RequestHandler = async (req, res) => {
     try {
@@ -508,6 +511,137 @@ export const getConversationMessages: RequestHandler = async (req, res) => {
     }
 };
 
+export const exportMessagesToZip: RequestHandler = async (req, res) => {
+    try {
+        const { sessionId } = req.params;
+        const { phoneNumber, contactName, sort } = req.query;
+
+        const incomingMessages = await prisma.incomingMessage.findMany({
+            where: {
+                sessionId,
+                from: { contains: phoneNumber ? phoneNumber.toString() : undefined },
+                contact: {
+                    OR: contactName
+                        ? [
+                              {
+                                  firstName: {
+                                      contains: contactName.toString(),
+                                      mode: 'insensitive',
+                                  },
+                              },
+                              {
+                                  lastName: {
+                                      contains: contactName.toString(),
+                                      mode: 'insensitive',
+                                  },
+                              },
+                          ]
+                        : undefined,
+                },
+            },
+            select: {
+                from: true,
+                receivedAt: true,
+                createdAt: true,
+                contact: true,
+                message: true,
+                mediaPath: true,
+            },
+        });
+
+        const outgoingMessages = await prisma.outgoingMessage.findMany({
+            where: {
+                sessionId,
+                to: { contains: phoneNumber ? phoneNumber.toString() : undefined },
+                contact: {
+                    OR: contactName
+                        ? [
+                              {
+                                  firstName: {
+                                      contains: contactName.toString(),
+                                      mode: 'insensitive',
+                                  },
+                              },
+                              {
+                                  lastName: {
+                                      contains: contactName.toString(),
+                                      mode: 'insensitive',
+                                  },
+                              },
+                          ]
+                        : undefined,
+                },
+            },
+            select: { to: true, createdAt: true, contact: true, message: true, mediaPath: true },
+        });
+
+        const phoneSend = await prisma.session.findFirst({
+            where: { sessionId },
+            select: {
+                device: {
+                    select: { phone: true },
+                },
+            },
+        });
+
+        type Message = {
+            from?: string;
+            createdAt: Date;
+            receivedAt?: Date;
+            to?: string;
+            phone?: string;
+            message?: string | null;
+            mediaPath?: string | null;
+        };
+
+        const allMessages: Message[] = [...incomingMessages, ...outgoingMessages];
+        for (const message of allMessages) {
+            if ('from' in message) {
+                message.receivedAt = message.receivedAt;
+                message.phone = message.from?.replace('@s.whatsapp.net', '') || 'Unknown';
+                delete message.from;
+            } else if ('to' in message) {
+                const senderName = phoneSend?.device.phone?.toString() || 'Unknown';
+                message.phone = senderName;
+                delete message.to;
+            }
+        }
+        logger.debug(allMessages);
+
+        const sortedMessages = allMessages.sort((a, b) =>
+            sort === 'asc'
+                ? a.createdAt.getTime() - b.createdAt.getTime()
+                : b.createdAt.getTime() - a.createdAt.getTime(),
+        );
+
+        let dataMessages = '';
+        for (const message of sortedMessages) {
+            if ('receivedAt' in message) {
+                dataMessages += `${message.receivedAt} - ${message.phone}: ${message.message} \n`;
+            } else {
+                dataMessages += `${message.createdAt} - ${message.phone}: ${message.message}\n`;
+            }
+        }
+
+        const mediaPaths = sortedMessages
+            .filter((m) => m.mediaPath)
+            .map((m) => m.mediaPath as string);
+
+        const zipContent = await createZipFile(dataMessages, mediaPaths);
+
+        res.set('Content-Type', 'application/zip');
+        res.set(
+            'Content-Disposition',
+            `attachment; filename=WhatsApp Chat With Contact +${phoneNumber}.zip`,
+        );
+        res.set('Content-Length', zipContent.length.toString());
+        res.send(zipContent);
+    } catch (error) {
+        logger.error(error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};
+``;
 export const getMessengerList: RequestHandler = async (req, res) => {
     try {
         const { sessionId } = req.params;
@@ -592,6 +726,487 @@ export const getMessengerList: RequestHandler = async (req, res) => {
                 totalPages,
                 hasMore,
             },
+        });
+    } catch (error) {
+        logger.error(error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};
+
+export const getStatusOutgoingMessagesById: RequestHandler = async (req, res) => {
+    try {
+        const { sessionId, messageId } = req.params;
+        const message = await prisma.outgoingMessage.findFirst({
+            where: { sessionId, id: messageId },
+            select: { status: true },
+        });
+
+        if (!message) {
+            return res.status(404).json({ message: 'Message not found' });
+        }
+
+        res.status(200).json(serializePrisma(message));
+    } catch (error) {
+        logger.error(error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};
+
+export const deleteMessagesForEveryone: RequestHandler = async (req, res) => {
+    try {
+        const session = getInstance(req.params.sessionId);
+        if (!session) {
+            return res.status(404).json({ message: 'Session not found' });
+        }
+        if (!isUUID(req.params.sessionId)) {
+            return res.status(400).json({ message: 'Invalid sessionId' });
+        }
+
+        const results: { index: number; result?: proto.WebMessageInfo }[] = [];
+        const errors: { index: number; error: string }[] = [];
+
+        for (const [index, { recipient, deleteMessageKey }] of req.body.entries()) {
+            try {
+                const jid = getJid(recipient);
+                await verifyJid(session, jid, 'number');
+
+                if (deleteMessageKey && deleteMessageKey.id) {
+                    // Handle message deletion based on id
+                    const key = {
+                        remoteJid: jid,
+                        id: deleteMessageKey.id,
+                        fromMe: true, // assuming it's from the sender's perspective
+                    };
+
+                    const deleteMessageResult = await session.sendMessage(jid, { delete: key });
+                    results.push({ index, result: deleteMessageResult });
+                    await prisma.outgoingMessage.deleteMany({
+                        where: { sessionId: req.params.sessionId, id: deleteMessageKey.id },
+                    });
+                } else {
+                    throw new Error('deleteMessageKey with id is required to delete a message');
+                }
+            } catch (e) {
+                const errorMessage =
+                    e instanceof Error ? e.message : 'An error occurred during message delete';
+                logger.error(e, errorMessage);
+                errors.push({ index, error: errorMessage });
+            }
+        }
+
+        res.status(errors.length > 0 ? 500 : 200).json({
+            results,
+            errors,
+        });
+    } catch (error) {
+        logger.error(error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};
+
+export const deleteMessagesForMe: RequestHandler = async (req, res) => {
+    try {
+        const session = getInstance(req.params.sessionId);
+        if (!session) {
+            return res.status(404).json({ message: 'Session not found' });
+        }
+        if (!isUUID(req.params.sessionId)) {
+            return res.status(400).json({ message: 'Invalid sessionId' });
+        }
+
+        const results: { index: number; result?: any }[] = [];
+        const errors: { index: number; error: string }[] = [];
+
+        for (const [index, { recipient, deleteMessageKey }] of req.body.entries()) {
+            try {
+                const jid = getJid(recipient);
+                await verifyJid(session, jid, 'number');
+
+                if (deleteMessageKey && deleteMessageKey.id) {
+                    const key = {
+                        id: deleteMessageKey.id,
+                        fromMe: true,
+                        timestamp: new Date().getTime(),
+                    };
+
+                    const deleteMessageResult = await session.chatModify(
+                        { clear: { messages: [key] } },
+                        jid,
+                    );
+                    results.push({ index, result: deleteMessageResult });
+                } else {
+                    throw new Error(
+                        'deleteMessageKey with id is required to delete a message for self',
+                    );
+                }
+            } catch (e) {
+                const errorMessage =
+                    e instanceof Error ? e.message : 'An error occurred during message delete';
+                logger.error(e, errorMessage);
+                errors.push({ index, error: errorMessage });
+            }
+        }
+
+        res.status(errors.length > 0 ? 500 : 200).json({ results, errors });
+    } catch (error) {
+        logger.error(error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};
+
+export const updateMessage: RequestHandler = async (req, res) => {
+    try {
+        const session = getInstance(req.params.sessionId);
+        if (!session) {
+            return res.status(404).json({ message: 'Session not found' });
+        }
+        if (!isUUID(req.params.sessionId)) {
+            return res.status(400).json({ message: 'Invalid sessionId' });
+        }
+
+        const results: { index: number; result?: any }[] = [];
+        const errors: { index: number; error: string }[] = [];
+
+        for (const [index, { recipient, messageId, newText }] of req.body.entries()) {
+            try {
+                const jid = getJid(recipient);
+                await verifyJid(session, jid, 'number');
+
+                if (messageId) {
+                    const key = {
+                        remoteJid: jid,
+                        id: messageId,
+                        fromMe: true, // assuming it's from the sender's perspective
+                    };
+
+                    const updateMessageResult = await session.sendMessage(jid, {
+                        text: newText,
+                        edit: key,
+                    });
+
+                    results.push({ index, result: updateMessageResult });
+                    await prisma.outgoingMessage.update({
+                        where: { sessionId: req.params.sessionId, id: messageId },
+                        data: { message: newText },
+                    });
+                } else {
+                    throw new Error('messageId is required to update a message');
+                }
+            } catch (e) {
+                const errorMessage =
+                    e instanceof Error ? e.message : 'An error occurred during message update';
+                logger.error(e, errorMessage);
+                errors.push({ index, error: errorMessage });
+            }
+        }
+
+        res.status(errors.length > 0 ? 500 : 200).json({ results, errors });
+    } catch (error) {
+        logger.error(error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};
+
+export const muteChat: RequestHandler = async (req, res) => {
+    try {
+        const session = getInstance(req.params.sessionId);
+        if (!session) {
+            return res.status(404).json({ message: 'Session not found' });
+        }
+        if (!isUUID(req.params.sessionId)) {
+            return res.status(400).json({ message: 'Invalid sessionId' });
+        }
+
+        const { recipient, duration } = req.body;
+
+        if (!recipient || duration === undefined) {
+            return res.status(400).json({ message: 'Recipient and duration are required' });
+        }
+
+        const jid = getJid(recipient);
+        await verifyJid(session, jid, 'number');
+
+        // Calculate mute duration in milliseconds
+        const muteDuration = duration === null ? null : duration * 60 * 60 * 1000;
+
+        // Perform chat modification to mute or unmute the chat
+        await session.chatModify({ mute: muteDuration }, jid);
+
+        res.status(200).json({
+            message: `Chat ${duration === null ? 'unmuted' : 'muted for ' + duration + ' hours'}`,
+        });
+    } catch (error) {
+        logger.error(error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};
+
+export const pinChat: RequestHandler = async (req, res) => {
+    try {
+        const session = getInstance(req.params.sessionId);
+        if (!session) {
+            return res.status(404).json({ message: 'Session not found' });
+        }
+        if (!isUUID(req.params.sessionId)) {
+            return res.status(400).json({ message: 'Invalid sessionId' });
+        }
+
+        const { recipient, pin } = req.body;
+
+        if (!recipient || pin === undefined) {
+            return res.status(400).json({ message: 'Recipient and pin status are required' });
+        }
+
+        const jid = getJid(recipient);
+        await verifyJid(session, jid, 'number');
+
+        // Perform chat modification to pin or unpin the chat
+        await session.chatModify({ pin }, jid);
+
+        res.status(200).json({ message: `Chat ${pin ? 'pinned' : 'unpinned'}` });
+    } catch (error) {
+        logger.error(error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};
+
+export const starMessage: RequestHandler = async (req, res) => {
+    try {
+        const session = getInstance(req.params.sessionId);
+        if (!session) {
+            return res.status(404).json({ message: 'Session not found' });
+        }
+        if (!isUUID(req.params.sessionId)) {
+            return res.status(400).json({ message: 'Invalid sessionId' });
+        }
+
+        const { recipient, messageId, star } = req.body;
+
+        if (!recipient || !messageId || star === undefined) {
+            return res
+                .status(400)
+                .json({ message: 'Recipient, messageId, and star status are required' });
+        }
+
+        const jid = getJid(recipient);
+        // Assuming verifyJid is not necessary for the 'star' operation
+
+        // Construct the message key
+        const key = {
+            id: messageId,
+            fromMe: true, // assuming the message is from the sender's perspective
+        };
+
+        // Perform chat modification to star or unstar the message
+        const modifyParams = {
+            star: {
+                messages: [key],
+                star, // `star` should be either `true` to star or `false` to unstar
+            },
+        };
+
+        await session.chatModify(modifyParams, jid);
+
+        res.status(200).json({ message: `Message ${star ? 'starred' : 'unstarred'}` });
+    } catch (error) {
+        logger.error(error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};
+
+export const updateProfileStatus: RequestHandler = async (req, res) => {
+    try {
+        const session = getInstance(req.params.sessionId);
+        if (!session) {
+            return res.status(404).json({ message: 'Session not found' });
+        }
+        if (!isUUID(req.params.sessionId)) {
+            return res.status(400).json({ message: 'Invalid sessionId' });
+        }
+
+        const { status } = req.body;
+
+        if (!status) {
+            return res.status(400).json({ message: 'Status is required' });
+        }
+
+        // Update profile status
+        await session.updateProfileStatus(status);
+
+        res.status(200).json({ message: 'Profile status updated successfully' });
+    } catch (error) {
+        logger.error(error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};
+
+export const updateProfileName: RequestHandler = async (req, res) => {
+    try {
+        const session = getInstance(req.params.sessionId);
+        if (!session) {
+            return res.status(404).json({ message: 'Session not found' });
+        }
+        if (!isUUID(req.params.sessionId)) {
+            return res.status(400).json({ message: 'Invalid sessionId' });
+        }
+
+        const { name } = req.body;
+
+        if (!name) {
+            return res.status(400).json({ message: 'Name is required' });
+        }
+
+        // Update profile name
+        await session.updateProfileName(name);
+
+        res.status(200).json({ message: 'Profile name updated successfully' });
+    } catch (error) {
+        logger.error(error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};
+
+export const getProfilePictureUrl: RequestHandler = async (req, res) => {
+    try {
+        const session = getInstance(req.params.sessionId);
+        if (!session) {
+            return res.status(404).json({ message: 'Session not found' });
+        }
+        if (!isUUID(req.params.sessionId)) {
+            return res.status(400).json({ message: 'Invalid sessionId' });
+        }
+
+        const { recipient, resolution } = req.query as { recipient: string; resolution: string };
+        if (!recipient) {
+            return res.status(400).json({ message: 'Recipient is required' });
+        }
+
+        const jid = getJid(recipient);
+        await verifyJid(session, jid, 'number');
+
+        // Get profile picture URL
+        const ppUrl = await session.profilePictureUrl(
+            jid,
+            resolution === 'high' ? 'image' : undefined,
+        );
+
+        res.status(200).json({ profilePictureUrl: ppUrl });
+    } catch (error) {
+        logger.error(error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};
+
+export const updateProfilePicture: RequestHandler = async (req, res) => {
+    try {
+        const session = getInstance(req.params.sessionId);
+        if (!session) {
+            return res.status(404).json({ message: 'Session not found' });
+        }
+        if (!isUUID(req.params.sessionId)) {
+            return res.status(400).json({ message: 'Invalid sessionId' });
+        }
+
+        const { jid, imageUrl } = req.body;
+
+        if (!jid || !imageUrl) {
+            return res.status(400).json({ message: 'jid and imageUrl are required' });
+        }
+
+        // Update profile picture
+        await session.updateProfilePicture(jid, { url: imageUrl });
+
+        res.status(200).json({ message: 'Profile picture updated successfully' });
+    } catch (error) {
+        logger.error(error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};
+
+export const removeProfilePicture: RequestHandler = async (req, res) => {
+    try {
+        const session = getInstance(req.params.sessionId);
+        if (!session) {
+            return res.status(404).json({ message: 'Session not found' });
+        }
+        if (!isUUID(req.params.sessionId)) {
+            return res.status(400).json({ message: 'Invalid sessionId' });
+        }
+
+        const { myNumber } = req.body;
+
+        if (!myNumber) {
+            return res.status(400).json({ message: 'myNumber is required' });
+        }
+
+        const jid = getJid(myNumber);
+        await verifyJid(session, jid, 'number');
+        // Remove profile picture
+        await session.removeProfilePicture(jid);
+
+        res.status(200).json({ message: 'Profile picture removed successfully' });
+    } catch (error) {
+        logger.error(error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};
+
+export const updateBlockStatus: RequestHandler = async (req, res) => {
+    try {
+        const session = getInstance(req.params.sessionId);
+        if (!session) {
+            return res.status(404).json({ message: 'Session not found' });
+        }
+        if (!isUUID(req.params.sessionId)) {
+            return res.status(400).json({ message: 'Invalid sessionId' });
+        }
+
+        const { contactId, action } = req.body;
+
+        if (!contactId || !action) {
+            return res.status(400).json({ message: 'contactId and action are required' });
+        }
+
+        if (action !== 'block' && action !== 'unblock') {
+            return res.status(400).json({ message: 'action must be "block" or "unblock"' });
+        }
+
+        // Update block status
+        await session.updateBlockStatus(contactId, action);
+
+        res.status(200).json({ message: `User ${action}ed successfully` });
+    } catch (error) {
+        logger.error(error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};
+
+export const getBusinessProfile: RequestHandler = async (req, res) => {
+    try {
+        const session = getInstance(req.params.sessionId);
+        if (!session) {
+            return res.status(404).json({ message: 'Session not found' });
+        }
+        if (!isUUID(req.params.sessionId)) {
+            return res.status(400).json({ message: 'Invalid sessionId' });
+        }
+
+        const { contactId } = req.query as { contactId: string };
+
+        if (!contactId) {
+            return res.status(400).json({ message: 'contactId query parameter is required' });
+        }
+
+        // Get business profile
+        const profile = await session.getBusinessProfile(contactId);
+
+        if (!profile) {
+            return res.status(404).json({ message: 'Business profile not found' });
+        }
+
+        res.status(200).json({
+            description: profile.description,
+            category: profile.category,
         });
     } catch (error) {
         logger.error(error);
