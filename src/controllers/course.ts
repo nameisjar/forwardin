@@ -41,6 +41,23 @@ export const getReminders: RequestHandler = async (req, res) => {
     }
 };
 
+export const getReminderByCourseName: RequestHandler = async (req, res) => {
+    try {
+        const { courseName } = req.params;
+
+        // Cari reminder berdasarkan courseName dan urutkan dari lesson terkecil
+        const reminders = await prisma.courseReminder.findMany({
+            where: { courseName },
+            orderBy: { lesson: 'asc' },
+        });
+
+        return res.status(200).json({ reminders });
+    } catch (error: any) {
+        console.error('Error getting reminders:', error.message || error);
+        res.status(500).json({ message: 'Internal server error.', error: error.message || error });
+    }
+};
+
 export const updateReminder: RequestHandler = async (req, res) => {
     try {
         const { id } = req.params;
@@ -127,6 +144,23 @@ export const createFeedback: RequestHandler = async (req, res) => {
 export const getFeedbacks: RequestHandler = async (req, res) => {
     try {
         const feedbacks = await prisma.courseFeedback.findMany();
+
+        return res.status(200).json({ feedbacks });
+    } catch (error: any) {
+        console.error('Error getting feedbacks:', error.message || error);
+        res.status(500).json({ message: 'Internal server error.', error: error.message || error });
+    }
+};
+
+export const getFeedbackByCourseName: RequestHandler = async (req, res) => {
+    try {
+        const { courseName } = req.params;
+
+        // Cari feedback berdasarkan courseName dan urutkan dari lesson terkecil
+        const feedbacks = await prisma.courseFeedback.findMany({
+            where: { courseName },
+            orderBy: { lesson: 'asc' },
+        });
 
         return res.status(200).json({ feedbacks });
     } catch (error: any) {
