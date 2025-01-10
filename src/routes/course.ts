@@ -11,6 +11,7 @@ router.delete('/reminder/:id', controller.deleteReminder);
 router.delete('/reminders', controller.deleteReminders);
 router.post('/feedback', controller.createFeedback);
 router.get('/feedbacks', controller.getFeedbacks);
+router.get('/feedback/:courseName', controller.getFeedbackByCourseName);
 router.put('/feedback/:id', controller.updateFeedback);
 router.delete('/feedbacks', controller.deleteFeedbacks);
 router.delete('/feedback/:id', controller.deleteFeedback);
