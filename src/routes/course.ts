@@ -5,6 +5,7 @@ const router = Router();
 
 router.post('/reminder', controller.createReminder);
 router.get('/reminders', controller.getReminders);
+router.get('/reminder/:courseName', controller.getReminderByCourseName);
 router.put('/reminder/:id', controller.updateReminder);
 router.delete('/reminder/:id', controller.deleteReminder);
 router.delete('/reminders', controller.deleteReminders);
