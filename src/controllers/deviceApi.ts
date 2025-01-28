@@ -868,11 +868,93 @@ export const getBroadcasts: RequestHandler = async (req, res) => {
     }
 };
 
+export const getBroadcastsName: RequestHandler = async (req, res) => {
+    try {
+        const { deviceId } = req.authenticatedDevice;
+
+        // Ambil semua broadcast yang terkait dengan deviceId
+        const broadcasts = await prisma.broadcast.findMany({
+            where: { deviceId },
+            orderBy: { createdAt: 'desc' }, // Pastikan mengambil yang terbaru
+        });
+
+        // Gunakan objek untuk menyimpan hanya satu broadcast per nama
+        const uniqueBroadcasts = Object.values(
+            broadcasts.reduce(
+                (acc, broadcast) => {
+                    if (!acc[broadcast.name]) {
+                        acc[broadcast.name] = broadcast;
+                    }
+                    return acc;
+                },
+                {} as Record<string, (typeof broadcasts)[0]>,
+            ),
+        );
+
+        res.status(200).json(uniqueBroadcasts);
+    } catch (error) {
+        logger.error(error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};
+
+// export const getBroadcastsByRecipient: RequestHandler = async (req, res) => {
+//     try {
+//         const { deviceId } = req.authenticatedDevice;
+//         const { recipient } = req.query;
+
+//         if (!recipient) {
+//             return res.status(400).json({ message: 'Recipient is required' });
+//         }
+
+//         const broadcasts = await prisma.broadcast.findMany({
+//             where: {
+//                 deviceId,
+//                 recipients: {
+//                     has: recipient.toString(),
+//                 },
+//             },
+//             select: {
+//                 name: true,
+//             },
+//         });
+
+//         res.status(200).json(broadcasts);
+//     } catch (error) {
+//         logger.error(error);
+//         res.status(500).json({ message: 'Internal server error' });
+//     }
+// };
+
 export const deleteAllBroadcasts: RequestHandler = async (req, res) => {
     try {
         const { deviceId } = req.authenticatedDevice;
         await prisma.broadcast.deleteMany({ where: { deviceId } });
         res.status(200).json({ message: 'All broadcasts deleted successfully' });
+    } catch (error) {
+        logger.error(error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};
+
+export const deleteBroadcastsByName: RequestHandler = async (req, res) => {
+    try {
+        const { deviceId } = req.authenticatedDevice;
+        const { name } = req.body;
+
+        if (!name) {
+            return res.status(400).json({ message: 'Broadcast name is required' });
+        }
+
+        const deleted = await prisma.broadcast.deleteMany({
+            where: { deviceId, name },
+        });
+
+        if (deleted.count === 0) {
+            return res.status(404).json({ message: 'No broadcasts found with the given name' });
+        }
+
+        res.status(200).json({ message: `Broadcasts with name '${name}' deleted successfully` });
     } catch (error) {
         logger.error(error);
         res.status(500).json({ message: 'Internal server error' });
@@ -1228,6 +1310,119 @@ export const createBroadcastReminder: RequestHandler = async (req, res) => {
             });
 
             res.status(201).json({ message: 'Broadcasts created successfully' });
+        });
+    } catch (error) {
+        logger.error(error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};
+
+export const createBroadcastScheduled: RequestHandler = async (req, res) => {
+    try {
+        diskUpload.single('media')(req, res, async (err: any) => {
+            if (err) {
+                return res.status(400).json({ message: 'Error uploading file' });
+            }
+
+            const { deviceId } = req.authenticatedDevice;
+            const { name, recipients, message, recurrence, interval, startDate, endDate } =
+                req.body;
+            const delay = Number(req.body.delay) ?? 5000;
+
+            // Validasi parameter
+            if (
+                !recurrence ||
+                !['minute', 'hourly', 'daily', 'weekly', 'monthly'].includes(recurrence)
+            ) {
+                return res.status(400).json({ message: 'Invalid or missing recurrence type' });
+            }
+
+            if (!interval || isNaN(Number(interval)) || Number(interval) <= 0) {
+                return res.status(400).json({ message: 'Interval must be a positive number' });
+            }
+
+            if (!startDate || isNaN(new Date(startDate).getTime())) {
+                return res.status(400).json({ message: 'Invalid or missing start date' });
+            }
+
+            if (!endDate || isNaN(new Date(endDate).getTime())) {
+                return res.status(400).json({ message: 'Invalid or missing end date' });
+            }
+
+            if (new Date(startDate) > new Date(endDate)) {
+                return res.status(400).json({ message: 'Start date must be before end date' });
+            }
+
+            if (
+                recipients.includes('all') &&
+                recipients.some((recipient: { startsWith: (arg0: string) => string }) =>
+                    recipient.startsWith('label'),
+                )
+            ) {
+                return res.status(400).json({
+                    message:
+                        "Recipients can't contain both all contacts and contact labels at the same input",
+                });
+            }
+
+            // Ambil informasi perangkat
+            const device = await prisma.device.findUnique({
+                where: { pkId: deviceId },
+                include: { sessions: { select: { sessionId: true } } },
+            });
+
+            if (!device) {
+                return res.status(404).json({ message: 'Device not found' });
+            }
+            if (!device.sessions[0]) {
+                return res.status(404).json({ message: 'Session not found' });
+            }
+
+            const start = new Date(startDate);
+            const end = new Date(endDate);
+            const broadcasts = [];
+            let current = new Date(start);
+
+            // Hitung dan buat pesan broadcast berdasarkan interval dan durasi
+            while (current <= end) {
+                broadcasts.push({
+                    name: name,
+                    message,
+                    schedule: new Date(current),
+                    deviceId: device.pkId,
+                    delay,
+                    recipients: { set: recipients },
+                    mediaPath: req.file?.path,
+                });
+
+                switch (recurrence) {
+                    case 'minute':
+                        current.setMinutes(current.getMinutes() + Number(interval));
+                        break;
+                    case 'hourly':
+                        current.setHours(current.getHours() + Number(interval));
+                        break;
+                    case 'daily':
+                        current.setDate(current.getDate() + Number(interval));
+                        break;
+                    case 'weekly':
+                        current.setDate(current.getDate() + Number(interval) * 7);
+                        break;
+                    case 'monthly':
+                        current.setMonth(current.getMonth() + Number(interval));
+                        break;
+                }
+            }
+
+            // Simpan semua broadcast ke database
+            await prisma.$transaction(
+                broadcasts.map((broadcast) => prisma.broadcast.create({ data: broadcast })),
+            );
+
+            res.status(201).json({
+                message: 'Broadcasts created successfully',
+                totalBroadcasts: broadcasts.length,
+            });
         });
     } catch (error) {
         logger.error(error);

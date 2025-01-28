@@ -8,7 +8,8 @@ async function seedReminderPythonPro1(prisma: PrismaClient, logger: Logger) {
                 {
                     courseName: 'python pro 1',
                     lesson: 1,
-                    message: "Don't forget to solve the quadratic equation.",
+                    message:
+                        "🗓 **Tanggal**: Jum'at, 25 Oktober 2024\n⏰ **Waktu**: 20.00 - 21.30 WIB\n📖 **Pertemuan ke**: 1\n📝 **Topik**: M1L1. Konsep Dasar Pemrograman Python\n\n**Rekaman Kelas dan Link PPT**: [Google Sheets](https://docs.google.com/spreadsheets/d/1c1JAezfG4JCJih4wH5EdrWVFldyoKReJabPUNtUzlLY/edit?gid=0#gid=0)\n\nHalo, Parents! 👋\n\nDengan senang hati saya menyambut Anda di kursus Python Pro. Saya berharap Anda dan adik-adik menikmati perjalanan belajar coding bersama saya! 🤩\n\nPada pelajaran pertama ini, adik-adik menunjukkan minat yang besar dan berpartisipasi aktif dalam diskusi. Kami membahas konsep-konsep dasar pemrograman yang sangat penting untuk studi lebih lanjut. Saya sangat terkesan melihat betapa banyak konsep yang sudah mereka pahami, dan mereka siap untuk mempelajari materi dengan lebih mendalam.\n\nBerikut pencapaian yang telah mereka raih:\n1️⃣ Mengulas konsep dasar pemrograman: bahasa pemrograman, algoritma, program, dan fungsi.\n2️⃣ Berdiskusi tentang bagaimana Python bisa digunakan dalam kehidupan sehari-hari.\n3️⃣ Mempraktikkan fungsi `print()` untuk mencetak data dan melihat contoh penerapannya.\n4️⃣ Menerapkan aturan-aturan dasar bahasa pemrograman Python di lingkungan programming online.\n5️⃣ Dikenalkan dengan platform Algorithmics dan menyelesaikan tugas orientasi pertama untuk perusahaan.\n\nSaya berharap kelas-kelas mendatang akan sama produktif dan menariknya. Jika ada pertanyaan, jangan ragu untuk bertanya di obrolan atau secara pribadi kepada saya. Saya selalu siap membantu dan mendukung adik-adik Anda dalam proses belajar.\n\nSampai jumpa di kelas berikutnya! See you! 🙋",
                 },
                 {
                     courseName: 'python pro 1',
@@ -866,7 +867,8 @@ async function seedFeedbackPythonPro1(prisma: PrismaClient, logger: Logger) {
                 {
                     courseName: 'python pro 1',
                     lesson: 1,
-                    message: "Don't forget to solve the quadratic equation.",
+                    message:
+                        'Halo Ayah/Bunda! 👋\n\nSelamat datang di kursus Python Pro! Semoga Ayah/Bunda dan adik-adik menikmati perjalanan belajar coding bareng saya ya! 🤩\n\nDi pelajaran pertama ini, adik-adik terlihat sangat antusias dan aktif banget dalam diskusi. Kami membahas konsep-konsep dasar pemrograman yang jadi pondasi penting untuk pelajaran selanjutnya. Saya juga kagum banget dengan pemahaman mereka sejauh ini—mereka siap banget buat mendalami materi lebih jauh!\n\nIni dia beberapa pencapaian mereka:\n\n1️⃣ Mengenal konsep dasar pemrograman seperti bahasa pemrograman, algoritma, program, dan fungsi.\n\n2️⃣ Diskusi seru soal gimana Python bisa dipakai dalam kehidupan sehari-hari.\n\n3️⃣ Belajar dan mencoba fungsi `print()` buat mencetak data.\n\n4️⃣ Memahami aturan dasar pemrograman Python di lingkungan coding online.\n\n5️⃣ Mengenal platform Algorithmics dan menyelesaikan tugas orientasi pertama.\n\nSemoga kelas berikutnya tetap produktif dan menyenangkan! Kalau ada pertanyaan, jangan ragu buat tanya di grup atau langsung ke saya, ya. Saya selalu siap bantu.\n\nSampai jumpa di kelas berikutnya! See you! 🙋🚀',
                 },
                 {
                     courseName: 'python pro 1',
