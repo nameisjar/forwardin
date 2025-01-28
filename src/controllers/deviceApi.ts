@@ -1295,7 +1295,7 @@ export const createBroadcastReminder: RequestHandler = async (req, res) => {
 
                     await transaction.broadcast.create({
                         data: {
-                            name: `${courseName} - Lesson ${reminder.lesson}`,
+                            name: `${courseName} - Recipients ${recipients}`,
                             message: reminder.message,
                             schedule,
                             deviceId: device.pkId,
