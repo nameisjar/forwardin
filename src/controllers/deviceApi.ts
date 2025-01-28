@@ -1210,7 +1210,7 @@ export const createBroadcastFeedback: RequestHandler = async (req, res) => {
 
                     await transaction.broadcast.create({
                         data: {
-                            name: `${courseName} - Lesson ${feedback.lesson}`,
+                            name: `${courseName} - Recipients ${recipients}`,
                             message: feedback.message,
                             schedule,
                             deviceId: device.pkId,
