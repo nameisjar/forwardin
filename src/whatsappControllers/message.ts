@@ -51,9 +51,9 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                     try {
                         if (!message.broadcast) {
                             const jid = jidNormalizedUser(message.key.remoteJid!);
-                            // back here: what's transformPrisma() for?
                             const data = transformPrisma(message);
                             console.log(data);
+
                             const messageText =
                                 data.message?.conversation ||
                                 data.message?.extendedTextMessage?.text ||
@@ -76,7 +76,7 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
 
                             const contact = await prisma.contact.findFirst({
                                 where: {
-                                    phone: jidNormalizedUser(message.key.remoteJid!).split('@')[0],
+                                    phone: jid.split('@')[0],
                                     contactDevices: {
                                         some: { device: { sessions: { some: { sessionId } } } },
                                     },
@@ -86,125 +86,39 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                             if (data.message && !data.message.protocolMessage) {
                                 const dir = `media/S${sessionId}`;
                                 if (!fs.existsSync(dir)) {
-                                    try {
-                                        fs.mkdirSync(dir, { recursive: true });
-                                    } catch (err) {
-                                        console.error('Error creating directory:', err);
-                                    }
+                                    fs.mkdirSync(dir, { recursive: true });
                                 }
 
                                 const io: Server = getSocketIO();
 
                                 if (message.key.fromMe) {
                                     logger.warn({ sessionId, data }, 'outgoing messages');
-                                    let status;
 
-                                    switch (data.status) {
-                                        case 0:
-                                            status = 'error';
-                                            break;
-                                        case 1:
-                                            status = 'pending';
-                                            break;
-                                        case 2:
-                                            status = 'server_ack';
-                                            break;
-                                        case 3:
-                                            status = 'delivery_ack';
-                                            break;
-                                        case 4:
-                                            status = 'read';
-                                            break;
-                                        case 5:
-                                            status = 'played';
-                                            break;
-                                        default:
-                                            status = 'pending';
-                                            break;
-                                    }
+                                    let status = 'pending';
+                                    if (data.status >= 2) status = 'server_ack';
+                                    if (data.status >= 3) status = 'delivery_ack';
+                                    if (data.status >= 4) status = 'read';
+                                    if (data.status >= 5) status = 'played';
 
-                                    const outgoingMessage = await prisma.outgoingMessage.create({
-                                        data: {
+                                    const outgoingMessage = await prisma.outgoingMessage.upsert({
+                                        where: { id: message.key.id! },
+                                        update: { status },
+                                        create: {
                                             id: message.key.id!,
-                                            to: jidNormalizedUser(message.key.remoteJid!),
+                                            to: jid,
                                             message: messageText,
                                             schedule: new Date(),
                                             status,
                                             sessionId,
                                             contactId: contact?.pkId || null,
                                         },
-                                        include: {
-                                            contact: {
-                                                select: {
-                                                    id: true,
-                                                    firstName: true,
-                                                    lastName: true,
-                                                    colorCode: true,
-                                                },
-                                            },
-                                        },
+                                        include: { contact: true },
                                     });
-
-                                    if (data.message.imageMessage) {
-                                        const outputFilePath = data.message.imageMessage.fileName
-                                            ? `${dir}/${
-                                                  outgoingMessage.id
-                                              }.${data.message.imageMessage.fileName
-                                                  .split('.')
-                                                  .pop()}`
-                                            : `${dir}/${
-                                                  outgoingMessage.id
-                                              }.${data.message.imageMessage.mimetype
-                                                  .split('/')
-                                                  .pop()}`;
-                                        const buffer = (await downloadMediaMessage(
-                                            message,
-                                            'buffer',
-                                            {},
-                                        )) as Buffer;
-
-                                        fs.writeFile(outputFilePath, buffer, (err: any) => {
-                                            if (err) throw err;
-                                            logger.warn('save img');
-                                        });
-
-                                        await prisma.outgoingMessage.update({
-                                            where: { id: outgoingMessage.id },
-                                            data: { mediaPath: outputFilePath },
-                                        });
-                                    } else if (data.message.documentMessage) {
-                                        const outputFilePath = data.message.documentMessage.fileName
-                                            ? `${dir}/${
-                                                  outgoingMessage.id
-                                              }.${data.message.documentMessage.fileName
-                                                  .split('.')
-                                                  .pop()}`
-                                            : `${dir}/${
-                                                  outgoingMessage.id
-                                              }.${data.message.documentMessage.mimetype
-                                                  .split('/')
-                                                  .pop()}`;
-                                        const buffer = (await downloadMediaMessage(
-                                            message,
-                                            'buffer',
-                                            {},
-                                        )) as Buffer;
-
-                                        fs.writeFile(outputFilePath, buffer, (err: any) => {
-                                            if (err) throw err;
-                                            logger.warn('save doc');
-                                        });
-
-                                        await prisma.outgoingMessage.update({
-                                            where: { id: outgoingMessage.id },
-                                            data: { mediaPath: outputFilePath },
-                                        });
-                                    }
 
                                     io.emit(`message:${sessionId}`, outgoingMessage);
                                 } else {
                                     logger.warn({ sessionId, data }, 'incoming messages');
-                                    if (!message.key.remoteJid.includes('@g.us')) {
+                                    if (!jid.includes('@g.us')) {
                                         sendOutsideBusinessHourMessage(sessionId, message);
                                     }
                                     sendCampaignReply(sessionId, message);
@@ -212,95 +126,21 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                                     const incomingMessage = await prisma.incomingMessage.create({
                                         data: {
                                             id: message.key.id!,
-                                            from: jidNormalizedUser(message.key.remoteJid!),
+                                            from: jid,
                                             message: messageText,
                                             receivedAt: new Date(data.messageTimestamp * 1000),
                                             sessionId,
                                             contactId: contact?.pkId || null,
                                         },
-                                        include: {
-                                            contact: {
-                                                select: {
-                                                    id: true,
-                                                    firstName: true,
-                                                    lastName: true,
-                                                    colorCode: true,
-                                                },
-                                            },
-                                        },
+                                        include: { contact: true },
                                     });
-
-                                    if (data.message.imageMessage) {
-                                        const outputFilePath = data.message.imageMessage.fileName
-                                            ? `${dir}/${
-                                                  incomingMessage.id
-                                              }.${data.message.imageMessage.fileName
-                                                  .split('.')
-                                                  .pop()}`
-                                            : `${dir}/${
-                                                  incomingMessage.id
-                                              }.${data.message.imageMessage.mimetype
-                                                  .split('/')
-                                                  .pop()}`;
-                                        const buffer = (await downloadMediaMessage(
-                                            message,
-                                            'buffer',
-                                            {},
-                                        )) as Buffer;
-
-                                        fs.writeFile(outputFilePath, buffer, (err: any) => {
-                                            if (err) throw err;
-                                            logger.warn('save img');
-                                        });
-                                        await prisma.incomingMessage.update({
-                                            where: { id: incomingMessage.id },
-                                            data: { mediaPath: outputFilePath },
-                                        });
-                                    } else if (data.message.documentMessage) {
-                                        const outputFilePath = data.message.documentMessage.fileName
-                                            ? `${dir}/${
-                                                  incomingMessage.id
-                                              }.${data.message.documentMessage.fileName
-                                                  .split('.')
-                                                  .pop()}`
-                                            : `${dir}/${
-                                                  incomingMessage.id
-                                              }.${data.message.documentMessage.mimetype
-                                                  .split('/')
-                                                  .pop()}`;
-                                        const buffer = (await downloadMediaMessage(
-                                            message,
-                                            'buffer',
-                                            {},
-                                        )) as Buffer;
-
-                                        fs.writeFile(outputFilePath, buffer, (err: any) => {
-                                            if (err) throw err;
-                                            logger.warn('save doc');
-                                        });
-
-                                        await prisma.incomingMessage.update({
-                                            where: { id: incomingMessage.id },
-                                            data: { mediaPath: outputFilePath },
-                                        });
-                                    }
 
                                     io.emit(`message:${sessionId}`, incomingMessage);
                                 }
                             }
-                            //   const chatExists = (await prisma.chat.count({ where: { id: jid, sessionId } })) > 0;
-                            //   if (type === 'notify' && !chatExists) {
-                            //     event.emit('chats.upsert', [
-                            //       {
-                            //         id: jid,
-                            //         conversationTimestamp: toNumber(message.messageTimestamp),
-                            //         unreadCount: 1,
-                            //       },
-                            //     ]);
-                            //   }
                         }
                     } catch (e) {
-                        logger.error(e, 'An error occured during message upsert');
+                        logger.error(e, 'An error occurred during message upsert');
                     }
                 }
                 break;
@@ -517,7 +357,7 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
         if (listening) return;
 
         // event.on('messaging-history.set', set);
-        // event.on('messages.upsert', upsert);
+        event.on('messages.upsert', upsert);
         // event.on('messages.update', update);
         event.on('messages.delete', del);
         event.on('message-receipt.update', updateReceipt);
