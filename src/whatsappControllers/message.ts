@@ -150,21 +150,30 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
     const update: BaileysEventHandler<'messages.update'> = async (updates) => {
         for (const { update, key } of updates) {
             try {
-                if (key.remoteJid != 'status@broadcast') {
+                if (key.remoteJid !== 'status@broadcast') {
                     await prisma.$transaction(async (tx) => {
                         const prevMessages = await tx.message.findFirst({
                             where: { id: key.id!, remoteJid: key.remoteJid!, sessionId },
                         });
+
                         const prevOutMessages = await tx.outgoingMessage.findFirst({
                             where: { id: key.id!, to: key.remoteJid!, sessionId },
                         });
-                        if (!prevMessages || !prevOutMessages) {
-                            return logger.info({ update }, 'Got update for non existent message');
+
+                        if (!prevMessages) {
+                            return logger.info({ update }, 'Message not found, skipping update');
+                        }
+
+                        if (!prevOutMessages && key.fromMe) {
+                            return logger.info(
+                                { update },
+                                'Outgoing message not found, skipping update',
+                            );
                         }
 
                         const data = { ...prevMessages, ...update } as proto.IWebMessageInfo;
-                        await tx.message.delete({
-                            select: { pkId: true },
+
+                        await tx.message.update({
                             where: {
                                 sessionId_remoteJid_id: {
                                     id: key.id!,
@@ -172,18 +181,10 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                                     sessionId,
                                 },
                             },
-                        });
-                        await tx.message.create({
-                            select: { pkId: true },
-                            data: {
-                                ...transformPrisma(data),
-                                id: data.key.id!,
-                                remoteJid: data.key.remoteJid!,
-                                sessionId,
-                            },
+                            data: transformPrisma(data),
                         });
 
-                        let status;
+                        let status = 'pending';
 
                         switch (update.status) {
                             case 0:
@@ -204,13 +205,10 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                             case 5:
                                 status = 'played';
                                 break;
-                            default:
-                                status = 'pending';
-                                break;
                         }
 
                         if (key.fromMe) {
-                            logger.warn({ sessionId, updates }, 'update outgoing message status');
+                            logger.warn({ sessionId, updates }, 'Updating outgoing message status');
                             await tx.outgoingMessage.update({
                                 where: {
                                     sessionId_to_id: {
@@ -225,7 +223,7 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                     });
                 }
             } catch (e) {
-                logger.error(e, 'An error occured during message update');
+                logger.error(e, 'An error occurred during message update');
             }
         }
     };
