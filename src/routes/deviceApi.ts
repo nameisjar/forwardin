@@ -26,5 +26,10 @@ router.delete('/messages/broadcasts', controller.deleteAllBroadcasts);
 router.delete('/messages/broadcast-name', controller.deleteBroadcastsByName);
 router.delete('/messages', controller.deleteAllMessages);
 router.get('/messages/get-groups', controller.getGroups);
+router.get('/messages/get-groups/detail', controller.getGroupsWithFullId);
+router.get('/messages/get-groups/search', controller.searchGroups);
+router.get('/messages/get-groups/:groupId', controller.getGroupById);
+router.get('/messages/get-groups/:groupId/members', controller.getGroupMembers);
+router.get('/messages/get-groups/export/csv', controller.exportGroupsToCSV);
 
 export default router;

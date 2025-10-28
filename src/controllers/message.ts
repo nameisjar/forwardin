@@ -17,7 +17,7 @@ export const sendMessages: RequestHandler = async (req, res) => {
             return res.status(400).json({ message: 'Invalid sessionId' });
         }
 
-        const results: { index: number; result?: proto.WebMessageInfo }[] = [];
+        const results: { index: number; result?: any }[] = [];
         const errors: { index: number; error: string }[] = [];
 
         for (const [
@@ -762,7 +762,7 @@ export const deleteMessagesForEveryone: RequestHandler = async (req, res) => {
             return res.status(400).json({ message: 'Invalid sessionId' });
         }
 
-        const results: { index: number; result?: proto.WebMessageInfo }[] = [];
+        const results: { index: number; result?: any }[] = [];
         const errors: { index: number; error: string }[] = [];
 
         for (const [index, { recipient, deleteMessageKey }] of req.body.entries()) {
@@ -830,7 +830,7 @@ export const deleteMessagesForMe: RequestHandler = async (req, res) => {
                     };
 
                     const deleteMessageResult = await session.chatModify(
-                        { clear: { messages: [key] } },
+                        { clear: { messages: [key] } } as any,
                         jid,
                     );
                     results.push({ index, result: deleteMessageResult });

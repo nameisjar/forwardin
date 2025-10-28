@@ -12,35 +12,126 @@ import { addWeeks, format } from 'date-fns'; // Anda bisa menggunakan date-fns a
 export const sendMessages: RequestHandler = async (req, res) => {
     try {
         const sessionId = req.authenticatedDevice.sessionId;
-        const session = getInstance(sessionId)!;
         if (!isUUID(sessionId)) {
             return res.status(400).json({ message: 'Invalid sessionId' });
         }
 
-        const results: { index: number; result?: proto.WebMessageInfo }[] = [];
+        const session = getInstance(sessionId)!;
+        if (!session) {
+            return res.status(400).json({ message: 'Session not found' });
+        }
+
+        const results: { index: number; result?: any }[] = [];
         const errors: { index: number; error: string }[] = [];
 
-        for (const [
-            index,
-            { recipient, type = 'number', delay = 5000, message, options },
-        ] of req.body.entries()) {
+        // helper: tunggu ms
+        const delayMs = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+        // helper: normalisasi JID grup
+        const normalizeGroupJid = (raw: string) => {
+            // jika sudah mengandung domain, gunakan apa adanya
+            if (raw.includes('@')) return raw;
+            // jika format mengandung '-' (mis. 12345-67890) -> tambahkan domain grup
+            if (raw.includes('-')) return `${raw}@g.us`;
+            // jika hanya angka tanpa '-' kemungkinan user tidak memberikan full id -> return raw (akan divalidasi nanti)
+            return `${raw}@g.us`;
+        };
+
+        for (const [index, item] of (req.body as any[]).entries()) {
+            const {
+                recipient,
+                type = 'number', // 'number' | 'group'
+                delay = 5000,
+                message,
+                options,
+            } = item;
+
             try {
-                const jid = getJid(recipient);
-                await verifyJid(session, jid, type);
+                if (!recipient) throw new Error('Missing recipient');
 
-                const startTime = new Date().getTime();
-                if (index > 0) await delayMs(delay);
-                const endTime = new Date().getTime();
-                const delayElapsed = endTime - startTime;
-                logger.info(`Delay of ${delay} milliseconds elapsed: ${delayElapsed} milliseconds`);
+                let jid: string;
+                if (type === 'group') {
+                    jid = normalizeGroupJid(String(recipient));
 
-                const result = await session.sendMessage(jid, message, options);
+                    // simple validation: group JID harus mengandung '-' sebelum @g.us
+                    // format sah: <digits>-<digits>@g.us
+                    const beforeAt = jid.split('@')[0];
+                    if (!beforeAt.includes('-')) {
+                        // berikan pesan error jelas: biasanya grup JID harus mengandung '-'
+                        throw new Error(
+                            'Invalid group JID. A WhatsApp group JID must contain a hyphen (e.g. 12345-67890@g.us). ' +
+                                'If you only have the numeric id, include the hyphen part (group id).',
+                        );
+                    }
+
+                    // Opsional: coba ambil metadata grup jika tersedia untuk memastikan grup ada
+                    try {
+                        if (typeof (session as any).groupMetadata === 'function') {
+                            await (session as any).groupMetadata(jid);
+                        } else if (typeof (session as any).fetchGroupMetadata === 'function') {
+                            await (session as any).fetchGroupMetadata(jid);
+                        }
+                    } catch (metaErr) {
+                        // jika metadata gagal, jangan langsung crash — berikan pesan yang spesifik
+                        throw new Error(
+                            `Group not found or inaccessible: ${
+                                metaErr instanceof Error ? metaErr.message : String(metaErr)
+                            }`,
+                        );
+                    }
+                } else {
+                    // number/individual
+                    jid = getJid(String(recipient)); // helper yang menambahkan @s.whatsapp.net atau yang sesuai
+                }
+
+                // jika ada fungsi verifyJid yang menerima tipe, panggil dengan type; jika tidak, panggil biasa
+                try {
+                    if (typeof verifyJid === 'function') {
+                        // beberapa implementasi verifyJid mungkin menerima (session, jid, type) atau (session, jid)
+                        // coba panggilan kompatibel:
+                        if (verifyJid.length >= 3) {
+                            await verifyJid(session, jid, type);
+                        } else {
+                            await verifyJid(session, jid);
+                        }
+                    }
+                } catch (vErr) {
+                    // berikan pesan yang jelas jika verifikasi gagal
+                    throw new Error(
+                        `JID verification failed: ${String((vErr as Error).message ?? vErr)}`,
+                    );
+                }
+
+                // delay antar pesan jika diperlukan
+                if (index > 0 && typeof delay === 'number' && delay > 0) {
+                    const startTime = Date.now();
+                    await delayMs(delay);
+                    const endTime = Date.now();
+                    logger.info(
+                        `Requested delay ${delay}ms; actual elapsed ${
+                            endTime - startTime
+                        }ms (index ${index})`,
+                    );
+                }
+
+                // Pastikan payload message kompatibel: jika user mengirim string, ubah ke { text: ... }
+                let payload = message;
+                if (typeof message === 'string') {
+                    payload = { text: message };
+                } else if (
+                    !message ||
+                    (typeof message === 'object' && Object.keys(message).length === 0)
+                ) {
+                    throw new Error('Empty message payload');
+                }
+
+                // kirim pesan. Banyak wrapper Baileys menggunakan sendMessage(jid, payload, options)
+                const result = await session.sendMessage(jid, payload, options ?? undefined);
                 results.push({ index, result });
             } catch (e) {
-                const message =
-                    e instanceof Error ? e.message : 'An error occurred during message send';
-                logger.error(e, message);
-                errors.push({ index, error: message });
+                const msg = e instanceof Error ? e.message : String(e);
+                logger.error(e, `Failed to send message at index ${index}: ${msg}`);
+                errors.push({ index, error: msg });
             }
         }
 
@@ -1046,6 +1137,7 @@ export const exportMessagesToZip: RequestHandler = async (req, res) => {
             message?: string | null;
             mediaPath?: string | null;
         };
+
         // Combine incoming and outgoing messages into one array
         const allMessages: Message[] = [...incomingMessages, ...outgoingMessages];
         for (const message of allMessages) {
@@ -1059,9 +1151,8 @@ export const exportMessagesToZip: RequestHandler = async (req, res) => {
                 delete message.to;
             }
         }
-        logger.debug(allMessages);
 
-        // Sort the combined messages by timestamp (receivedAt or createdAt)
+        // Sort the combined messages by timestamp
         sort == 'asc'
             ? allMessages.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
             : allMessages.sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
@@ -1077,7 +1168,6 @@ export const exportMessagesToZip: RequestHandler = async (req, res) => {
         }
 
         let mediaPath = [];
-        // jangan tampilkan data yang null dan masukkan dalam array
         for (const message of allMessages) {
             if (message.mediaPath) {
                 mediaPath.push(message.mediaPath);
@@ -1087,15 +1177,13 @@ export const exportMessagesToZip: RequestHandler = async (req, res) => {
         // Create a zip file
         const JSZip = require('jszip');
         const zip = new JSZip();
-        // const dataString = JSON.stringify(dataMessages, null, 2);
         zip.file('messages.txt', dataMessages.toString());
         zip.folder('media');
         const folderMedia = zip.folder('media');
         if (folderMedia) {
             mediaPath.forEach((image, index) => {
-                // Menambahkan file ke ZIP
-                const imageBuffer = fs.readFileSync(image); // Read the image file
-                folderMedia.file(`${index}.jpg`, imageBuffer); // Add the image file to the ZIP
+                const imageBuffer = fs.readFileSync(image);
+                folderMedia.file(`${index}.jpg`, imageBuffer);
             });
         }
 
@@ -1125,19 +1213,338 @@ export const getGroups: RequestHandler = async (req, res) => {
                 return res.status(404).json({ message: 'Session not found' });
             }
 
-            // Mendapatkan semua grup dari sesi
             const groups = await session.groupFetchAllParticipating();
+            const results = [];
 
-            // Format hasil grup
-            const results = Object.entries(groups).map(([groupId, groupInfo]) => ({
-                id: groupId,
-                name: groupInfo.subject || 'Unnamed Group',
-            }));
+            for (const [groupId, groupInfo] of Object.entries(groups)) {
+                try {
+                    // Untuk Baileys, groupId sudah dalam format short
+                    // Coba ambil participants untuk generate full ID
+                    let fullId = groupId;
 
-            return res.status(200).json({ results });
+                    if (typeof (session as any).groupMetadata === 'function') {
+                        const metadata = await (session as any).groupMetadata(groupId);
+                        // Jika metadata ada id, gunakan itu (biasanya sudah full ID)
+                        if (metadata?.id) {
+                            fullId = metadata.id;
+                        }
+                    }
+
+                    results.push({
+                        id: fullId,
+                        name: groupInfo.subject || 'Unnamed Group',
+                        participants: groupInfo.participants?.length || 0,
+                    });
+                } catch (err) {
+                    // Fallback tetap return short ID jika metadata gagal
+                    results.push({
+                        id: groupId,
+                        name: groupInfo.subject || 'Unnamed Group',
+                        participants: groupInfo.participants?.length || 0,
+                    });
+                }
+            }
+
+            return res.status(200).json({
+                results,
+                note: 'Both full ID (with hyphen) and short ID (without hyphen) can be used to send messages',
+            });
         } catch (error) {
             const message =
                 error instanceof Error ? error.message : 'An error occurred while fetching groups';
+            logger.error(error, message);
+            return res.status(500).json({ message });
+        }
+    } catch (error) {
+        logger.error(error);
+        return res.status(500).json({ message: 'Internal server error' });
+    }
+};
+
+export const getGroupsWithFullId: RequestHandler = async (req, res) => {
+    try {
+        const { sessionId } = req.authenticatedDevice;
+
+        if (!sessionId || !isUUID(sessionId)) {
+            return res.status(400).json({ message: 'Invalid or missing sessionId' });
+        }
+
+        try {
+            const session = getInstance(sessionId);
+            if (!session) {
+                return res.status(404).json({ message: 'Session not found' });
+            }
+
+            // Mendapatkan semua grup dari sesi
+            const groups = await session.groupFetchAllParticipating();
+            const results = [];
+
+            // Untuk setiap group, ambil metadata lengkap untuk mendapatkan ID yang lebih detail
+            for (const [groupId, groupInfo] of Object.entries(groups)) {
+                try {
+                    let fullId = groupId;
+                    let metadata = null;
+
+                    // Coba ambil metadata untuk mendapatkan informasi yang lebih lengkap
+                    try {
+                        if (typeof (session as any).groupMetadata === 'function') {
+                            metadata = await (session as any).groupMetadata(groupId);
+                            if (metadata?.id) {
+                                fullId = metadata.id;
+                            }
+                        }
+                    } catch (err) {
+                        logger.warn(`Could not fetch metadata for ${groupId}`, err);
+                    }
+
+                    results.push({
+                        id: fullId,
+                        shortId: groupId, // Format singkat tanpa hyphen
+                        name: groupInfo.subject || 'Unnamed Group',
+                        description: groupInfo.desc || '',
+                        owner: groupInfo.owner || '',
+                        participants: groupInfo.participants?.length || 0,
+                        createdAt: groupInfo.creation ? new Date(groupInfo.creation * 1000) : null,
+                        // Informasi tentang format ID
+                        idFormat: fullId.includes('-') ? 'full' : 'short',
+                    });
+                } catch (err) {
+                    logger.warn(`Error processing group ${groupId}:`, err);
+                    // Tetap tambahkan ke hasil meski error
+                    results.push({
+                        id: groupId,
+                        shortId: groupId,
+                        name: groupInfo.subject || 'Unnamed Group',
+                        description: groupInfo.desc || '',
+                        owner: groupInfo.owner || '',
+                        participants: groupInfo.participants?.length || 0,
+                        createdAt: groupInfo.creation ? new Date(groupInfo.creation * 1000) : null,
+                        idFormat: 'unknown',
+                    });
+                }
+            }
+
+            return res.status(200).json({
+                total: results.length,
+                results,
+                explanation: {
+                    id: 'Group ID yang dapat digunakan untuk berbagai operasi',
+                    shortId: 'Format ID pendek (gunakan ini jika "id" tidak ada hyphen)',
+                    idFormat:
+                        'full = dengan hyphen (120363317862454741-1234567890@g.us), short = tanpa hyphen (120363317862454741@g.us)',
+                },
+            });
+        } catch (error) {
+            const message =
+                error instanceof Error ? error.message : 'An error occurred while fetching groups';
+            logger.error(error, message);
+            return res.status(500).json({ message });
+        }
+    } catch (error) {
+        logger.error(error);
+        return res.status(500).json({ message: 'Internal server error' });
+    }
+};
+
+export const searchGroups: RequestHandler = async (req, res) => {
+    try {
+        const { sessionId } = req.authenticatedDevice;
+        const { query } = req.query;
+
+        if (!sessionId || !isUUID(sessionId)) {
+            return res.status(400).json({ message: 'Invalid or missing sessionId' });
+        }
+
+        if (!query || typeof query !== 'string') {
+            return res.status(400).json({ message: 'Search query is required' });
+        }
+
+        try {
+            const session = getInstance(sessionId);
+            if (!session) {
+                return res.status(404).json({ message: 'Session not found' });
+            }
+
+            const groups = await session.groupFetchAllParticipating();
+            const searchTerm = query.toLowerCase();
+
+            // Filter grup berdasarkan nama
+            const results = Object.entries(groups)
+                .filter(([_, groupInfo]) =>
+                    (groupInfo.subject || '').toLowerCase().includes(searchTerm),
+                )
+                .map(([groupId, groupInfo]) => ({
+                    id: groupId,
+                    name: groupInfo.subject || 'Unnamed Group',
+                    description: groupInfo.desc || '',
+                    participants: groupInfo.participants?.length || 0,
+                }));
+
+            return res.status(200).json({
+                query,
+                totalFound: results.length,
+                results,
+            });
+        } catch (error) {
+            const message =
+                error instanceof Error ? error.message : 'An error occurred while searching groups';
+            logger.error(error, message);
+            return res.status(500).json({ message });
+        }
+    } catch (error) {
+        logger.error(error);
+        return res.status(500).json({ message: 'Internal server error' });
+    }
+};
+
+export const getGroupById: RequestHandler = async (req, res) => {
+    try {
+        const { sessionId } = req.authenticatedDevice;
+        const { groupId } = req.params;
+
+        if (!sessionId || !isUUID(sessionId)) {
+            return res.status(400).json({ message: 'Invalid or missing sessionId' });
+        }
+
+        if (!groupId) {
+            return res.status(400).json({ message: 'Group ID is required' });
+        }
+
+        try {
+            const session = getInstance(sessionId);
+            if (!session) {
+                return res.status(404).json({ message: 'Session not found' });
+            }
+
+            // Normalisasi group ID
+            const normalizedGroupId = groupId.includes('@g.us') ? groupId : `${groupId}@g.us`;
+
+            // Dapatkan metadata grup
+            const groupMetadata = await (session as any).groupMetadata(normalizedGroupId);
+
+            if (!groupMetadata) {
+                return res.status(404).json({ message: 'Group not found' });
+            }
+
+            const result = {
+                id: groupMetadata.id,
+                name: groupMetadata.subject || 'Unnamed Group',
+                description: groupMetadata.desc || '',
+                owner: groupMetadata.owner || '',
+                participants: groupMetadata.participants?.length || 0,
+                participantsList:
+                    groupMetadata.participants?.map((p: any) => ({
+                        id: p.id,
+                        name: p.notify?.split('@')[0] || 'Unknown',
+                        isAdmin: p.admin === 'admin' || p.admin === 'superadmin',
+                        isSuperAdmin: p.admin === 'superadmin',
+                    })) || [],
+                createdAt: groupMetadata.creation ? new Date(groupMetadata.creation * 1000) : null,
+            };
+
+            return res.status(200).json(result);
+        } catch (error) {
+            const message =
+                error instanceof Error ? error.message : 'An error occurred while fetching group';
+            logger.error(error, message);
+            return res.status(500).json({ message });
+        }
+    } catch (error) {
+        logger.error(error);
+        return res.status(500).json({ message: 'Internal server error' });
+    }
+};
+
+export const getGroupMembers: RequestHandler = async (req, res) => {
+    try {
+        const { sessionId } = req.authenticatedDevice;
+        const { groupId } = req.params;
+
+        if (!sessionId || !isUUID(sessionId)) {
+            return res.status(400).json({ message: 'Invalid or missing sessionId' });
+        }
+
+        if (!groupId) {
+            return res.status(400).json({ message: 'Group ID is required' });
+        }
+
+        try {
+            const session = getInstance(sessionId);
+            if (!session) {
+                return res.status(404).json({ message: 'Session not found' });
+            }
+
+            // Normalisasi group ID
+            const normalizedGroupId = groupId.includes('@g.us') ? groupId : `${groupId}@g.us`;
+
+            // Dapatkan metadata grup
+            const groupMetadata = await (session as any).groupMetadata(normalizedGroupId);
+
+            if (!groupMetadata) {
+                return res.status(404).json({ message: 'Group not found' });
+            }
+
+            const members =
+                groupMetadata.participants?.map((p: any) => ({
+                    id: p.id,
+                    phone: p.id?.split('@')[0] || 'Unknown',
+                    isAdmin: p.admin === 'admin' || p.admin === 'superadmin',
+                    isSuperAdmin: p.admin === 'superadmin',
+                    isRestricted: p.admin ? true : false,
+                })) || [];
+
+            return res.status(200).json({
+                groupId: groupMetadata.id,
+                groupName: groupMetadata.subject || 'Unnamed Group',
+                totalMembers: members.length,
+                members,
+            });
+        } catch (error) {
+            const message =
+                error instanceof Error ? error.message : 'An error occurred while fetching members';
+            logger.error(error, message);
+            return res.status(500).json({ message });
+        }
+    } catch (error) {
+        logger.error(error);
+        return res.status(500).json({ message: 'Internal server error' });
+    }
+};
+
+export const exportGroupsToCSV: RequestHandler = async (req, res) => {
+    try {
+        const { sessionId } = req.authenticatedDevice;
+
+        if (!sessionId || !isUUID(sessionId)) {
+            return res.status(400).json({ message: 'Invalid or missing sessionId' });
+        }
+
+        try {
+            const session = getInstance(sessionId);
+            if (!session) {
+                return res.status(404).json({ message: 'Session not found' });
+            }
+
+            const groups = await session.groupFetchAllParticipating();
+
+            // Format CSV header
+            let csvContent = 'Group ID,Group Name,Participants Count,Description\n';
+
+            // Tambahkan data grup
+            Object.entries(groups).forEach(([groupId, groupInfo]) => {
+                const groupName = (groupInfo.subject || 'Unnamed Group').replace(/"/g, '""');
+                const description = (groupInfo.desc || '').replace(/"/g, '""');
+                const participants = groupInfo.participants?.length || 0;
+
+                csvContent += `"${groupId}","${groupName}",${participants},"${description}"\n`;
+            });
+
+            res.set('Content-Type', 'text/csv');
+            res.set('Content-Disposition', `attachment; filename=groups-${sessionId}.csv`);
+            res.send(csvContent);
+        } catch (error) {
+            const message =
+                error instanceof Error ? error.message : 'An error occurred while exporting groups';
             logger.error(error, message);
             return res.status(500).json({ message });
         }

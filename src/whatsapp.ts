@@ -200,9 +200,9 @@ export async function createInstance(options: createInstanceOptions) {
         ...socketConfig,
         auth: {
             creds: state.creds,
-            keys: makeCacheableSignalKeyStore(state.keys, logger),
+            keys: makeCacheableSignalKeyStore(state.keys, logger as any),
         },
-        logger,
+        logger: logger as any,
         markOnlineOnConnect: false,
 
         getMessage: async (key) => {
@@ -261,10 +261,12 @@ export async function createInstance(options: createInstanceOptions) {
     if (readIncomingMessages) {
         sock.ev.on('messages.upsert', async (m) => {
             const message = m.messages[0];
-            if (message.key.fromMe || m.type !== 'notify') return;
+            if (!message.key || message.key.fromMe || m.type !== 'notify') return;
 
             await delay(1000);
-            await sock.readMessages([message.key]);
+            if (message.key) {
+                await sock.readMessages([message.key]);
+            }
         });
     }
 
@@ -318,7 +320,8 @@ export async function deleteInstance(sessionId: string) {
 export async function verifyJid(session: Instance, jid: string, type: string = 'number') {
     if (type != 'group') {
         if (jid.includes('@g.us')) return true;
-        const [result] = await session.onWhatsApp(jid);
+        const onWAResult = await session.onWhatsApp(jid);
+        const result = Array.isArray(onWAResult) ? onWAResult[0] : onWAResult;
         if (result && result.exists) return true;
         throw new Error(`No account exists for jid: ${jid}`);
     } else if (type === 'group') {
@@ -352,13 +355,13 @@ export async function sendMediaFile(
     data?: any,
     messageId?: any,
 ) {
-    const results: { index: number; result?: proto.WebMessageInfo }[] = [];
+    const results: { index: number; result?: any }[] = [];
     const errors: { index: number; error: string }[] = [];
 
     for (let index = 0; index < recipients.length; index++) {
         const recipient = recipients[index];
         try {
-            await verifyJid(session, getJid(recipient), type);
+            await verifyJid(session, getJid(recipient), 'number');
 
             let message: any;
 
@@ -404,10 +407,8 @@ export async function sendButtonMessage(
         await verifyJid(session, recipientJid);
 
         const result = await session.sendMessage(recipientJid, {
-            templateButtons: processButton(data.buttons),
             text: data.text || '',
             footer: data.footerText || '',
-            viewOnce: true,
         });
 
         return result;

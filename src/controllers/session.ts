@@ -184,20 +184,17 @@ export const getSessionProfile: RequestHandler = async (req, res) => {
         const jid = getJid(device.phone!);
         const session = getInstance(sessionId)!;
         const businessProfile = await session.getBusinessProfile(jid);
-        const status = await session.fetchStatus(jid);
+        const fetchStatusResults = await session.fetchStatus(jid);
+        const statusInfo = Array.isArray(fetchStatusResults)
+            ? fetchStatusResults[0]
+            : fetchStatusResults;
         const user = await session.user;
-
-        // await session.sendPresenceUpdate('available');
-        // session.ev.on('presence.update', ({ presences }) => {
-        //     logger.warn(presences);
-        // });
-        // session.presenceSubscribe(jid);
 
         res.status(200).json({
             device,
             profileName: user?.name,
             presence: 'available',
-            status: status?.status,
+            status: statusInfo?.status,
             address: businessProfile?.address,
         });
     } catch (error) {
