@@ -139,6 +139,12 @@ export const login: RequestHandler = async (req, res) => {
                     { phone: identifier, deletedAt: null },
                     { username: identifier, deletedAt: null },
                     { googleId: identifier, deletedAt: null },
+                    {
+                        AND: [
+                            { deletedAt: null },
+                            { firstName: { equals: identifier, mode: 'insensitive' } },
+                        ],
+                    },
                 ],
             },
         });
@@ -147,7 +153,23 @@ export const login: RequestHandler = async (req, res) => {
             return res.status(401).json({ message: 'Account not found or has been deleted' });
         }
 
-        if (user.privilegeId !== Number(process.env.ADMIN_ID)) {
+        // allow Admin, Super Admin, and Tutor/CS to login
+        const allowedRoles = [
+            Number(process.env.ADMIN_ID),
+            Number(process.env.SUPER_ADMIN_ID),
+            Number(process.env.CS_ID),
+        ].filter((v) => Number.isFinite(v));
+        if (!Number.isFinite(Number(process.env.CS_ID))) {
+            try {
+                const cs = await prisma.privilege.findFirst({
+                    where: { name: 'cs' },
+                    select: { pkId: true },
+                });
+                if (cs?.pkId) allowedRoles.push(cs.pkId);
+            } catch {}
+        }
+        const userRole = typeof user.privilegeId === 'number' ? user.privilegeId : -1;
+        if (!allowedRoles.includes(userRole)) {
             return res.status(401).json({ message: 'Account not authorized' });
         }
 
@@ -157,7 +179,6 @@ export const login: RequestHandler = async (req, res) => {
         }
 
         const accessToken = generateAccessToken(user);
-        // const refreshToken = user.refreshToken;
         const refreshToken = generateRefreshToken(user);
         const id = user.id;
 

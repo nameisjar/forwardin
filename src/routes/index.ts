@@ -22,6 +22,7 @@ import { authMiddleware, apiKeyDevice } from '../middleware/auth';
 import superAdminRoutes from './superAdmin';
 import deviceApi from './deviceApi';
 import courseRoutes from './course';
+import tutorsRoutes from './tutors';
 
 const router = Router();
 
@@ -51,6 +52,7 @@ router.use('/analytics', authMiddleware, analyticsRoutes);
 router.use('/super-admin', superAdminRoutes);
 router.use('/api', apiKeyDevice, deviceApi);
 router.use('/algorithmics', courseRoutes);
+router.use('/tutors', tutorsRoutes);
 router.use('/media', express.static('media'));
 
 export default router;

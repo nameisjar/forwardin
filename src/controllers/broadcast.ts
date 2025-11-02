@@ -69,6 +69,294 @@ export const createBroadcast: RequestHandler = async (req, res) => {
     }
 };
 
+export const createBroadcastFeedback: RequestHandler = async (req, res) => {
+    try {
+        diskUpload.single('media')(req, res, async (err: any) => {
+            if (err) {
+                return res.status(400).json({ message: 'Error uploading file' });
+            }
+
+            const { courseName, startLesson = 1, recipients, deviceId } = req.body;
+            const delay = Number(req.body.delay) ?? 5000;
+
+            if (!courseName || !recipients || !deviceId) {
+                return res.status(400).json({ message: 'Missing required fields' });
+            }
+
+            if (
+                recipients.includes('all') &&
+                recipients.some((recipient: { startsWith: (arg0: string) => string }) =>
+                    recipient.startsWith('label'),
+                )
+            ) {
+                return res.status(400).json({
+                    message:
+                        "Recipients can't contain both all contacts and contact labels at the same input",
+                });
+            }
+
+            const device = await prisma.device.findUnique({
+                where: { id: deviceId },
+                include: { sessions: { select: { sessionId: true } } },
+            });
+
+            if (!device) {
+                return res.status(404).json({ message: 'Device not found' });
+            }
+            if (!device.sessions[0]) {
+                return res.status(404).json({ message: 'Session not found' });
+            }
+
+            const courseFeedbacks = await prisma.courseFeedback.findMany({
+                where: {
+                    courseName,
+                    lesson: { gte: Number(startLesson) },
+                },
+                orderBy: { lesson: 'asc' },
+            });
+
+            if (courseFeedbacks.length === 0) {
+                return res
+                    .status(404)
+                    .json({ message: 'No lessons found for the specified course' });
+            }
+
+            const now = new Date();
+
+            await prisma.$transaction(async (transaction) => {
+                for (let i = 0; i < courseFeedbacks.length; i++) {
+                    const feedback = courseFeedbacks[i];
+                    const schedule = new Date(now);
+                    schedule.setDate(schedule.getDate() + i * 7);
+
+                    await transaction.broadcast.create({
+                        data: {
+                            name: `${courseName} - Recipients ${recipients}`,
+                            message: feedback.message,
+                            schedule,
+                            deviceId: device.pkId,
+                            delay,
+                            recipients: { set: recipients },
+                            mediaPath: req.file?.path,
+                        },
+                    });
+                }
+            });
+
+            res.status(201).json({ message: 'Broadcasts created successfully' });
+        });
+    } catch (error) {
+        logger.error(error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};
+
+export const createBroadcastReminder: RequestHandler = async (req, res) => {
+    try {
+        diskUpload.single('media')(req, res, async (err: any) => {
+            if (err) {
+                return res.status(400).json({ message: 'Error uploading file' });
+            }
+
+            const { courseName, startLesson = 1, recipients, deviceId } = req.body;
+            const delay = Number(req.body.delay) ?? 5000;
+
+            if (!courseName || !recipients || !deviceId) {
+                return res.status(400).json({ message: 'Missing required fields' });
+            }
+
+            if (
+                recipients.includes('all') &&
+                recipients.some((recipient: { startsWith: (arg0: string) => string }) =>
+                    recipient.startsWith('label'),
+                )
+            ) {
+                return res.status(400).json({
+                    message:
+                        "Recipients can't contain both all contacts and contact labels at the same input",
+                });
+            }
+
+            const device = await prisma.device.findUnique({
+                where: { id: deviceId },
+                include: { sessions: { select: { sessionId: true } } },
+            });
+
+            if (!device) {
+                return res.status(404).json({ message: 'Device not found' });
+            }
+            if (!device.sessions[0]) {
+                return res.status(404).json({ message: 'Session not found' });
+            }
+
+            const courseReminders = await prisma.courseReminder.findMany({
+                where: {
+                    courseName,
+                    lesson: { gte: Number(startLesson) },
+                },
+                orderBy: { lesson: 'asc' },
+            });
+
+            if (courseReminders.length === 0) {
+                return res
+                    .status(404)
+                    .json({ message: 'No lessons found for the specified course' });
+            }
+
+            const now = new Date();
+
+            await prisma.$transaction(async (transaction) => {
+                for (let i = 0; i < courseReminders.length; i++) {
+                    const reminder = courseReminders[i];
+                    const schedule = new Date(now);
+                    schedule.setDate(schedule.getDate() + i * 7);
+
+                    await transaction.broadcast.create({
+                        data: {
+                            name: `${courseName} - Recipients ${recipients}`,
+                            message: reminder.message,
+                            schedule,
+                            deviceId: device.pkId,
+                            delay,
+                            recipients: { set: recipients },
+                            mediaPath: req.file?.path,
+                        },
+                    });
+                }
+            });
+
+            res.status(201).json({ message: 'Broadcasts created successfully' });
+        });
+    } catch (error) {
+        logger.error(error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};
+
+export const createBroadcastScheduled: RequestHandler = async (req, res) => {
+    try {
+        diskUpload.single('media')(req, res, async (err: any) => {
+            if (err) {
+                return res.status(400).json({ message: 'Error uploading file' });
+            }
+
+            const {
+                name,
+                recipients,
+                message,
+                recurrence,
+                interval,
+                startDate,
+                endDate,
+                deviceId,
+            } = req.body;
+            const delay = Number(req.body.delay) ?? 5000;
+
+            if (
+                !recurrence ||
+                !['minute', 'hourly', 'daily', 'weekly', 'monthly'].includes(recurrence)
+            ) {
+                return res.status(400).json({ message: 'Invalid or missing recurrence type' });
+            }
+
+            if (!interval || isNaN(Number(interval)) || Number(interval) <= 0) {
+                return res.status(400).json({ message: 'Interval must be a positive number' });
+            }
+
+            if (!startDate || isNaN(new Date(startDate).getTime())) {
+                return res.status(400).json({ message: 'Invalid or missing start date' });
+            }
+
+            if (!endDate || isNaN(new Date(endDate).getTime())) {
+                return res.status(400).json({ message: 'Invalid or missing end date' });
+            }
+
+            if (new Date(startDate) > new Date(endDate)) {
+                return res.status(400).json({ message: 'Start date must be before end date' });
+            }
+
+            if (!deviceId) {
+                return res.status(400).json({ message: 'Device ID is required' });
+            }
+
+            if (
+                recipients.includes('all') &&
+                recipients.some((recipient: { startsWith: (arg0: string) => string }) =>
+                    recipient.startsWith('label'),
+                )
+            ) {
+                return res.status(400).json({
+                    message:
+                        "Recipients can't contain both all contacts and contact labels at the same input",
+                });
+            }
+
+            const device = await prisma.device.findUnique({
+                where: { id: deviceId },
+                include: { sessions: { select: { sessionId: true } } },
+            });
+
+            if (!device) {
+                return res.status(404).json({ message: 'Device not found' });
+            }
+            if (!device.sessions[0]) {
+                return res.status(404).json({ message: 'Session not found' });
+            }
+
+            const start = new Date(startDate);
+            const end = new Date(endDate);
+            const broadcasts = [] as any[];
+            let current = new Date(start);
+
+            while (current <= end) {
+                broadcasts.push({
+                    name,
+                    message,
+                    schedule: new Date(current),
+                    deviceId: device.pkId,
+                    delay,
+                    recipients: { set: recipients },
+                    mediaPath: req.file?.path,
+                });
+
+                switch (recurrence) {
+                    case 'minute':
+                        current.setMinutes(current.getMinutes() + Number(interval));
+                        break;
+                    case 'hourly':
+                        current.setHours(current.getHours() + Number(interval));
+                        break;
+                    case 'daily':
+                        current.setDate(current.getDate() + Number(interval));
+                        break;
+                    case 'weekly':
+                        current.setDate(current.getDate() + Number(interval) * 7);
+                        break;
+                    case 'monthly':
+                        current.setMonth(current.getMonth() + Number(interval));
+                        break;
+                }
+            }
+
+            await prisma.$transaction(
+                broadcasts.map((b) =>
+                    prisma.broadcast.create({
+                        data: b,
+                    }),
+                ),
+            );
+
+            res.status(201).json({
+                message: 'Broadcasts created successfully',
+                totalBroadcasts: broadcasts.length,
+            });
+        });
+    } catch (error) {
+        logger.error(error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};
+
 export const getAllBroadcasts: RequestHandler = async (req, res) => {
     try {
         const deviceId = req.query.deviceId as string;
@@ -375,7 +663,8 @@ export const deleteBroadcasts: RequestHandler = async (req, res) => {
     }
 };
 
-schedule.scheduleJob('*', async () => {
+// run scheduler every minute instead of invalid pattern
+schedule.scheduleJob('* * * * *', async () => {
     try {
         const pendingBroadcasts = await prisma.broadcast.findMany({
             where: {
@@ -398,14 +687,15 @@ schedule.scheduleJob('*', async () => {
         // back here: fix processedRecipients
         for (const broadcast of pendingBroadcasts) {
             const processedRecipients: (string | number)[] = [];
-            const session = getInstance(broadcast.device.sessions[0].sessionId)!;
+            const sessionId = broadcast.device.sessions[0]?.sessionId;
+            const session = sessionId ? getInstance(sessionId) : null;
+            if (!session) {
+                logger.warn({ broadcastId: broadcast.id }, 'Session not found, will retry later');
+                continue;
+            }
 
             // get recipients util
             const recipients = await getRecipients(broadcast);
-
-            // const recipients = broadcast.recipients.includes('all')
-            //     ? broadcast.device.contactDevices.map((c) => c.contact.phone)
-            //     : broadcast.recipients;
 
             for (let i = 0; i < recipients.length; i++) {
                 const recipient = recipients[i];
@@ -440,6 +730,10 @@ schedule.scheduleJob('*', async () => {
                         )[0]?.contact.email ?? undefined,
                 };
 
+                // Generate deterministic outgoing message id and text
+                const outgoingId = `BC_${broadcast.pkId}_${Date.now()}`;
+                const textPayload = replaceVariables(broadcast.message, variables);
+
                 if (broadcast.mediaPath) {
                     await sendMediaFile(
                         session,
@@ -451,16 +745,38 @@ schedule.scheduleJob('*', async () => {
                         ['jpg', 'png', 'jpeg'].includes(broadcast.mediaPath.split('.').pop() || '')
                             ? 'image'
                             : 'document',
-                        replaceVariables(broadcast.message, variables),
+                        textPayload,
                         null,
-                        `BC_${broadcast.pkId}_${Date.now()}`,
+                        outgoingId,
                     );
                 } else {
                     await session.sendMessage(
                         jid,
-                        { text: replaceVariables(broadcast.message, variables) },
-                        { messageId: `BC_${broadcast.pkId}_${Date.now()}` },
+                        { text: textPayload },
+                        { messageId: outgoingId },
                     );
+                }
+
+                // Ensure an OutgoingMessage record exists for admin history
+                try {
+                    const contact = broadcast.device.contactDevices.find(
+                        (cd) => cd.contact.phone == recipient,
+                    )?.contact;
+                    await prisma.outgoingMessage.upsert({
+                        where: { id: outgoingId },
+                        update: { updatedAt: new Date() },
+                        create: {
+                            id: outgoingId,
+                            to: jid,
+                            message: textPayload,
+                            schedule: new Date(),
+                            status: 'pending',
+                            sessionId,
+                            contactId: contact?.pkId ?? null,
+                        },
+                    });
+                } catch (e) {
+                    logger.warn(e, 'Failed to upsert OutgoingMessage for broadcast');
                 }
 
                 processedRecipients.push(recipient);

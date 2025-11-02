@@ -8,7 +8,7 @@ import makeWASocket, {
     proto,
 } from '@whiskeysockets/baileys';
 import prisma from './utils/db';
-import { toDataURL } from 'qrcode';
+import { toDataURL, toString as qrToString } from 'qrcode';
 import logger from './config/logger';
 import { WebSocket } from 'ws';
 import type { Response } from 'express';
@@ -170,24 +170,40 @@ export async function createInstance(options: createInstanceOptions) {
 
     const handleSSEConnectionUpdate = async () => {
         let qr: string | undefined = undefined;
+        let qrAscii: string | undefined = undefined;
         if (connectionState.qr?.length) {
             try {
                 qr = await toDataURL(connectionState.qr);
+                try {
+                    qrAscii = await qrToString(connectionState.qr, {
+                        type: 'terminal',
+                        small: true,
+                    });
+                } catch (e) {
+                    logger.error(e, 'An error occured during QR ASCII generation');
+                }
             } catch (e) {
                 logger.error(e, 'An error occured during QR generation');
             }
         }
 
         const currentGenerations = SSEQRGenerations.get(sessionId) ?? 0;
-        if (!res || res.writableEnded || (qr && currentGenerations >= SSE_MAX_QR_GENERATION)) {
+        const maxGenerations = Math.max(1, SSE_MAX_QR_GENERATION);
+        if (!res || res.writableEnded || (qr && currentGenerations >= maxGenerations)) {
             res && !res.writableEnded && res.end();
             destroy();
             return;
         }
 
-        const data = { ...connectionState, qr };
+        const data = { ...connectionState, qr, qrRaw: qrAscii };
         if (qr) SSEQRGenerations.set(sessionId, currentGenerations + 1);
         res.write(`data: ${JSON.stringify(data)}\n\n`);
+
+        if (qr && currentGenerations + 1 >= maxGenerations) {
+            res.end();
+            destroy();
+            return;
+        }
     };
 
     const handleConnectionUpdate = SSE ? handleSSEConnectionUpdate : handleNormalConnectionUpdate;
@@ -195,7 +211,7 @@ export async function createInstance(options: createInstanceOptions) {
     const { state, saveCreds } = await useSession(sessionId, deviceId);
     // back here: adjust SocketConfig such as turn off always online
     const sock = makeWASocket({
-        printQRInTerminal: process.env.NODE_ENV === 'development' ? true : false,
+        // printQRInTerminal removed due to deprecation; handled manually in connection.update
         browser: ['Forwardin', 'Chrome', '10.0'],
         ...socketConfig,
         auth: {
@@ -219,6 +235,18 @@ export async function createInstance(options: createInstanceOptions) {
     sock.ev.on('creds.update', saveCreds);
     sock.ev.on('connection.update', async (update) => {
         logger.debug(update);
+
+        // Manually print QR to terminal when available (replacement for deprecated printQRInTerminal)
+        if (update.qr && process.env.NODE_ENV !== 'production') {
+            try {
+                const ascii = await qrToString(update.qr, { type: 'terminal', small: true });
+                // keep minimal, do not alter logic; just print
+                console.log('\nScan QR untuk sesi:', sessionId, '\n');
+                console.log(ascii);
+            } catch (e) {
+                logger.error(e, 'Error generating terminal QR');
+            }
+        }
 
         connectionState = update;
         const { connection } = update;

@@ -814,6 +814,385 @@ export const getMessengerList: RequestHandler = async (req, res) => {
     }
 };
 
+// Parity with front-end message controller: additional utilities
+export const getStatusOutgoingMessagesById: RequestHandler = async (req, res) => {
+    try {
+        const { sessionId } = req.authenticatedDevice;
+        const { messageId } = req.params as { messageId: string };
+        const message = await prisma.outgoingMessage.findFirst({
+            where: { sessionId, id: messageId },
+            select: { status: true },
+        });
+
+        if (!message) {
+            return res.status(404).json({ message: 'Message not found' });
+        }
+
+        res.status(200).json(serializePrisma(message));
+    } catch (error) {
+        logger.error(error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};
+
+export const getProfilePictureUrl: RequestHandler = async (req, res) => {
+    try {
+        const { sessionId } = req.authenticatedDevice;
+        if (!isUUID(sessionId)) {
+            return res.status(400).json({ message: 'Invalid sessionId' });
+        }
+        const session = getInstance(sessionId);
+        if (!session) return res.status(404).json({ message: 'Session not found' });
+
+        const { recipient, resolution } = req.query as { recipient?: string; resolution?: string };
+        if (!recipient) return res.status(400).json({ message: 'Recipient is required' });
+
+        const jid = getJid(recipient);
+        await verifyJid(session, jid, 'number');
+
+        const ppUrl = await session.profilePictureUrl(
+            jid,
+            resolution === 'high' ? 'image' : undefined,
+        );
+
+        res.status(200).json({ profilePictureUrl: ppUrl });
+    } catch (error) {
+        logger.error(error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};
+
+export const getBusinessProfile: RequestHandler = async (req, res) => {
+    try {
+        const { sessionId } = req.authenticatedDevice;
+        if (!isUUID(sessionId)) return res.status(400).json({ message: 'Invalid sessionId' });
+        const session = getInstance(sessionId);
+        if (!session) return res.status(404).json({ message: 'Session not found' });
+
+        const { contactId } = req.query as { contactId?: string };
+        if (!contactId)
+            return res.status(400).json({ message: 'contactId query parameter is required' });
+
+        const profile = await session.getBusinessProfile(contactId);
+        if (!profile) return res.status(404).json({ message: 'Business profile not found' });
+
+        res.status(200).json({ description: profile.description, category: profile.category });
+    } catch (error) {
+        logger.error(error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};
+
+export const deleteMessagesForEveryone: RequestHandler = async (req, res) => {
+    try {
+        const { sessionId } = req.authenticatedDevice;
+        const session = getInstance(sessionId);
+        if (!session) return res.status(404).json({ message: 'Session not found' });
+        if (!isUUID(sessionId)) return res.status(400).json({ message: 'Invalid sessionId' });
+
+        const results: { index: number; result?: any }[] = [];
+        const errors: { index: number; error: string }[] = [];
+
+        for (const [index, { recipient, deleteMessageKey }] of (req.body as any[]).entries()) {
+            try {
+                const jid = getJid(recipient);
+                await verifyJid(session, jid, 'number');
+
+                if (deleteMessageKey && deleteMessageKey.id) {
+                    const key = { remoteJid: jid, id: deleteMessageKey.id, fromMe: true } as any;
+                    const deleteMessageResult = await session.sendMessage(jid, { delete: key });
+                    results.push({ index, result: deleteMessageResult });
+                    await prisma.outgoingMessage.deleteMany({
+                        where: { sessionId, id: deleteMessageKey.id },
+                    });
+                } else {
+                    throw new Error('deleteMessageKey with id is required to delete a message');
+                }
+            } catch (e) {
+                const msg =
+                    e instanceof Error ? e.message : 'An error occurred during message delete';
+                logger.error(e, msg);
+                errors.push({ index, error: msg });
+            }
+        }
+
+        res.status(errors.length > 0 ? 500 : 200).json({ results, errors });
+    } catch (error) {
+        logger.error(error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};
+
+export const deleteMessagesForMe: RequestHandler = async (req, res) => {
+    try {
+        const { sessionId } = req.authenticatedDevice;
+        const session = getInstance(sessionId);
+        if (!session) return res.status(404).json({ message: 'Session not found' });
+        if (!isUUID(sessionId)) return res.status(400).json({ message: 'Invalid sessionId' });
+
+        const results: { index: number; result?: any }[] = [];
+        const errors: { index: number; error: string }[] = [];
+
+        for (const [index, { recipient, deleteMessageKey }] of (req.body as any[]).entries()) {
+            try {
+                const jid = getJid(recipient);
+                await verifyJid(session, jid, 'number');
+
+                if (deleteMessageKey && deleteMessageKey.id) {
+                    const key = {
+                        id: deleteMessageKey.id,
+                        fromMe: true,
+                        timestamp: Date.now(),
+                    } as any;
+                    const deleteMessageResult = await session.chatModify(
+                        { clear: { messages: [key] } } as any,
+                        jid,
+                    );
+                    results.push({ index, result: deleteMessageResult });
+                } else {
+                    throw new Error(
+                        'deleteMessageKey with id is required to delete a message for self',
+                    );
+                }
+            } catch (e) {
+                const msg =
+                    e instanceof Error ? e.message : 'An error occurred during message delete';
+                logger.error(e, msg);
+                errors.push({ index, error: msg });
+            }
+        }
+
+        res.status(errors.length > 0 ? 500 : 200).json({ results, errors });
+    } catch (error) {
+        logger.error(error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};
+
+export const updateMessage: RequestHandler = async (req, res) => {
+    try {
+        const { sessionId } = req.authenticatedDevice;
+        const session = getInstance(sessionId);
+        if (!session) return res.status(404).json({ message: 'Session not found' });
+        if (!isUUID(sessionId)) return res.status(400).json({ message: 'Invalid sessionId' });
+
+        const results: { index: number; result?: any }[] = [];
+        const errors: { index: number; error: string }[] = [];
+
+        for (const [index, { recipient, messageId, newText }] of (req.body as any[]).entries()) {
+            try {
+                const jid = getJid(recipient);
+                await verifyJid(session, jid, 'number');
+
+                if (messageId) {
+                    const key = { remoteJid: jid, id: messageId, fromMe: true } as any;
+                    const updateMessageResult = await session.sendMessage(jid, {
+                        text: newText,
+                        edit: key,
+                    });
+                    results.push({ index, result: updateMessageResult });
+                    await prisma.outgoingMessage.update({
+                        where: { sessionId: sessionId, id: messageId } as any,
+                        data: { message: newText },
+                    });
+                } else {
+                    throw new Error('messageId is required to update a message');
+                }
+            } catch (e) {
+                const msg =
+                    e instanceof Error ? e.message : 'An error occurred during message update';
+                logger.error(e, msg);
+                errors.push({ index, error: msg });
+            }
+        }
+
+        res.status(errors.length > 0 ? 500 : 200).json({ results, errors });
+    } catch (error) {
+        logger.error(error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};
+
+export const muteChat: RequestHandler = async (req, res) => {
+    try {
+        const { sessionId } = req.authenticatedDevice;
+        const session = getInstance(sessionId);
+        if (!session) return res.status(404).json({ message: 'Session not found' });
+        if (!isUUID(sessionId)) return res.status(400).json({ message: 'Invalid sessionId' });
+
+        const { recipient, duration } = req.body as {
+            recipient?: string;
+            duration?: number | null;
+        };
+        if (!recipient || duration === undefined) {
+            return res.status(400).json({ message: 'Recipient and duration are required' });
+        }
+
+        const jid = getJid(recipient);
+        await verifyJid(session, jid, 'number');
+        const muteDuration = duration === null ? null : duration * 60 * 60 * 1000;
+        await session.chatModify({ mute: muteDuration as any }, jid);
+
+        res.status(200).json({
+            message: `Chat ${duration === null ? 'unmuted' : 'muted for ' + duration + ' hours'}`,
+        });
+    } catch (error) {
+        logger.error(error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};
+
+export const pinChat: RequestHandler = async (req, res) => {
+    try {
+        const { sessionId } = req.authenticatedDevice;
+        const session = getInstance(sessionId);
+        if (!session) return res.status(404).json({ message: 'Session not found' });
+        if (!isUUID(sessionId)) return res.status(400).json({ message: 'Invalid sessionId' });
+
+        const { recipient, pin } = req.body as { recipient?: string; pin?: boolean };
+        if (!recipient || pin === undefined) {
+            return res.status(400).json({ message: 'Recipient and pin status are required' });
+        }
+
+        const jid = getJid(recipient);
+        await verifyJid(session, jid, 'number');
+        await session.chatModify({ pin } as any, jid);
+
+        res.status(200).json({ message: `Chat ${pin ? 'pinned' : 'unpinned'}` });
+    } catch (error) {
+        logger.error(error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};
+
+export const starMessage: RequestHandler = async (req, res) => {
+    try {
+        const { sessionId } = req.authenticatedDevice;
+        const session = getInstance(sessionId);
+        if (!session) return res.status(404).json({ message: 'Session not found' });
+        if (!isUUID(sessionId)) return res.status(400).json({ message: 'Invalid sessionId' });
+
+        const { recipient, messageId, star } = req.body as {
+            recipient?: string;
+            messageId?: string;
+            star?: boolean;
+        };
+        if (!recipient || !messageId || star === undefined) {
+            return res
+                .status(400)
+                .json({ message: 'Recipient, messageId, and star status are required' });
+        }
+
+        const jid = getJid(recipient);
+        const key = { id: messageId, fromMe: true } as any;
+        const modifyParams = { star: { messages: [key], star } } as any;
+        await session.chatModify(modifyParams, jid);
+        res.status(200).json({ message: `Message ${star ? 'starred' : 'unstarred'}` });
+    } catch (error) {
+        logger.error(error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};
+
+export const updateProfileStatus: RequestHandler = async (req, res) => {
+    try {
+        const { sessionId } = req.authenticatedDevice;
+        const session = getInstance(sessionId);
+        if (!session) return res.status(404).json({ message: 'Session not found' });
+        if (!isUUID(sessionId)) return res.status(400).json({ message: 'Invalid sessionId' });
+
+        const { status } = req.body as { status?: string };
+        if (!status) return res.status(400).json({ message: 'Status is required' });
+
+        await session.updateProfileStatus(status);
+        res.status(200).json({ message: 'Profile status updated successfully' });
+    } catch (error) {
+        logger.error(error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};
+
+export const updateProfileName: RequestHandler = async (req, res) => {
+    try {
+        const { sessionId } = req.authenticatedDevice;
+        const session = getInstance(sessionId);
+        if (!session) return res.status(404).json({ message: 'Session not found' });
+        if (!isUUID(sessionId)) return res.status(400).json({ message: 'Invalid sessionId' });
+
+        const { name } = req.body as { name?: string };
+        if (!name) return res.status(400).json({ message: 'Name is required' });
+
+        await session.updateProfileName(name);
+        res.status(200).json({ message: 'Profile name updated successfully' });
+    } catch (error) {
+        logger.error(error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};
+
+export const updateProfilePicture: RequestHandler = async (req, res) => {
+    try {
+        const { sessionId } = req.authenticatedDevice;
+        const session = getInstance(sessionId);
+        if (!session) return res.status(404).json({ message: 'Session not found' });
+        if (!isUUID(sessionId)) return res.status(400).json({ message: 'Invalid sessionId' });
+
+        const { jid, imageUrl } = req.body as { jid?: string; imageUrl?: string };
+        if (!jid || !imageUrl)
+            return res.status(400).json({ message: 'jid and imageUrl are required' });
+
+        await session.updateProfilePicture(jid, { url: imageUrl });
+        res.status(200).json({ message: 'Profile picture updated successfully' });
+    } catch (error) {
+        logger.error(error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};
+
+export const removeProfilePicture: RequestHandler = async (req, res) => {
+    try {
+        const { sessionId } = req.authenticatedDevice;
+        const session = getInstance(sessionId);
+        if (!session) return res.status(404).json({ message: 'Session not found' });
+        if (!isUUID(sessionId)) return res.status(400).json({ message: 'Invalid sessionId' });
+
+        const { myNumber } = req.body as { myNumber?: string };
+        if (!myNumber) return res.status(400).json({ message: 'myNumber is required' });
+
+        const jid = getJid(myNumber);
+        await verifyJid(session, jid, 'number');
+        await session.removeProfilePicture(jid);
+        res.status(200).json({ message: 'Profile picture removed successfully' });
+    } catch (error) {
+        logger.error(error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};
+
+export const updateBlockStatus: RequestHandler = async (req, res) => {
+    try {
+        const { sessionId } = req.authenticatedDevice;
+        const session = getInstance(sessionId);
+        if (!session) return res.status(404).json({ message: 'Session not found' });
+        if (!isUUID(sessionId)) return res.status(400).json({ message: 'Invalid sessionId' });
+
+        const { contactId, action } = req.body as {
+            contactId?: string;
+            action?: 'block' | 'unblock';
+        };
+        if (!contactId || !action)
+            return res.status(400).json({ message: 'contactId and action are required' });
+        if (action !== 'block' && action !== 'unblock')
+            return res.status(400).json({ message: 'action must be "block" or "unblock"' });
+
+        await session.updateBlockStatus(contactId, action);
+        res.status(200).json({ message: `User ${action}ed successfully` });
+    } catch (error) {
+        logger.error(error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};
+
 export const createBroadcast: RequestHandler = async (req, res) => {
     try {
         diskUpload.single('media')(req, res, async (err: any) => {
@@ -821,14 +1200,34 @@ export const createBroadcast: RequestHandler = async (req, res) => {
                 return res.status(400).json({ message: 'Error uploading file' });
             }
             const { deviceId } = req.authenticatedDevice;
-            const { name, recipients, message, schedule } = req.body;
-            const delay = Number(req.body.delay) ?? 5000;
+            const { name, message } = req.body as { name?: string; message?: string };
+            // Coerce recipients to array for both JSON and multipart
+            const bodyRecipients: any = (req.body as any).recipients;
+            const recipients: string[] = Array.isArray(bodyRecipients)
+                ? bodyRecipients
+                : typeof bodyRecipients === 'string' && bodyRecipients.length
+                ? [bodyRecipients]
+                : [];
+            const delay = Number((req.body as any).delay) ?? 5000;
+            // Normalize schedule: default to now if missing/invalid
+            const rawSchedule = (req.body as any).schedule as string | undefined;
+            const schedule =
+                rawSchedule && !isNaN(new Date(rawSchedule).getTime())
+                    ? new Date(rawSchedule)
+                    : new Date();
+
+            if (!name || !message) {
+                return res
+                    .status(400)
+                    .json({ message: 'Missing required fields: name and message' });
+            }
+            if (!recipients.length) {
+                return res.status(400).json({ message: 'Recipients are required' });
+            }
 
             if (
                 recipients.includes('all') &&
-                recipients.some((recipient: { startsWith: (arg0: string) => string }) =>
-                    recipient.startsWith('label'),
-                )
+                recipients.some((recipient: string) => recipient.startsWith('label'))
             ) {
                 return res.status(400).json({
                     message:
@@ -850,14 +1249,12 @@ export const createBroadcast: RequestHandler = async (req, res) => {
             await prisma.$transaction(async (transaction) => {
                 await transaction.broadcast.create({
                     data: {
-                        name,
+                        name: name.includes('[Broadcast]') ? name : `${name} [Broadcast]`,
                         message,
                         schedule,
                         deviceId: device.pkId,
                         delay,
-                        recipients: {
-                            set: recipients,
-                        },
+                        recipients: { set: recipients },
                         mediaPath: req.file?.path,
                     },
                 });
@@ -1617,7 +2014,7 @@ export const createBroadcastFeedback: RequestHandler = async (req, res) => {
 
                     await transaction.broadcast.create({
                         data: {
-                            name: `${courseName} - Recipients ${recipients}`,
+                            name: courseName,
                             message: feedback.message,
                             schedule,
                             deviceId: device.pkId,
@@ -1732,9 +2129,13 @@ export const createBroadcastScheduled: RequestHandler = async (req, res) => {
             }
 
             const { deviceId } = req.authenticatedDevice;
-            const { name, recipients, message, recurrence, interval, startDate, endDate } =
-                req.body;
+            const { name, message, recurrence, interval, startDate, endDate } = req.body;
             const delay = Number(req.body.delay) ?? 5000;
+
+            // Pastikan recipients berbentuk array
+            const recipients = Array.isArray(req.body.recipients)
+                ? req.body.recipients
+                : [req.body.recipients];
 
             // Validasi parameter
             if (
@@ -1793,7 +2194,7 @@ export const createBroadcastScheduled: RequestHandler = async (req, res) => {
             // Hitung dan buat pesan broadcast berdasarkan interval dan durasi
             while (current <= end) {
                 broadcasts.push({
-                    name: name,
+                    name: name.includes('[Reminder]') ? name : `${name} [Reminder]`,
                     message,
                     schedule: new Date(current),
                     deviceId: device.pkId,

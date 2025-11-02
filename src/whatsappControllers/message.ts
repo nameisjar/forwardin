@@ -49,94 +49,96 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
             case 'notify':
                 for (const message of messages) {
                     try {
-                        if (!message.broadcast) {
-                            const jid = jidNormalizedUser(message.key.remoteJid!);
-                            const data = transformPrisma(message);
-                            console.log(data);
+                        // Skip only WhatsApp status broadcast channel
+                        if (message.key?.remoteJid === 'status@broadcast') {
+                            continue;
+                        }
+                        const jid = jidNormalizedUser(message.key.remoteJid!);
+                        const data = transformPrisma(message);
+                        console.log(data);
 
-                            const messageText =
-                                data.message?.conversation ||
-                                data.message?.extendedTextMessage?.text ||
-                                data.message?.imageMessage?.caption ||
-                                data.message?.documentMessage?.caption ||
-                                '';
+                        const messageText =
+                            data.message?.conversation ||
+                            data.message?.extendedTextMessage?.text ||
+                            data.message?.imageMessage?.caption ||
+                            data.message?.documentMessage?.caption ||
+                            '';
 
-                            await prisma.message.upsert({
-                                select: { pkId: true },
-                                create: { ...data, remoteJid: jid, id: message.key.id!, sessionId },
-                                update: { ...data },
-                                where: {
-                                    sessionId_remoteJid_id: {
-                                        remoteJid: jid,
+                        await prisma.message.upsert({
+                            select: { pkId: true },
+                            create: { ...data, remoteJid: jid, id: message.key.id!, sessionId },
+                            update: { ...data },
+                            where: {
+                                sessionId_remoteJid_id: {
+                                    remoteJid: jid,
+                                    id: message.key.id!,
+                                    sessionId,
+                                },
+                            },
+                        });
+
+                        const contact = await prisma.contact.findFirst({
+                            where: {
+                                phone: jid.split('@')[0],
+                                contactDevices: {
+                                    some: { device: { sessions: { some: { sessionId } } } },
+                                },
+                            },
+                        });
+
+                        if (data.message && !data.message.protocolMessage) {
+                            const dir = `media/S${sessionId}`;
+                            if (!fs.existsSync(dir)) {
+                                fs.mkdirSync(dir, { recursive: true });
+                            }
+
+                            const io: Server = getSocketIO();
+
+                            if (message.key.fromMe) {
+                                logger.warn({ sessionId, data }, 'outgoing messages');
+
+                                let status = 'pending';
+                                if (data.status >= 2) status = 'server_ack';
+                                if (data.status >= 3) status = 'delivery_ack';
+                                if (data.status >= 4) status = 'read';
+                                if (data.status >= 5) status = 'played';
+
+                                const outgoingMessage = await prisma.outgoingMessage.upsert({
+                                    where: { id: message.key.id! },
+                                    update: { status },
+                                    create: {
                                         id: message.key.id!,
+                                        to: jid,
+                                        message: messageText,
+                                        schedule: new Date(),
+                                        status,
                                         sessionId,
+                                        contactId: contact?.pkId || null,
                                     },
-                                },
-                            });
+                                    include: { contact: true },
+                                });
 
-                            const contact = await prisma.contact.findFirst({
-                                where: {
-                                    phone: jid.split('@')[0],
-                                    contactDevices: {
-                                        some: { device: { sessions: { some: { sessionId } } } },
+                                io.emit(`message:${sessionId}`, outgoingMessage);
+                            } else {
+                                logger.warn({ sessionId, data }, 'incoming messages');
+                                if (!jid.includes('@g.us')) {
+                                    sendOutsideBusinessHourMessage(sessionId, message);
+                                }
+                                sendCampaignReply(sessionId, message);
+
+                                const incomingMessage = await prisma.incomingMessage.create({
+                                    data: {
+                                        id: message.key.id!,
+                                        from: jid,
+                                        message: messageText,
+                                        receivedAt: new Date(data.messageTimestamp * 1000),
+                                        sessionId,
+                                        contactId: contact?.pkId || null,
                                     },
-                                },
-                            });
+                                    include: { contact: true },
+                                });
 
-                            if (data.message && !data.message.protocolMessage) {
-                                const dir = `media/S${sessionId}`;
-                                if (!fs.existsSync(dir)) {
-                                    fs.mkdirSync(dir, { recursive: true });
-                                }
-
-                                const io: Server = getSocketIO();
-
-                                if (message.key.fromMe) {
-                                    logger.warn({ sessionId, data }, 'outgoing messages');
-
-                                    let status = 'pending';
-                                    if (data.status >= 2) status = 'server_ack';
-                                    if (data.status >= 3) status = 'delivery_ack';
-                                    if (data.status >= 4) status = 'read';
-                                    if (data.status >= 5) status = 'played';
-
-                                    const outgoingMessage = await prisma.outgoingMessage.upsert({
-                                        where: { id: message.key.id! },
-                                        update: { status },
-                                        create: {
-                                            id: message.key.id!,
-                                            to: jid,
-                                            message: messageText,
-                                            schedule: new Date(),
-                                            status,
-                                            sessionId,
-                                            contactId: contact?.pkId || null,
-                                        },
-                                        include: { contact: true },
-                                    });
-
-                                    io.emit(`message:${sessionId}`, outgoingMessage);
-                                } else {
-                                    logger.warn({ sessionId, data }, 'incoming messages');
-                                    if (!jid.includes('@g.us')) {
-                                        sendOutsideBusinessHourMessage(sessionId, message);
-                                    }
-                                    sendCampaignReply(sessionId, message);
-
-                                    const incomingMessage = await prisma.incomingMessage.create({
-                                        data: {
-                                            id: message.key.id!,
-                                            from: jid,
-                                            message: messageText,
-                                            receivedAt: new Date(data.messageTimestamp * 1000),
-                                            sessionId,
-                                            contactId: contact?.pkId || null,
-                                        },
-                                        include: { contact: true },
-                                    });
-
-                                    io.emit(`message:${sessionId}`, incomingMessage);
-                                }
+                                io.emit(`message:${sessionId}`, incomingMessage);
                             }
                         }
                     } catch (e) {

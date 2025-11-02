@@ -141,7 +141,6 @@ export const sendDocumentMessages: RequestHandler = async (req, res) => {
                 url: req.file?.path,
             };
 
-            // logger.warn(fileData);
             const fileType = 'document';
             const caption = req.body.caption || '';
             const delay = req.body.delay || 5000;
@@ -164,6 +163,116 @@ export const sendDocumentMessages: RequestHandler = async (req, res) => {
                 results,
                 errors,
             });
+        });
+    } catch (error) {
+        logger.error(error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};
+
+export const sendAudioMessages: RequestHandler = async (req, res) => {
+    try {
+        const session = getInstance(req.params.sessionId)!;
+
+        if (!isUUID(req.params.sessionId)) {
+            return res.status(400).json({ message: 'Invalid sessionId' });
+        }
+
+        memoryUpload.single('audio')(req, res, async (err) => {
+            if (err) {
+                const message = 'An error occurred during file upload';
+                logger.error(err, message);
+                return res.status(500).json({ error: message });
+            }
+
+            const recipients: string[] = req.body.recipients || [];
+
+            if (!recipients.length) {
+                return res.status(400).json({ error: 'Recipient JIDs are required' });
+            }
+
+            const fileData = {
+                mimetype: req.file?.mimetype,
+                buffer: req.file?.buffer,
+                newName: req.file?.filename,
+                originalName: req.file?.originalname,
+                url: req.file?.path,
+            };
+
+            const fileType = 'audio';
+            const caption = req.body.caption || '';
+            const delay = req.body.delay || 5000;
+
+            const startTime = new Date().getTime();
+            if (recipients.length > 0) await delayMs(delay);
+            const endTime = new Date().getTime();
+            const delayElapsed = endTime - startTime;
+            logger.info(`Delay of ${delay} milliseconds elapsed: ${delayElapsed} milliseconds`);
+
+            const { results, errors } = await sendMediaFile(
+                session,
+                recipients,
+                fileData,
+                fileType,
+                caption,
+            );
+
+            res.status(errors.length > 0 ? 500 : 200).json({ results, errors });
+        });
+    } catch (error) {
+        logger.error(error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};
+
+export const sendVideoMessages: RequestHandler = async (req, res) => {
+    try {
+        const session = getInstance(req.params.sessionId)!;
+
+        if (!isUUID(req.params.sessionId)) {
+            return res.status(400).json({ message: 'Invalid sessionId' });
+        }
+
+        memoryUpload.single('video')(req, res, async (err) => {
+            if (err) {
+                const message = 'An error occurred during file upload';
+                logger.error(err, message);
+                return res.status(500).json({ error: message });
+            }
+
+            const recipients: string[] = req.body.recipients || [];
+
+            if (!recipients.length) {
+                return res.status(400).json({ error: 'Recipient JIDs are required' });
+            }
+
+            const fileData = {
+                mimetype: req.file?.mimetype,
+                buffer: req.file?.buffer,
+                newName: req.file?.filename,
+                originalName: req.file?.originalname,
+                url: req.file?.path,
+            };
+
+            const fileType = 'video';
+            const caption = req.body.caption || '';
+            const delay = req.body.delay || 5000;
+
+            const startTime = new Date().getTime();
+            if (recipients.length > 0) await delayMs(delay);
+            const endTime = new Date().getTime();
+            const delayElapsed = endTime - startTime;
+            logger.info(`Delay of ${delay} milliseconds elapsed: ${delayElapsed} milliseconds`);
+
+            const { results, errors } = await sendMediaFile(
+                session,
+                recipients,
+                fileData,
+                fileType,
+                caption,
+            );
+
+            res.status(errors.length > 0 ? 500 : 200).json({ results, errors });
         });
     } catch (error) {
         logger.error(error);
@@ -641,7 +750,292 @@ export const exportMessagesToZip: RequestHandler = async (req, res) => {
         res.status(500).json({ message: 'Internal server error' });
     }
 };
-``;
+
+// WhatsApp Group helpers for front-end routes
+export const getGroups: RequestHandler = async (req, res) => {
+    try {
+        const { sessionId } = req.params;
+
+        if (!isUUID(sessionId)) {
+            return res.status(400).json({ message: 'Invalid or missing sessionId' });
+        }
+
+        const session = getInstance(sessionId);
+        if (!session) {
+            return res.status(404).json({ message: 'Session not found' });
+        }
+
+        const groups = await session.groupFetchAllParticipating();
+        const results: any[] = [];
+
+        for (const [groupId, groupInfo] of Object.entries(groups)) {
+            try {
+                let fullId = groupId;
+                if (typeof (session as any).groupMetadata === 'function') {
+                    const metadata = await (session as any).groupMetadata(groupId);
+                    if (metadata?.id) fullId = metadata.id;
+                }
+
+                results.push({
+                    id: fullId,
+                    name: (groupInfo as any).subject || 'Unnamed Group',
+                    participants: (groupInfo as any).participants?.length || 0,
+                });
+            } catch (err) {
+                results.push({
+                    id: groupId,
+                    name: (groupInfo as any).subject || 'Unnamed Group',
+                    participants: (groupInfo as any).participants?.length || 0,
+                });
+            }
+        }
+
+        return res.status(200).json({
+            results,
+            note: 'Both full ID (with hyphen) and short ID (without hyphen) can be used to send messages',
+        });
+    } catch (error) {
+        logger.error(error);
+        return res.status(500).json({ message: 'Internal server error' });
+    }
+};
+
+export const getGroupsWithFullId: RequestHandler = async (req, res) => {
+    try {
+        const { sessionId } = req.params;
+        if (!isUUID(sessionId)) {
+            return res.status(400).json({ message: 'Invalid or missing sessionId' });
+        }
+
+        const session = getInstance(sessionId);
+        if (!session) {
+            return res.status(404).json({ message: 'Session not found' });
+        }
+
+        const groups = await session.groupFetchAllParticipating();
+        const results: any[] = [];
+
+        for (const [groupId, groupInfo] of Object.entries(groups)) {
+            try {
+                let fullId: string = groupId;
+                let metadata: any = null;
+                try {
+                    if (typeof (session as any).groupMetadata === 'function') {
+                        metadata = await (session as any).groupMetadata(groupId);
+                        if (metadata?.id) fullId = metadata.id;
+                    }
+                } catch (err) {
+                    logger.warn(`Could not fetch metadata for ${groupId}`, err);
+                }
+
+                results.push({
+                    id: fullId,
+                    shortId: groupId,
+                    name: (groupInfo as any).subject || 'Unnamed Group',
+                    description: (groupInfo as any).desc || '',
+                    owner: (groupInfo as any).owner || '',
+                    participants: (groupInfo as any).participants?.length || 0,
+                    createdAt: (groupInfo as any).creation
+                        ? new Date((groupInfo as any).creation * 1000)
+                        : null,
+                    idFormat: fullId.includes('-') ? 'full' : 'short',
+                });
+            } catch (err) {
+                logger.warn(`Error processing group ${groupId}:`, err);
+                results.push({
+                    id: groupId,
+                    shortId: groupId,
+                    name: (groupInfo as any).subject || 'Unnamed Group',
+                    description: (groupInfo as any).desc || '',
+                    owner: (groupInfo as any).owner || '',
+                    participants: (groupInfo as any).participants?.length || 0,
+                    createdAt: (groupInfo as any).creation
+                        ? new Date((groupInfo as any).creation * 1000)
+                        : null,
+                    idFormat: 'unknown',
+                });
+            }
+        }
+
+        return res.status(200).json({
+            total: results.length,
+            results,
+            explanation: {
+                id: 'Group ID yang dapat digunakan untuk berbagai operasi',
+                shortId: 'Format ID pendek (gunakan ini jika "id" tidak ada hyphen)',
+                idFormat:
+                    'full = dengan hyphen (120363317862454741-1234567890@g.us), short = tanpa hyphen (120363317862454741@g.us)',
+            },
+        });
+    } catch (error) {
+        logger.error(error);
+        return res.status(500).json({ message: 'Internal server error' });
+    }
+};
+
+export const searchGroups: RequestHandler = async (req, res) => {
+    try {
+        const { sessionId } = req.params;
+        const { query } = req.query as { query?: string };
+
+        if (!isUUID(sessionId)) {
+            return res.status(400).json({ message: 'Invalid or missing sessionId' });
+        }
+        if (!query || typeof query !== 'string') {
+            return res.status(400).json({ message: 'Search query is required' });
+        }
+
+        const session = getInstance(sessionId);
+        if (!session) {
+            return res.status(404).json({ message: 'Session not found' });
+        }
+
+        const groups = await session.groupFetchAllParticipating();
+        const searchTerm = query.toLowerCase();
+
+        const results = Object.entries(groups)
+            .filter(([_, groupInfo]: any) =>
+                (groupInfo.subject || '').toLowerCase().includes(searchTerm),
+            )
+            .map(([groupId, groupInfo]: any) => ({
+                id: groupId,
+                name: groupInfo.subject || 'Unnamed Group',
+                description: groupInfo.desc || '',
+                participants: groupInfo.participants?.length || 0,
+            }));
+
+        return res.status(200).json({ query, totalFound: results.length, results });
+    } catch (error) {
+        logger.error(error);
+        return res.status(500).json({ message: 'Internal server error' });
+    }
+};
+
+export const getGroupById: RequestHandler = async (req, res) => {
+    try {
+        const { sessionId, groupId } = req.params as { sessionId: string; groupId: string };
+
+        if (!isUUID(sessionId)) {
+            return res.status(400).json({ message: 'Invalid or missing sessionId' });
+        }
+        if (!groupId) {
+            return res.status(400).json({ message: 'Group ID is required' });
+        }
+
+        const session = getInstance(sessionId);
+        if (!session) {
+            return res.status(404).json({ message: 'Session not found' });
+        }
+
+        const normalizedGroupId = groupId.includes('@g.us') ? groupId : `${groupId}@g.us`;
+        const groupMetadata = await (session as any).groupMetadata(normalizedGroupId);
+        if (!groupMetadata) {
+            return res.status(404).json({ message: 'Group not found' });
+        }
+
+        const result = {
+            id: groupMetadata.id,
+            name: groupMetadata.subject || 'Unnamed Group',
+            description: groupMetadata.desc || '',
+            owner: groupMetadata.owner || '',
+            participants: groupMetadata.participants?.length || 0,
+            participantsList:
+                groupMetadata.participants?.map((p: any) => ({
+                    id: p.id,
+                    name: p.notify?.split('@')[0] || 'Unknown',
+                    isAdmin: p.admin === 'admin' || p.admin === 'superadmin',
+                    isSuperAdmin: p.admin === 'superadmin',
+                })) || [],
+            createdAt: groupMetadata.creation ? new Date(groupMetadata.creation * 1000) : null,
+        };
+
+        return res.status(200).json(result);
+    } catch (error) {
+        const message =
+            error instanceof Error ? error.message : 'An error occurred while fetching group';
+        logger.error(error, message);
+        return res.status(500).json({ message });
+    }
+};
+
+export const getGroupMembers: RequestHandler = async (req, res) => {
+    try {
+        const { sessionId, groupId } = req.params as { sessionId: string; groupId: string };
+
+        if (!isUUID(sessionId)) {
+            return res.status(400).json({ message: 'Invalid or missing sessionId' });
+        }
+        if (!groupId) {
+            return res.status(400).json({ message: 'Group ID is required' });
+        }
+
+        const session = getInstance(sessionId);
+        if (!session) {
+            return res.status(404).json({ message: 'Session not found' });
+        }
+
+        const normalizedGroupId = groupId.includes('@g.us') ? groupId : `${groupId}@g.us`;
+        const groupMetadata = await (session as any).groupMetadata(normalizedGroupId);
+        if (!groupMetadata) {
+            return res.status(404).json({ message: 'Group not found' });
+        }
+
+        const members =
+            groupMetadata.participants?.map((p: any) => ({
+                id: p.id,
+                phone: p.id?.split('@')[0] || 'Unknown',
+                isAdmin: p.admin === 'admin' || p.admin === 'superadmin',
+                isSuperAdmin: p.admin === 'superadmin',
+                isRestricted: p.admin ? true : false,
+            })) || [];
+
+        return res.status(200).json({
+            groupId: groupMetadata.id,
+            groupName: groupMetadata.subject || 'Unnamed Group',
+            totalMembers: members.length,
+            members,
+        });
+    } catch (error) {
+        const message =
+            error instanceof Error ? error.message : 'An error occurred while fetching members';
+        logger.error(error, message);
+        return res.status(500).json({ message });
+    }
+};
+
+export const exportGroupsToCSV: RequestHandler = async (req, res) => {
+    try {
+        const { sessionId } = req.params;
+        if (!isUUID(sessionId)) {
+            return res.status(400).json({ message: 'Invalid or missing sessionId' });
+        }
+
+        const session = getInstance(sessionId);
+        if (!session) {
+            return res.status(404).json({ message: 'Session not found' });
+        }
+
+        const groups = await session.groupFetchAllParticipating();
+
+        let csvContent = 'Group ID,Group Name,Participants Count,Description\n';
+        Object.entries(groups).forEach(([groupId, groupInfo]: any) => {
+            const groupName = (groupInfo.subject || 'Unnamed Group').replace(/"/g, '""');
+            const description = (groupInfo.desc || '').replace(/"/g, '""');
+            const participants = groupInfo.participants?.length || 0;
+            csvContent += `"${groupId}","${groupName}",${participants},"${description}"\n`;
+        });
+
+        res.set('Content-Type', 'text/csv');
+        res.set('Content-Disposition', `attachment; filename=groups-${sessionId}.csv`);
+        res.send(csvContent);
+    } catch (error) {
+        const message =
+            error instanceof Error ? error.message : 'An error occurred while exporting groups';
+        logger.error(error, message);
+        return res.status(500).json({ message });
+    }
+};
+
 export const getMessengerList: RequestHandler = async (req, res) => {
     try {
         const { sessionId } = req.params;
