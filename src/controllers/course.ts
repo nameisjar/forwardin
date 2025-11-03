@@ -1,6 +1,7 @@
 import { RequestHandler } from 'express';
 import prisma from '../utils/db';
 import exp from 'constants';
+import { memoryUpload } from '../config/multer';
 
 // reminder
 export const createReminder: RequestHandler = async (req, res) => {
@@ -221,5 +222,106 @@ export const deleteFeedback: RequestHandler = async (req, res) => {
     } catch (error: any) {
         console.error('Error deleting feedback:', error.message || error);
         res.status(500).json({ message: 'Internal server error.', error: error.message || error });
+    }
+};
+
+export const importFeedbacks: RequestHandler = async (req, res) => {
+    try {
+        memoryUpload.single('file')(req, res, async (err) => {
+            if (err) {
+                return res.status(500).json({ message: 'Upload failed' });
+            }
+            if (!req.file) {
+                return res.status(400).json({ message: 'No file uploaded' });
+            }
+
+            try {
+                const replace = String(req.query.replace || 'true').toLowerCase() === 'true';
+                const text = req.file.buffer.toString('utf-8');
+                const lines = text
+                    .replace(/\r\n/g, '\n')
+                    .replace(/\r/g, '\n')
+                    .split('\n')
+                    .filter((l) => l.trim().length > 0);
+                if (lines.length === 0) {
+                    return res.status(400).json({ message: 'Empty file' });
+                }
+
+                // Basic CSV line parser supporting quoted commas and quotes escaping
+                const parseLine = (line: string, sep = ','): string[] => {
+                    const out: string[] = [];
+                    let cur = '';
+                    let inQuotes = false;
+                    for (let i = 0; i < line.length; i++) {
+                        const ch = line[i];
+                        if (ch === '"') {
+                            if (inQuotes && i + 1 < line.length && line[i + 1] === '"') {
+                                cur += '"';
+                                i++;
+                            } else {
+                                inQuotes = !inQuotes;
+                            }
+                        } else if (ch === sep && !inQuotes) {
+                            out.push(cur);
+                            cur = '';
+                        } else {
+                            cur += ch;
+                        }
+                    }
+                    out.push(cur);
+                    return out.map((s) => s.trim().replace(/^"|"$/g, ''));
+                };
+
+                const headerRaw = lines[0];
+                let cols = parseLine(headerRaw, ',');
+                if (cols.length < 3) cols = parseLine(headerRaw, ';');
+
+                const expected = ['course name', 'lesson', 'message'];
+                const normalized = cols.map((c) => c.toLowerCase());
+                const looksLikeHeader = expected.every((e) => normalized.includes(e));
+
+                const dataLines = looksLikeHeader ? lines.slice(1) : lines;
+                const rows: { courseName: string; lesson: number; message: string }[] = [];
+
+                for (const raw of dataLines) {
+                    if (!raw.trim()) continue;
+                    let cells = parseLine(raw, ',');
+                    if (cells.length < 3) cells = parseLine(raw, ';');
+                    if (cells.length < 3) continue;
+                    const [courseName, lessonStr, message] = [
+                        cells[0] || '',
+                        cells[1] || '',
+                        cells.slice(2).join(',') || '',
+                    ];
+                    const lesson = Number(String(lessonStr).trim());
+                    if (!courseName || !lesson || !message) continue;
+                    rows.push({ courseName: courseName.trim(), lesson, message: message.trim() });
+                }
+
+                if (replace) {
+                    await prisma.courseFeedback.deleteMany();
+                }
+
+                if (rows.length === 0) {
+                    return res.status(400).json({ message: 'No valid rows found' });
+                }
+
+                const batchSize = 500;
+                let inserted = 0;
+                for (let i = 0; i < rows.length; i += batchSize) {
+                    const chunk = rows.slice(i, i + batchSize);
+                    const result = await prisma.courseFeedback.createMany({ data: chunk });
+                    inserted += result.count;
+                }
+
+                return res
+                    .status(200)
+                    .json({ message: 'Import completed', inserted, replaced: replace });
+            } catch (e) {
+                return res.status(500).json({ message: 'Failed to process file' });
+            }
+        });
+    } catch (error) {
+        return res.status(500).json({ message: 'Internal server error' });
     }
 };

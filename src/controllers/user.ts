@@ -2,6 +2,7 @@ import { RequestHandler } from 'express';
 import prisma from '../utils/db';
 import logger from '../config/logger';
 import { isUUID } from '../utils/uuidChecker';
+import bcrypt from 'bcrypt';
 
 export const getUsers: RequestHandler = async (req, res) => {
     try {
@@ -78,15 +79,6 @@ export const updateUser: RequestHandler = async (req, res) => {
         return res.status(400).json({ message: 'User with this username already exists' });
     }
 
-    // back here: revise affiliation code
-    // const existingAffiliationCode = await prisma.user.findUnique({
-    //     where: { affiliationCode, NOT: { id: userId } },
-    // });
-
-    // if (affiliationCode && existingAffiliationCode) {
-    //     return res.status(400).json({ message: 'Affiliation code is already used' });
-    // }
-
     const user = await prisma.user.findUnique({
         where: { id: userId },
     });
@@ -103,7 +95,6 @@ export const updateUser: RequestHandler = async (req, res) => {
             firstName,
             lastName,
             username,
-            // affiliationCode,
             updatedAt: new Date(),
         },
     });
@@ -119,7 +110,7 @@ export const changeEmail: RequestHandler = async (req, res) => {
         return res.status(400).json({ message: 'Invalid userId' });
     }
 
-    const existingUser = await prisma.user.findUnique({
+    const existingUser = await prisma.user.findFirst({
         where: {
             email,
             NOT: { id: userId },
@@ -160,7 +151,7 @@ export const changePhoneNumber: RequestHandler = async (req, res) => {
         return res.status(400).json({ message: 'Invalid userId' });
     }
 
-    const existingUser = await prisma.user.findUnique({
+    const existingUser = await prisma.user.findFirst({
         where: {
             phone: phoneNumber,
             NOT: { id: userId },
@@ -184,8 +175,6 @@ export const changePhoneNumber: RequestHandler = async (req, res) => {
         },
         data: {
             phone: phoneNumber,
-            // emailOtpSecret: email && email == user.email ? user.emailOtpSecret : null,
-            // emailVerifiedAt: email && email == user.email ? user.emailVerifiedAt : null,
             updatedAt: new Date(),
         },
     });
@@ -222,8 +211,6 @@ export const getCustomerServices: RequestHandler = async (req, res) => {
     }
 };
 
-// back here: delete user > delete device > logout session! > delete contact?
-// > delete group > delete cs > delete subscription > delete transaction
 export const deleteUser: RequestHandler = async (req, res) => {
     try {
         const userId = req.params.userId;
@@ -246,19 +233,11 @@ export const deleteUser: RequestHandler = async (req, res) => {
             return res.status(404).json({ message: 'User not found' });
         }
 
-        // await prisma.user.delete({
-        //     where: {
-        //         id: userId,
-        //     },
-        // });
-
-        // soft delete
         await prisma.user.update({
             where: {
                 id: userId,
             },
             data: {
-                // make acc api key null so user can't access via api
                 accountApiKey: null,
                 deletedAt: new Date(),
             },
@@ -380,6 +359,33 @@ export const getNotificationById: RequestHandler = async (req, res) => {
         });
 
         res.status(200).json(user.notifications);
+    } catch (error) {
+        logger.error(error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};
+
+export const changePassword: RequestHandler = async (req, res) => {
+    try {
+        const userId = req.params.userId;
+        const { password } = req.body as { password?: string };
+
+        if (!isUUID(userId)) {
+            return res.status(400).json({ message: 'Invalid userId' });
+        }
+        if (!password || password.length < 6) {
+            return res.status(400).json({ message: 'Password must be at least 6 characters' });
+        }
+
+        const user = await prisma.user.findUnique({ where: { id: userId } });
+        if (!user) return res.status(404).json({ message: 'User not found' });
+
+        const hashed = await bcrypt.hash(password, 10);
+        await prisma.user.update({
+            where: { id: userId },
+            data: { password: hashed, updatedAt: new Date() },
+        });
+        return res.status(200).json({ message: 'Password changed successfully' });
     } catch (error) {
         logger.error(error);
         res.status(500).json({ message: 'Internal server error' });

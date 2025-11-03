@@ -19,6 +19,8 @@
         <button class="btn-small" @click="expandAll">Buka Semua</button>
         <button class="btn-small" @click="collapseAll">Tutup Semua</button>
         <button class="btn-small" @click="exportCSV" :disabled="!feedbacks.length">Export CSV</button>
+        <button class="btn-small" @click="triggerTplImport" :disabled="!isAdmin || importBusy">{{ importBusy ? 'Mengimpor...' : 'Import CSV' }}</button>
+        <input ref="tplFileInput" type="file" accept=".csv,text/csv" style="display:none" @change="onTplImportFileChange" />
       </div>
 
       <div class="groups" v-if="courses.length">
@@ -89,6 +91,10 @@ const loading = ref(false);
 const submitting = ref(false);
 const msg = ref('');
 const err = ref('');
+
+// Import state for Templates
+const tplFileInput = ref(null);
+const importBusy = ref(false);
 
 // grouping & UI state
 const grouped = computed(() => {
@@ -201,6 +207,47 @@ const exportCSV = () => {
   a.download = 'feedback-templates.csv';
   a.click();
   URL.revokeObjectURL(url);
+};
+
+// CSV import for Templates (admin)
+const triggerTplImport = () => {
+  if (!isAdmin.value) {
+    err.value = 'Hanya admin yang dapat mengimpor template';
+    return;
+  }
+  err.value = '';
+  msg.value = '';
+  tplFileInput.value && tplFileInput.value.click();
+};
+
+const onTplImportFileChange = async (e) => {
+  const file = e?.target?.files?.[0];
+  if (!file) return;
+  if (!/\.csv$/i.test(file.name)) {
+    err.value = 'Pilih file CSV';
+    e.target.value = '';
+    return;
+  }
+
+  const replace = window.confirm('Ganti semua data template dengan file ini? Pilih Cancel untuk menambah (append).');
+  importBusy.value = true;
+  err.value = '';
+  msg.value = '';
+  try {
+    const form = new FormData();
+    form.append('file', file);
+    await userApi.post(`/algorithmics/feedback/import`, form, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+      params: { replace },
+    });
+    msg.value = `Import template selesai${replace ? ' (replace)' : ' (append)'}`;
+    await loadFeedbacks();
+  } catch (e) {
+    err.value = e?.response?.data?.message || e?.message || 'Gagal mengimpor template';
+  } finally {
+    importBusy.value = false;
+    if (e?.target) e.target.value = '';
+  }
 };
 
 loadFeedbacks();

@@ -15,5 +15,7 @@ router.get('/feedback/:courseName', controller.getFeedbackByCourseName);
 router.put('/feedback/:id', controller.updateFeedback);
 router.delete('/feedbacks', controller.deleteFeedbacks);
 router.delete('/feedback/:id', controller.deleteFeedback);
+// New: import feedback templates (CSV)
+router.post('/feedback/import', controller.importFeedbacks);
 
 export default router;

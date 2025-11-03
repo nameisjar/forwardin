@@ -12,6 +12,7 @@ router.get('/:userId/notifications/:notificationId', controller.getNotificationB
 router.patch('/:userId', controller.updateUser);
 router.patch('/change-email/:userId', controller.changeEmail);
 router.patch('/change-phone-number/:userId', controller.changePhoneNumber);
+router.patch('/change-password/:userId', controller.changePassword);
 router.get('/customer-services/:userId', controller.getCustomerServices);
 
 router.use(isEmailVerified);

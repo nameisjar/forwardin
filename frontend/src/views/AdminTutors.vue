@@ -17,7 +17,10 @@
 
     <section class="list">
       <h3>Daftar Tutor</h3>
-      <button @click="loadTutors">Muat Ulang</button>
+      <div class="tools">
+        <button @click="loadTutors">Muat Ulang</button>
+        <div class="spacer"></div>
+      </div>
       <table v-if="rows.length">
         <thead>
           <tr>
@@ -25,24 +28,44 @@
             <th>Email</th>
             <th>Devices</th>
             <th>Dibuat</th>
-            <th style="width:140px;">Aksi</th>
+            <th style="width:220px;">Aksi</th>
           </tr>
         </thead>
         <tbody>
           <tr v-for="u in rows" :key="u.id">
-            <td>{{ u.firstName }} {{ u.lastName || '' }}</td>
-            <td>{{ u.email }}</td>
-            <td>
-              <ul>
-                <li v-for="d in (u.devices || [])" :key="d.id">{{ d.name }} — {{ d.status }}</li>
-              </ul>
-            </td>
-            <td>{{ new Date(u.createdAt).toLocaleString() }}</td>
-            <td>
-              <button class="btn-danger" @click="deleteTutor(u)" :disabled="deletingId === u.id">
-                {{ deletingId === u.id ? 'Menghapus...' : 'Hapus Akun' }}
-              </button>
-            </td>
+            <template v-if="editingId === u.id">
+              <td>
+                <input v-model.trim="ed.firstName" placeholder="First name" style="width:120px" />
+                <input v-model.trim="ed.lastName" placeholder="Last name" style="width:120px; margin-left:6px" />
+              </td>
+              <td>
+                <input v-model.trim="ed.email" type="email" placeholder="Email" style="width:220px" />
+              </td>
+              <td>
+                <input v-model="ed.password" type="password" placeholder="Password baru" style="width:180px" />
+              </td>
+              <td>{{ new Date(u.createdAt).toLocaleString() }}</td>
+              <td>
+                <button class="btn" @click="saveEdit(u)" :disabled="savingEdit">{{ savingEdit ? 'Menyimpan...' : 'Simpan' }}</button>
+                <button class="btn" @click="cancelEdit" :disabled="savingEdit">Batal</button>
+              </td>
+            </template>
+            <template v-else>
+              <td>{{ u.firstName }} {{ u.lastName || '' }}</td>
+              <td>{{ u.email }}</td>
+              <td>
+                <ul>
+                  <li v-for="d in (u.devices || [])" :key="d.id">{{ d.name }} — {{ d.status }}</li>
+                </ul>
+              </td>
+              <td>{{ new Date(u.createdAt).toLocaleString() }}</td>
+              <td>
+                <button class="btn" @click="startEdit(u)">Edit</button>
+                <button class="btn-danger" @click="deleteTutor(u)" :disabled="deletingId === u.id">
+                  {{ deletingId === u.id ? 'Menghapus...' : 'Hapus Akun' }}
+                </button>
+              </td>
+            </template>
           </tr>
         </tbody>
       </table>
@@ -95,9 +118,8 @@ const createTutor = async () => {
 
   loading.value = true;
   try {
-    const { data } = await userApi.post('/tutors', body);
-    const pwd = data?.password ? ` Password: ${data.password}` : '';
-    msg.value = `Tutor dibuat.${pwd}`;
+    await userApi.post('/tutors', body);
+    msg.value = 'Tutor dibuat';
     firstName.value = '';
     email.value = '';
     password.value = '';
@@ -128,6 +150,49 @@ const deleteTutor = async (u) => {
   }
 };
 
+const editingId = ref('');
+const savingEdit = ref(false);
+const ed = ref({ firstName: '', lastName: '', email: '', password: '' });
+
+const startEdit = (u) => {
+  editingId.value = u.id;
+  ed.value = { firstName: u.firstName || '', lastName: u.lastName || '', email: u.email || '', password: '' };
+  msg.value = '';
+  err.value = '';
+};
+const cancelEdit = () => { editingId.value = ''; ed.value = { firstName: '', lastName: '', email: '', password: '' }; };
+
+const saveEdit = async (u) => {
+  if (!u?.id) return;
+  savingEdit.value = true;
+  msg.value = '';
+  err.value = '';
+  try {
+    // 1) Update name
+    await userApi.patch(`/users/${encodeURIComponent(u.id)}`, { firstName: ed.value.firstName, lastName: ed.value.lastName });
+    // 2) Update email if changed
+    const newEmail = (ed.value.email || '').trim().toLowerCase();
+    if (newEmail && newEmail !== (u.email || '').toLowerCase()) {
+      await userApi.patch(`/users/change-email/${encodeURIComponent(u.id)}`, { email: newEmail });
+    }
+    // 3) Update password if provided
+    const newPwd = ed.value.password || '';
+    if (newPwd) {
+      if (newPwd.length < 6) throw new Error('Password minimal 6 karakter');
+      await userApi.patch(`/users/change-password/${encodeURIComponent(u.id)}`, { password: newPwd });
+    }
+    msg.value = 'Akun tutor diperbarui';
+    editingId.value = '';
+    ed.value = { firstName: '', lastName: '', email: '', password: '' };
+    await loadTutors();
+  } catch (e) {
+    const m = e?.response?.data?.message || e?.message || 'Gagal menyimpan perubahan';
+    err.value = m;
+  } finally {
+    savingEdit.value = false;
+  }
+};
+
 onMounted(loadTutors);
 </script>
 
@@ -137,6 +202,10 @@ input { padding: 8px; margin-right: 6px; }
 .hint { display:block; color:#666; margin-top: 6px; }
 .success { color:#070 }
 .error { color:#c00 }
+.table { width: 100%; }
+.tools { display:flex; align-items:center; gap:8px; margin-bottom: 8px; }
+.tools .spacer { flex: 1; }
+.btn { padding: 6px 10px; border: 1px solid #ccc; background: #fff; border-radius: 6px; cursor: pointer; margin-right: 6px; }
  table { width: 100%; border-collapse: collapse; margin-top: 8px; }
  th, td { border: 1px solid #eee; padding: 8px; text-align: left; vertical-align: top; }
 .btn-danger { padding: 6px 10px; border: 1px solid #c33; background: #e74c3c; color: #fff; border-radius: 6px; cursor: pointer; }

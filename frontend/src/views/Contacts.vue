@@ -79,6 +79,7 @@
     </div>
 
     <!-- Add/Edit Contact Modal -->
+    <!-- <div v-if="showAddForm || editingContact" class="modal-overlay" @click="cancelForm"></div> -->
     <div v-if="showAddForm || editingContact" class="modal-overlay" @click="cancelForm">
       <div class="modal" @click.stop>
         <h3>{{ editingContact ? 'Edit Kontak' : 'Tambah Kontak' }}</h3>
@@ -107,11 +108,12 @@
           </div>
         </form>
       </div>
+      </div>
     </div>
 
     <p v-if="msg" class="success">{{ msg }}</p>
     <p v-if="err" class="error">{{ err }}</p>
-  </div>
+  
 </template>
 
 <script setup>
@@ -431,13 +433,16 @@ const exportContactsFile = async () => {
   exportBusy.value = true;
   err.value = '';
   try {
-    const response = await userApi.get('/contacts/export-contacts', {
+    const apiBase = (import.meta.env && import.meta.env.VITE_API_BASE_URL)
+      || ((window.location.port === '5173') ? 'http://localhost:3000' : window.location.origin);
+    const url = `${apiBase}/contacts/export-contacts`;
+
+    const response = await userApi.get(url, {
       params: { deviceId: selectedDeviceId.value },
       responseType: 'blob',
     });
 
     const ct = response.headers?.['content-type'] || '';
-    // If the server returned HTML, likely hitting the frontend (wrong API base). Stop and show help.
     if (typeof ct === 'string' && ct.includes('text/html')) {
       try {
         const txt = await response.data.text();
@@ -448,20 +453,19 @@ const exportContactsFile = async () => {
 
     const blob = new Blob([response.data], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
 
-    // Try to get filename from header
     const cd = response.headers?.['content-disposition'] || '';
     const match = /filename\s*=\s*([^;]+)/i.exec(cd);
     const fallback = `Contacts_${new Date().toISOString().slice(0,10)}.xlsx`;
     const filename = match ? decodeURIComponent(match[1].replace(/\"/g, '').trim()) : fallback;
 
-    const url = window.URL.createObjectURL(blob);
+    const urlObj = window.URL.createObjectURL(blob);
     const a = document.createElement('a');
-    a.href = url;
+    a.href = urlObj;
     a.download = filename;
     document.body.appendChild(a);
     a.click();
     a.remove();
-    window.URL.revokeObjectURL(url);
+    window.URL.revokeObjectURL(urlObj);
 
     msg.value = 'Export dimulai. File sedang diunduh.';
   } catch (e) {

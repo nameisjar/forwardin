@@ -53,19 +53,41 @@ export const createTutor: RequestHandler = async (req, res) => {
         if (!firstName || !email)
             return res.status(400).json({ message: 'firstName and email are required' });
 
-        const existing = await prisma.user.findUnique({ where: { email } });
-        if (existing) return res.status(409).json({ message: 'Email already exists' });
-
+        // Check if user with email exists (including soft-deleted)
+        const existingAny = await prisma.user.findUnique({ where: { email } });
         const rawPassword = password || Math.random().toString(36).slice(2, 10);
         const hashedPassword = await bcrypt.hash(rawPassword, 10);
         const csPkId = await getCsPrivilegePkId();
 
+        if (existingAny) {
+            // If soft-deleted, restore and update as tutor
+            if (existingAny.deletedAt) {
+                const restored = await prisma.user.update({
+                    where: { pkId: existingAny.pkId },
+                    data: {
+                        firstName,
+                        // keep lastName as-is
+                        password: hashedPassword,
+                        accountApiKey: generateUuid(),
+                        emailVerifiedAt: new Date(),
+                        privilegeId: csPkId,
+                        deletedAt: null,
+                        updatedAt: new Date(),
+                    },
+                    select: { id: true, email: true, firstName: true },
+                });
+                return res.status(201).json({ message: 'Tutor restored', user: restored });
+            }
+            // Active user with same email still exists
+            return res.status(409).json({ message: 'Email already exists' });
+        }
+
+        // Create new tutor if not exists at all
         const user = await prisma.user.create({
             data: {
                 firstName,
                 email,
                 password: hashedPassword,
-                // affiliationCode is unique in schema; do not set a shared label.
                 accountApiKey: generateUuid(),
                 emailVerifiedAt: new Date(),
                 privilegeId: csPkId,
@@ -73,9 +95,8 @@ export const createTutor: RequestHandler = async (req, res) => {
             select: { id: true, email: true, firstName: true },
         });
 
-        res.status(201).json({ message: 'Tutor created', user, password: rawPassword });
+        res.status(201).json({ message: 'Tutor created', user });
     } catch (e: any) {
-        // Handle unique constraint violations gracefully (race conditions)
         if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') {
             return res.status(409).json({ message: 'Email already exists' });
         }
@@ -87,7 +108,6 @@ export const createTutor: RequestHandler = async (req, res) => {
 export const listTutors: RequestHandler = async (_req, res) => {
     try {
         const csPkId = await getCsPrivilegePkId();
-        // Prefer privilege CS, but keep legacy users that have affiliationCode = 'tutor'
         const orConds: any[] = [{ affiliationCode: 'tutor' }];
         if (csPkId) orConds.push({ privilegeId: csPkId });
 
