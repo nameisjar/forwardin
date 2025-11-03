@@ -2,7 +2,6 @@ import { createRouter, createWebHistory } from 'vue-router';
 import Login from '../views/Login.vue';
 import Dashboard from '../views/Dashboard.vue';
 import AddDevice from '../views/AddDevice.vue';
-import PairSession from '../views/PairSession.vue';
 import ScheduleFeedback from '../views/ScheduleFeedback.vue';
 import ScheduleReminder from '../views/ScheduleReminder.vue';
 import SentHistory from '../views/SentHistory.vue';
@@ -23,7 +22,7 @@ const routes = [
         children: [
             { path: '', redirect: '/add-device' },
             { path: 'add-device', name: 'add-device', component: AddDevice },
-            { path: 'pairing', name: 'pairing', component: PairSession },
+            { path: 'pairing', redirect: { name: 'add-device' } },
             { path: 'contacts', name: 'contacts', component: Contacts },
             { path: 'schedule-feedback', name: 'schedule-feedback', component: ScheduleFeedback },
             { path: 'schedule-reminder', name: 'schedule-reminder', component: ScheduleReminder },

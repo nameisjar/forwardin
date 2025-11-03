@@ -4,7 +4,6 @@
       <h3>My Algo</h3>
       <nav>
         <router-link to="/add-device">Tambah Device</router-link>
-        <router-link to="/pairing">Pairing (QR)</router-link>
         <router-link to="/contacts">Kontak</router-link>
         <router-link to="/broadcasts">Broadcast</router-link>
         <router-link to="/schedule-feedback">Jadwal Feedback</router-link>
