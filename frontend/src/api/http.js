@@ -1,11 +1,10 @@
 import axios from 'axios';
 
-// Use relative base during development so Vite proxy handles requests.
-// In production, use VITE_API_BASE_URL if provided, else current origin.
+// Prefer explicit API base if provided (works for both dev & prod).
+// Fall back to Vite proxy in dev, or current origin in prod.
 const API_BASE =
-    import.meta.env && import.meta.env.DEV
-        ? ''
-        : (import.meta.env && import.meta.env.VITE_API_BASE_URL) || window.location.origin;
+    (import.meta.env && import.meta.env.VITE_API_BASE_URL) ||
+    (import.meta.env && import.meta.env.DEV ? '' : window.location.origin);
 
 // Lightweight global request scheduler to avoid bursts across all API instances
 const MIN_INTERVAL_MS = Number(

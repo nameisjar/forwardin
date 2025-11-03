@@ -1,6 +1,6 @@
 <template>
   <div class="wrapper">
-    <h2>Jadwal Saya (Feedback & Reminder)</h2>
+    <h2>Jadwal Saya</h2>
 
     <div class="toolbar">
       <input v-model="q" placeholder="Cari nama..." />

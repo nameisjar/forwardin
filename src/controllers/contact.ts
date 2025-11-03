@@ -1146,7 +1146,8 @@ export const exportContacts: RequestHandler = async (req, res) => {
             worksheet.addRow({
                 firstName: contact.firstName,
                 lastName: contact.lastName,
-                phone: Number(contact.phone),
+                // keep phone as string to preserve formatting and avoid precision loss
+                phone: contact.phone,
                 email: contact.email,
                 gender: contact.gender,
                 dob: contact.dob,
@@ -1162,9 +1163,12 @@ export const exportContacts: RequestHandler = async (req, res) => {
             'Content-Type',
             'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
         );
-        res.setHeader('Content-Disposition', `attachment; filename=${filename}`);
+        // quote filename to be safe
+        res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
 
-        workbook.xlsx.write(res);
+        // IMPORTANT: await the write and end the response to flush the XLSX stream fully
+        await workbook.xlsx.write(res);
+        res.end();
     } catch (error) {
         logger.error(error);
         res.status(500).json({ message: 'Internal server error' });

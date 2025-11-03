@@ -29,6 +29,10 @@
       </select>
       <button @click="showAddForm = true" class="btn-primary">+ Tambah Kontak</button>
       <button @click="loadContacts" :disabled="loading">{{ loading ? 'Memuat...' : 'Muat Ulang' }}</button>
+      <!-- New: Import/Export Controls -->
+      <button @click="triggerImport" :disabled="!selectedDeviceId || importBusy">{{ importBusy ? 'Mengimpor...' : 'Import' }}</button>
+      <button @click="exportContactsFile" :disabled="!selectedDeviceId || exportBusy">{{ exportBusy ? 'Mengekspor...' : 'Export' }}</button>
+      <input ref="fileInput" type="file" accept=".xlsx,.xls" style="display:none" @change="onImportFileChange" />
     </div>
 
     <!-- Contacts Table -->
@@ -123,6 +127,11 @@ const showAddForm = ref(false);
 const editingContact = ref(null);
 const msg = ref('');
 const err = ref('');
+
+// New: Import/Export state
+const fileInput = ref(null);
+const importBusy = ref(false);
+const exportBusy = ref(false);
 
 const form = ref({
   firstName: '',
@@ -357,6 +366,109 @@ const deleteContact = async (contactId) => {
     await loadContacts();
   } catch (e) {
     err.value = e?.response?.data?.message || 'Gagal menghapus kontak';
+  }
+};
+
+// New: Import handlers
+const triggerImport = () => {
+  if (!selectedDeviceId.value) {
+    err.value = 'Pilih perangkat terlebih dahulu';
+    return;
+  }
+  err.value = '';
+  msg.value = '';
+  fileInput.value && fileInput.value.click();
+};
+
+const onImportFileChange = async (e) => {
+  const file = e?.target?.files?.[0];
+  if (!file) return;
+  const MAX_SIZE_MB = 5; // simple guard
+  if (file.size > MAX_SIZE_MB * 1024 * 1024) {
+    err.value = `Ukuran file melebihi ${MAX_SIZE_MB}MB`;
+    e.target.value = '';
+    return;
+  }
+
+  const defaultGroup = new Date().toISOString().slice(0,10);
+  const groupName = (prompt('Nama grup untuk import (opsional):', `IMPORT_${defaultGroup}`) || '').trim();
+
+  importBusy.value = true;
+  err.value = '';
+  msg.value = '';
+
+  try {
+    const formData = new FormData();
+    formData.append('file', file);
+    formData.append('deviceId', selectedDeviceId.value);
+    if (groupName) formData.append('groupName', groupName);
+
+    const { data } = await userApi.post('/contacts/import', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    });
+
+    const createdCount = Array.isArray(data?.results) ? data.results.length : 0;
+    const errorCount = Array.isArray(data?.errors) ? data.errors.length : 0;
+    msg.value = `Import selesai. Berhasil: ${createdCount}${errorCount ? `, Gagal: ${errorCount}` : ''}`;
+
+    // reload contacts after import
+    await loadContacts();
+  } catch (e) {
+    console.error('❌ Import error:', e);
+    err.value = e?.response?.data?.message || 'Gagal mengimpor kontak';
+  } finally {
+    importBusy.value = false;
+    if (e?.target) e.target.value = '';
+  }
+};
+
+// New: Export handler
+const exportContactsFile = async () => {
+  if (!selectedDeviceId.value) {
+    err.value = 'Pilih perangkat terlebih dahulu';
+    return;
+  }
+  exportBusy.value = true;
+  err.value = '';
+  try {
+    const response = await userApi.get('/contacts/export-contacts', {
+      params: { deviceId: selectedDeviceId.value },
+      responseType: 'blob',
+    });
+
+    const ct = response.headers?.['content-type'] || '';
+    // If the server returned HTML, likely hitting the frontend (wrong API base). Stop and show help.
+    if (typeof ct === 'string' && ct.includes('text/html')) {
+      try {
+        const txt = await response.data.text();
+        console.warn('Unexpected HTML in export response:', txt?.slice(0, 200));
+      } catch (_) {}
+      throw new Error('Server mengembalikan HTML. Cek konfigurasi URL API.');
+    }
+
+    const blob = new Blob([response.data], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+
+    // Try to get filename from header
+    const cd = response.headers?.['content-disposition'] || '';
+    const match = /filename\s*=\s*([^;]+)/i.exec(cd);
+    const fallback = `Contacts_${new Date().toISOString().slice(0,10)}.xlsx`;
+    const filename = match ? decodeURIComponent(match[1].replace(/\"/g, '').trim()) : fallback;
+
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    window.URL.revokeObjectURL(url);
+
+    msg.value = 'Export dimulai. File sedang diunduh.';
+  } catch (e) {
+    console.error('❌ Export error:', e);
+    err.value = e?.message || e?.response?.data?.message || 'Gagal mengekspor kontak';
+  } finally {
+    exportBusy.value = false;
   }
 };
 
