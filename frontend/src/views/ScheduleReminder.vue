@@ -65,7 +65,7 @@
               <input
                 v-model="recipientInput"
                 @keydown.enter.prevent="addRecipientsFromInput"
-                placeholder="62812..."
+                placeholder="cth: 62812... jika banyak: 62812...,62813...,62814..."
               />
               <button type="button" @click="addRecipientsFromInput">Tambah</button>
             </div>
@@ -79,7 +79,7 @@
               <!-- <input v-model.trim="contactSearch" placeholder="Cari nama/nomor..." /> -->
               <select v-model="selectedContactId">
                 <option value="" disabled>Pilih kontak</option>
-                <option v-for="c in filteredContacts" :key="c.id" :value="c.phone">{{ c.firstName }} {{ c.lastName || '' }} ({{ c.phone }})</option>
+                <option v-for="c in filteredContacts" :key="c.id" :value="c.phone">{{ contactDisplay(c) }}</option>
               </select>
               <button type="button" @click="addSelectedContact" :disabled="!selectedContactId">Tambah Kontak</button>
               <button type="button" @click="loadContacts" :disabled="loadingContacts">{{ loadingContacts ? 'Memuat...' : 'Muat Kontak' }}</button>
@@ -361,12 +361,27 @@ const addSelectedGroup = async () => {
   selectedGroupId.value = '';
 };
 
+const contactLabelNames = (c) => {
+  try {
+    const arr = (c?.ContactLabel || []).map((x) => x?.label?.name).filter((n) => n && !String(n).startsWith('device_'));
+    return arr.join(', ');
+  } catch { return ''; }
+};
+const contactDisplay = (c) => {
+  const name = `${c.firstName || ''} ${c.lastName || ''}`.trim() || c.phone || '-';
+  const labels = contactLabelNames(c);
+  return labels ? `${name} (${c.phone}) — [${labels}]` : `${name} (${c.phone})`;
+};
+
 const addSelectedContact = () => {
   if (!selectedContactId.value) return;
   if (!recipients.value.includes(selectedContactId.value)) {
     recipients.value.push(selectedContactId.value);
     const found = contacts.value.find((c) => c.phone === selectedContactId.value);
-    if (found) recipientLabels.value[selectedContactId.value] = `Kontak: ${found.firstName} ${found.lastName || ''}`;
+    if (found) {
+      const labels = contactLabelNames(found);
+      recipientLabels.value[selectedContactId.value] = `Kontak: ${found.firstName} ${found.lastName || ''}${labels ? ' [' + labels + ']' : ''}`;
+    }
   }
   selectedContactId.value = '';
 };

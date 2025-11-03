@@ -10,7 +10,6 @@
         <option value="createdAt">Terbaru</option>
         <option value="to">Nomor</option>
         <option value="message">Pesan</option>
-        <option value="status">Status</option>
       </select>
       <select v-model="sortDir">
         <option value="desc">↓</option>
@@ -33,7 +32,6 @@
             <th>Nomor</th>
             <th>Kontak</th>
             <th>Pesan</th>
-            <th>Status</th>
             <th>Sumber</th>
             <th>Tutor</th>
           </tr>
@@ -44,9 +42,6 @@
             <td>{{ normalizeNumber(r.to) }}</td>
             <td>{{ r.contact ? (r.contact.firstName + ' ' + (r.contact.lastName||'')) : '-' }}</td>
             <td class="cell-msg">{{ r.message }}</td>
-            <td>
-              <span class="badge" :class="badgeClass(r.status)">{{ r.status }}</span>
-            </td>
             <td>
               <span v-if="sourceSimple(r) === 'reminder'" class="badge rm">Reminder</span>
               <span v-else-if="sourceSimple(r) === 'feedback'" class="badge fb">Feedback</span>

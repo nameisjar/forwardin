@@ -18,16 +18,32 @@
     <section class="list">
       <h3>Daftar Tutor</h3>
       <div class="tools">
-        <button @click="loadTutors">Muat Ulang</button>
+        <input v-model.trim="search" placeholder="Cari nama/email..." @input="onSearchInput" />
+        <select v-model.number="pageSize" @change="onPageSizeChange">
+          <option :value="10">10</option>
+          <option :value="25">25</option>
+          <option :value="50">50</option>
+          <option :value="100">100</option>
+        </select>
         <div class="spacer"></div>
+        <button @click="loadTutors">Muat Ulang</button>
       </div>
       <table v-if="rows.length">
         <thead>
           <tr>
-            <th>Nama</th>
-            <th>Email</th>
+            <th @click="setSort('firstName')" class="sortable">
+              Nama
+              <SortIcon :active="sortBy === 'firstName'" :dir="sortDir" />
+            </th>
+            <th @click="setSort('email')" class="sortable">
+              Email
+              <SortIcon :active="sortBy === 'email'" :dir="sortDir" />
+            </th>
             <th>Devices</th>
-            <th>Dibuat</th>
+            <th @click="setSort('createdAt')" class="sortable">
+              Dibuat
+              <SortIcon :active="sortBy === 'createdAt'" :dir="sortDir" />
+            </th>
             <th style="width:220px;">Aksi</th>
           </tr>
         </thead>
@@ -70,6 +86,15 @@
         </tbody>
       </table>
       <p v-else>Belum ada tutor.</p>
+
+      <div v-if="total > 0" class="pagination">
+        <div>Menampilkan {{ startItem }}-{{ endItem }} dari {{ total }}</div>
+        <div class="pager">
+          <button :disabled="page <= 1" @click="goToPage(page - 1)">Sebelumnya</button>
+          <span>Halaman {{ page }} / {{ totalPages }}</span>
+          <button :disabled="page >= totalPages" @click="goToPage(page + 1)">Berikutnya</button>
+        </div>
+      </div>
     </section>
   </div>
 </template>
@@ -87,6 +112,17 @@ const deletingId = ref('');
 const msg = ref('');
 const err = ref('');
 
+// list state
+const search = ref('');
+const page = ref(1);
+const pageSize = ref(10);
+const sortBy = ref('createdAt');
+const sortDir = ref('desc'); // 'asc' | 'desc'
+const total = ref(0);
+const totalPages = computed(() => (total.value && pageSize.value ? Math.max(1, Math.ceil(total.value / pageSize.value)) : 1));
+const startItem = computed(() => (rows.value.length ? (page.value - 1) * pageSize.value + 1 : 0));
+const endItem = computed(() => (rows.value.length ? (page.value - 1) * pageSize.value + rows.value.length : 0));
+
 const emailRe = /^(?:[a-zA-Z0-9_!#$%&'*+/=?`{|}~^.-]+)@(?:[a-zA-Z0-9.-]+)$/;
 const canSubmit = computed(() => {
   const fn = (firstName.value || '').trim();
@@ -96,11 +132,59 @@ const canSubmit = computed(() => {
 
 watch([firstName, email, password], () => { msg.value = ''; err.value = ''; });
 
+let searchTmr = null;
+const onSearchInput = () => {
+  page.value = 1;
+  if (searchTmr) clearTimeout(searchTmr);
+  searchTmr = setTimeout(() => {
+    loadTutors();
+  }, 350);
+};
+
+const setSort = (col) => {
+  if (sortBy.value === col) {
+    sortDir.value = sortDir.value === 'asc' ? 'desc' : 'asc';
+  } else {
+    sortBy.value = col;
+    sortDir.value = 'asc';
+  }
+  page.value = 1;
+  loadTutors();
+};
+
+const onPageSizeChange = () => {
+  page.value = 1;
+  loadTutors();
+};
+
+const goToPage = (p) => {
+  if (p < 1 || p > totalPages.value) return;
+  page.value = p;
+  loadTutors();
+};
+
 const loadTutors = async () => {
   err.value = '';
   try {
-    const { data } = await userApi.get('/tutors');
-    rows.value = Array.isArray(data) ? data : [];
+    const params = {
+      search: (search.value || '').trim() || undefined,
+      page: page.value,
+      pageSize: pageSize.value,
+      sortBy: sortBy.value,
+      sortDir: sortDir.value,
+    };
+    const { data } = await userApi.get('/tutors', { params });
+    if (data && data.data && Array.isArray(data.data)) {
+      rows.value = data.data;
+      const m = data.metadata || {};
+      total.value = Number(m.total || 0);
+    } else if (Array.isArray(data)) {
+      rows.value = data;
+      total.value = data.length;
+    } else {
+      rows.value = [];
+      total.value = 0;
+    }
   } catch (e) {
     err.value = e?.response?.data?.message || e?.message || 'Gagal memuat daftar tutor';
   }
@@ -123,6 +207,7 @@ const createTutor = async () => {
     firstName.value = '';
     email.value = '';
     password.value = '';
+    page.value = 1;
     await loadTutors();
   } catch (e) {
     const status = e?.response?.status;
@@ -142,6 +227,7 @@ const deleteTutor = async (u) => {
   try {
     await userApi.delete(`/users/${encodeURIComponent(u.id)}/delete`);
     msg.value = 'Akun tutor berhasil dihapus';
+    page.value = 1;
     await loadTutors();
   } catch (e) {
     err.value = (e && e.response && e.response.data && e.response.data.message) || 'Gagal menghapus akun tutor';
@@ -194,6 +280,12 @@ const saveEdit = async (u) => {
 };
 
 onMounted(loadTutors);
+
+// small component for sort indicator
+const SortIcon = {
+  props: { active: Boolean, dir: String },
+  template: `<span v-if="active" class="sort-icon">{{ dir === 'asc' ? '▲' : '▼' }}</span>`
+};
 </script>
 
 <style scoped>
@@ -208,6 +300,10 @@ input { padding: 8px; margin-right: 6px; }
 .btn { padding: 6px 10px; border: 1px solid #ccc; background: #fff; border-radius: 6px; cursor: pointer; margin-right: 6px; }
  table { width: 100%; border-collapse: collapse; margin-top: 8px; }
  th, td { border: 1px solid #eee; padding: 8px; text-align: left; vertical-align: top; }
+ th.sortable { cursor: pointer; user-select: none; }
+ .sort-icon { font-size: 10px; margin-left: 4px; color: #555; }
 .btn-danger { padding: 6px 10px; border: 1px solid #c33; background: #e74c3c; color: #fff; border-radius: 6px; cursor: pointer; }
 .btn-danger:disabled { opacity: .7; cursor: default; }
+.pagination { display:flex; align-items:center; justify-content: space-between; margin-top: 10px; }
+.pager { display:flex; align-items:center; gap: 8px; }
 </style>

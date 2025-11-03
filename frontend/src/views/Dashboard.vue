@@ -11,7 +11,6 @@
         <router-link to="/schedules">Jadwal Saya</router-link>
         <!-- Admin-only menus -->
         <template v-if="isAdmin">
-          <router-link to="/send-message">Kirim Pesan</router-link>
           <router-link to="/templates">Templates</router-link>
           <hr/>
           <router-link to="/admin/tutors">Kelola Tutor</router-link>

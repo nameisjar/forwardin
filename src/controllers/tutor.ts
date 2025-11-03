@@ -105,17 +105,87 @@ export const createTutor: RequestHandler = async (req, res) => {
     }
 };
 
-export const listTutors: RequestHandler = async (_req, res) => {
+export const listTutors: RequestHandler = async (req, res) => {
     try {
         const csPkId = await getCsPrivilegePkId();
-        const orConds: any[] = [{ affiliationCode: 'tutor' }];
-        if (csPkId) orConds.push({ privilegeId: csPkId });
+        const baseOrConds: any[] = [{ affiliationCode: 'tutor' }];
+        if (csPkId) baseOrConds.push({ privilegeId: csPkId });
 
+        const search = (req.query.search as string | undefined)?.trim();
+        const page = Math.max(1, Number(req.query.page || 1));
+        const pageSizeRaw = Number(req.query.pageSize || 0);
+        const pageSize = pageSizeRaw > 0 ? Math.min(100, pageSizeRaw) : 0; // 0 means no pagination
+        const sortByRaw = String(req.query.sortBy || '').trim();
+        const sortDirRaw = String(req.query.sortDir || '').toLowerCase();
+        const allowedSorts = new Set(['createdAt', 'firstName', 'lastName', 'email']);
+        const sortBy = allowedSorts.has(sortByRaw) ? sortByRaw : '';
+        const sortDir: 'asc' | 'desc' = sortDirRaw === 'asc' ? 'asc' : 'desc';
+
+        const where: any = {
+            deletedAt: null,
+            OR: baseOrConds,
+        };
+        if (search) {
+            where.AND = [
+                {
+                    OR: [
+                        { firstName: { contains: search, mode: 'insensitive' as const } },
+                        { lastName: { contains: search, mode: 'insensitive' as const } },
+                        { email: { contains: search, mode: 'insensitive' as const } },
+                    ],
+                },
+            ];
+        }
+
+        const hasPagingOrSort =
+            !!search || !!sortBy || !!req.query.page || !!req.query.pageSize || !!req.query.sortDir;
+
+        // Build orderBy
+        const orderBy: any[] = [];
+        if (sortBy) {
+            orderBy.push({ [sortBy]: sortDir } as any);
+        }
+        // Always add createdAt desc as secondary for stable results
+        orderBy.push({ createdAt: 'desc' });
+
+        if (hasPagingOrSort) {
+            const skip = pageSize > 0 ? (page - 1) * pageSize : 0;
+            const [rows, total] = await Promise.all([
+                prisma.user.findMany({
+                    where,
+                    select: {
+                        id: true,
+                        firstName: true,
+                        lastName: true,
+                        email: true,
+                        createdAt: true,
+                        devices: { select: { id: true, name: true, status: true } },
+                    },
+                    orderBy: orderBy as any,
+                    skip: pageSize > 0 ? skip : undefined,
+                    take: pageSize > 0 ? pageSize : undefined,
+                }),
+                prisma.user.count({ where }),
+            ]);
+
+            return res.status(200).json({
+                data: rows,
+                metadata: {
+                    total: total,
+                    currentPage: page,
+                    pageSize: pageSize > 0 ? pageSize : total,
+                    totalPages: pageSize > 0 ? Math.ceil(total / pageSize) : 1,
+                    hasMore: pageSize > 0 ? skip + rows.length < total : false,
+                    sortBy: sortBy || 'createdAt',
+                    sortDir,
+                    search: search || '',
+                },
+            });
+        }
+
+        // Backward-compatible behavior: no paging/sort/search => return plain array
         const users = await prisma.user.findMany({
-            where: {
-                deletedAt: null,
-                OR: orConds,
-            },
+            where,
             select: {
                 id: true,
                 firstName: true,
