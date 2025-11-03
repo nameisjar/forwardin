@@ -37,7 +37,10 @@ export const registerValidationRules = [
     passwordRules,
 ];
 
-export const dateRules = body('dob').isDate().withMessage('Invalid date format');
+export const dateRules = body('dob')
+    .optional({ checkFalsy: true }) // Allow empty/null/undefined values
+    .isDate()
+    .withMessage('Invalid date format');
 
 export const validate: RequestHandler = (req, res, next) => {
     const errors = validationResult(req);

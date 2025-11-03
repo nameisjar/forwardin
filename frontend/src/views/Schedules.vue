@@ -14,6 +14,19 @@
         <option value="">Pilih Perangkat</option>
         <option v-for="d in devices" :key="d.id" :value="d.id">{{ d.name || d.id }} — {{ d.status }}</option>
       </select>
+      <select v-model="sortBy" title="Urutkan berdasarkan">
+        <option value="schedule">Jadwal Terdekat</option>
+        <option value="name">Nama</option>
+      </select>
+      <select v-model="sortDir" title="Arah urutan">
+        <option value="asc">↑</option>
+        <option value="desc">↓</option>
+      </select>
+      <select v-model.number="pageSize" title="Jumlah baris per halaman">
+        <option :value="10">10</option>
+        <option :value="25">25</option>
+        <option :value="50">50</option>
+      </select>
       <button @click="load" :disabled="loading">{{ loading ? 'Memuat...' : 'Muat Ulang' }}</button>
     </div>
 
@@ -28,7 +41,7 @@
           </tr>
         </thead>
         <tbody>
-          <tr v-for="g in filtered" :key="g.name">
+          <tr v-for="g in visibleGroups" :key="g.name">
             <td>
               <div class="name">{{ displayName(g) }}</div>
               <small class="dim">Total: {{ g.broadcasts.length }} jadwal</small>
@@ -51,15 +64,22 @@
             <td>
               <div class="chips">
                 <span v-for="lbl in groupRecipientLabels(selectedOf(g))" :key="'g-'+lbl" class="chip">{{ lbl }}</span>
+                <span v-for="lbl in labelRecipientLabels(selectedOf(g))" :key="'l-'+lbl" class="chip chip-label">Label: {{ lbl }}</span>
                 <span v-for="num in phoneRecipients(selectedOf(g))" :key="'p-'+num" class="chip chip-num">{{ normalizeNumber(num) }}</span>
               </div>
             </td>
           </tr>
-          <tr v-if="!loading && filtered.length === 0">
+          <tr v-if="!loading && visibleGroups.length === 0">
             <td colspan="4" class="empty">Tidak ada data</td>
           </tr>
         </tbody>
       </table>
+    </div>
+
+    <div class="pager" v-if="meta.totalPages > 1">
+      <button :disabled="page<=1 || loading" @click="goPrev">Prev</button>
+      <span>Halaman {{ page }} / {{ meta.totalPages }}</span>
+      <button :disabled="!meta.hasMore || loading" @click="goNext">Next</button>
     </div>
 
     <p v-if="msg" class="success">{{ msg }}</p>
@@ -68,7 +88,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue';
+import { ref, computed, onMounted, watch } from 'vue';
 import { deviceApi, userApi } from '../api/http.js';
 
 const items = ref([]);
@@ -78,7 +98,6 @@ const msg = ref('');
 const q = ref('');
 const statusFilter = ref('all');
 
-// Map nama group JID -> label
 const groupsMap = ref({});
 const loadGroupNames = async () => {
   try {
@@ -97,8 +116,38 @@ const loadGroupNames = async () => {
   } catch (_) { /* ignore */ }
 };
 
-// Grouping by name
-const selections = ref({}); // name -> selected broadcast id
+const contacts = ref([]);
+const loadingContacts = ref(false);
+const loadContacts = async () => {
+  try {
+    loadingContacts.value = true;
+    const deviceId = localStorage.getItem('device_selected_id') || '';
+    const { data } = await userApi.get('/contacts', { params: deviceId ? { deviceId } : {} });
+    contacts.value = Array.isArray(data) ? data : [];
+  } catch (_) {
+    contacts.value = [];
+  } finally {
+    loadingContacts.value = false;
+  }
+};
+
+const labelToPhones = computed(() => {
+  const map = {};
+  for (const c of contacts.value || []) {
+    const phone = String(c.phone || '').trim();
+    if (!phone) continue;
+    const cLabels = Array.isArray(c.ContactLabel) ? c.ContactLabel : [];
+    for (const cl of cLabels) {
+      const name = cl?.label?.name;
+      if (!name || String(name).startsWith('device_')) continue;
+      if (!map[name]) map[name] = new Set();
+      map[name].add(phone);
+    }
+  }
+  return map;
+});
+
+const selections = ref({});
 const pickDefault = (arr) => {
   const upcoming = arr.find((b) => !b.isSent && b.status !== false && new Date(b.schedule).getTime() > Date.now());
   return upcoming?.id || arr[arr.length - 1]?.id;
@@ -115,7 +164,6 @@ const grouped = computed(() => {
     if (!selections.value[name]) selections.value[name] = pickDefault(arr);
     return { name, broadcasts: arr };
   });
-  // search filter by name
   const qq = q.value.toLowerCase();
   const filteredByName = groups.filter((g) => g.name.toLowerCase().includes(qq));
   return filteredByName;
@@ -131,7 +179,6 @@ const statusShort = (b) => {
   return due > Date.now() ? 'Terjadwal' : 'Tertunda';
 };
 
-// filters for view list by status on selected schedule
 const matchesStatus = (g) => {
   const b = selectedOf(g);
   if (!b) return false;
@@ -189,10 +236,12 @@ const groupRecipientLabels = (b) => {
     .map((jid) => groupsMap.value[jid] || jid);
 };
 
-const otherRecipientCount = (b) => {
-  if (!b) return 0;
+const labelRecipientLabels = (b) => {
+  if (!b) return [];
   const arr = Array.isArray(b.recipients) ? b.recipients : [];
-  return arr.filter((r) => !String(r).includes('@g.us')).length;
+  return arr
+    .filter((r) => typeof r === 'string' && r.toLowerCase().startsWith('label_'))
+    .map((r) => String(r).slice('label_'.length));
 };
 
 const canDelete = (b) => b && !b.isSent && b.status !== false;
@@ -223,52 +272,45 @@ const load = async () => {
   }
 };
 
-const fbNameMap = ref({});
-const fbNameMapNorm = ref({});
-const normalizeCourseKey = (s) => String(s || '').trim().toLowerCase();
-const loadFbNameMap = () => {
-  try {
-    const raw = localStorage.getItem('feedback_broadcast_names');
-    const map = raw ? JSON.parse(raw) : {};
-    fbNameMap.value = map;
-    const norm = {};
-    Object.keys(map).forEach((k) => { norm[normalizeCourseKey(k)] = map[k]; });
-    fbNameMapNorm.value = norm;
-  } catch {
-    fbNameMap.value = {};
-    fbNameMapNorm.value = {};
-  }
-};
-
 const displayName = (g) => {
   const n = g?.name || '';
-  // Reminder pattern keeps original "reminder name"
-  const m = n.match(/^\s*(.+?)\s*-\s*Recipients\b/i);
-  if (m) return n; // show full reminder name as created
-
-  // Feedback: device API stores feedback with name = courseName.
-  // If mapping exists, show "<feedbackName> - <courseName>", else show the course name.
-  const fbSaved = fbNameMap.value?.[n] || fbNameMapNorm.value?.[normalizeCourseKey(n)];
-  if (fbSaved) return `${fbSaved} - ${n}`;
-
-  // Default (normal broadcast): show the broadcast name as-is.
   return n || 'Tanpa Nama';
 };
 
 const phoneRecipients = (b) => {
   if (!b) return [];
   const arr = Array.isArray(b.recipients) ? b.recipients : [];
-  return arr
-    .map((r) => String(r))
-    .filter((r) => !r.includes('@g.us'))
-    .filter((r) => r.toLowerCase() !== 'all')
-    .filter((r) => !r.toLowerCase().startsWith('label'))
-    .filter((r) => r.trim().length > 0);
+  const set = new Set(
+    arr
+      .map((r) => String(r))
+      .filter((r) => !r.includes('@g.us'))
+      .filter((r) => r.toLowerCase() !== 'all')
+      .filter((r) => !r.toLowerCase().startsWith('label'))
+      .filter((r) => r.trim().length > 0),
+  );
+
+  if (arr.some((r) => String(r).toLowerCase() === 'all')) {
+    for (const c of contacts.value || []) {
+      if (c?.phone) set.add(String(c.phone));
+    }
+  }
+
+  for (const r of arr) {
+    const s = String(r).toLowerCase();
+    if (s.startsWith('label_')) {
+      const labelName = String(r).slice('label_'.length);
+      const phones = labelToPhones.value[labelName];
+      if (phones) {
+        for (const p of phones) set.add(String(p));
+      }
+    }
+  }
+
+  return Array.from(set);
 };
 
 const normalizeNumber = (num) => String(num).trim().replace(/@s\.whatsapp\.net$/i, '');
 
-// Devices handling to ensure correct device context
 const devices = ref([]);
 const selectedDeviceId = ref(localStorage.getItem('device_selected_id') || '');
 
@@ -283,7 +325,6 @@ const ensureDeviceKeyValid = () => {
   const key = localStorage.getItem('device_api_key');
   const selId = localStorage.getItem('device_selected_id');
   if (!key || !selId) return false;
-  // ensure selected device exists in current user's devices
   const ok = devices.value.some((d) => d.id === selId && d.apiKey === key);
   if (!ok) {
     localStorage.removeItem('device_api_key');
@@ -312,14 +353,49 @@ const onDeviceChange = () => {
     localStorage.setItem('device_selected_id', dev.id);
     localStorage.setItem('device_selected_name', dev.name || '');
     load();
+    loadContacts();
   }
 };
+
+const page = ref(1);
+const pageSize = ref(25);
+const sortBy = ref('schedule');
+const sortDir = ref('asc');
+const meta = ref({ totalGroups: 0, currentPage: 1, totalPages: 1, hasMore: false });
+
+const sortedGroups = computed(() => {
+  const arr = filtered.value.slice();
+  if (sortBy.value === 'name') {
+    arr.sort((a, b) => a.name.localeCompare(b.name));
+  } else {
+    arr.sort((a, b) => {
+      const sa = new Date(selectedOf(a)?.schedule || 0).getTime();
+      const sb = new Date(selectedOf(b)?.schedule || 0).getTime();
+      return sa - sb;
+    });
+  }
+  if (sortDir.value === 'desc') arr.reverse();
+  return arr;
+});
+
+const visibleGroups = computed(() => {
+  const start = (page.value - 1) * pageSize.value;
+  const end = start + pageSize.value;
+  const total = sortedGroups.value.length;
+  const totalPages = Math.max(1, Math.ceil(total / pageSize.value));
+  meta.value = { totalGroups: total, currentPage: page.value, totalPages, hasMore: page.value < totalPages };
+  return sortedGroups.value.slice(start, end);
+});
+
+watch([q, statusFilter, sortBy, sortDir, pageSize], () => { page.value = 1; });
+
+const goPrev = () => { if (page.value > 1) page.value -= 1; };
+const goNext = () => { if (meta.value.hasMore) page.value += 1; };
 
 onMounted(async () => {
   await fetchDevices();
   if (!ensureDeviceKeyValid()) pickDefaultDevice();
-  await Promise.allSettled([load(), loadGroupNames()]);
-  loadFbNameMap();
+  await Promise.allSettled([load(), loadGroupNames(), loadContacts()]);
 });
 </script>
 
@@ -345,4 +421,6 @@ th, td { padding: 10px; border-bottom: 1px solid #f0f0f0; text-align: left; }
 .btn-small { margin-left: 8px; padding: 4px 8px; border-radius: 6px; border: 1px solid #c33; background: #e74c3c; color: #fff; cursor: pointer; font-size: 12px; }
 .btn-small.danger { border-color: #c33; background: #e74c3c; }
 .chip-num { background: #f7fff2; border-color: #cfe9bf; color: #2f7a1f; }
+.chip-label { background: #fff7f0; border-color: #ffd8b5; color: #8a4b0f; }
+.pager { display:flex; gap:8px; align-items:center; margin-top:12px; }
 </style>

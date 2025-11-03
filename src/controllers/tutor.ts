@@ -175,6 +175,14 @@ export const listOutgoingMessagesAll: RequestHandler = async (req, res) => {
         const onlyBroadcast = String(req.query.onlyBroadcast || '').toLowerCase();
         const isOnlyBroadcast = onlyBroadcast === '1' || onlyBroadcast === 'true' || 'yes';
         const skip = (page - 1) * pageSize;
+
+        // New: sorting support
+        const sortByRaw = String(req.query.sortBy || 'createdAt');
+        const sortDirRaw = String(req.query.sortDir || 'desc').toLowerCase();
+        const allowedSorts = new Set(['createdAt', 'to', 'message', 'status']);
+        const sortBy = allowedSorts.has(sortByRaw) ? sortByRaw : 'createdAt';
+        const sortDir = sortDirRaw === 'asc' ? 'asc' : 'desc';
+
         const where = {
             id: isOnlyBroadcast ? { startsWith: 'BC_' } : undefined,
             to: phoneNumber ? { contains: phoneNumber } : undefined,
@@ -191,7 +199,7 @@ export const listOutgoingMessagesAll: RequestHandler = async (req, res) => {
         const [rows, total] = await Promise.all([
             prisma.outgoingMessage.findMany({
                 where: where as any,
-                orderBy: { createdAt: 'desc' },
+                orderBy: { [sortBy]: sortDir } as any,
                 skip,
                 take: pageSize,
                 include: { contact: { select: { firstName: true, lastName: true } } },
@@ -293,11 +301,21 @@ export const listOutgoingMessagesAll: RequestHandler = async (req, res) => {
                 let feedbackNames = new Set<string>();
                 if (names.length) {
                     try {
-                        const fbs = await prisma.courseFeedback.findMany({
-                            where: { courseName: { in: names } },
-                            select: { courseName: true },
-                        });
-                        feedbackNames = new Set(fbs.map((x) => x.courseName));
+                        // Extract courseName from broadcast names that have format "feedbackName - courseName"
+                        const courseNames = names
+                            .map((name) => {
+                                const match = name.match(/^.+\s*-\s*(.+)$/);
+                                return match ? match[1].trim() : null;
+                            })
+                            .filter((courseName): courseName is string => courseName !== null);
+
+                        if (courseNames.length > 0) {
+                            const fbs = await prisma.courseFeedback.findMany({
+                                where: { courseName: { in: courseNames } },
+                                select: { courseName: true },
+                            });
+                            feedbackNames = new Set(fbs.map((x) => x.courseName));
+                        }
                     } catch (_) {
                         /* ignore */
                     }
@@ -321,8 +339,17 @@ export const listOutgoingMessagesAll: RequestHandler = async (req, res) => {
                     const name = b.name || '';
                     const isReminder = /\b(Recipients|Reminder)\b/i.test(name);
                     let type: 'feedback' | 'reminder' | 'broadcast' = 'broadcast';
-                    if (isReminder) type = 'reminder';
-                    else if (feedbackNames.has(name)) type = 'feedback';
+
+                    if (isReminder) {
+                        type = 'reminder';
+                    } else {
+                        // Check if this broadcast name contains a courseName that exists in CourseFeedback
+                        const courseMatch = name.match(/^.+\s*-\s*(.+)$/);
+                        if (courseMatch && feedbackNames.has(courseMatch[1].trim())) {
+                            type = 'feedback';
+                        }
+                    }
+
                     bcMeta.set(b.pkId, {
                         name,
                         tutor: {
@@ -374,6 +401,16 @@ export const createDeviceNoSubscription: RequestHandler = async (req, res) => {
         const { name } = req.body as { name: string };
         if (!name) return res.status(400).json({ message: 'name is required' });
         const pkId = req.authenticatedUser.pkId;
+        const roleId = req.privilege?.pkId;
+
+        // If tutor/CS, enforce max 1 device
+        if (roleId === CS_ID) {
+            const existingCount = await prisma.device.count({ where: { userId: pkId } });
+            if (existingCount >= 1) {
+                return res.status(400).json({ message: 'Tutor hanya dapat memiliki 1 device' });
+            }
+        }
+
         const device = await prisma.device.create({
             data: { name, apiKey: generateUuid(), user: { connect: { pkId } } },
         });

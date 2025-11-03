@@ -46,26 +46,59 @@ export const createSSE: RequestHandler = async (req, res) => {
     const { deviceId } = req.body;
     const sessionId = generateUuid();
 
+    // Set proper SSE headers
     res.writeHead(200, {
         'Content-Type': 'text/event-stream',
         'Cache-Control': 'no-cache',
         Connection: 'keep-alive',
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Headers': 'Cache-Control',
     });
 
-    const existingDevice = await prisma.device.findUnique({
-        where: { id: deviceId },
-    });
+    try {
+        const existingDevice = await prisma.device.findUnique({
+            where: { id: deviceId },
+        });
 
-    if (!existingDevice) {
-        return res.status(404).json({ message: 'Device not found' });
-    }
+        if (!existingDevice) {
+            res.write(`data: ${JSON.stringify({ error: 'Device not found' })}\n\n`);
+            res.end();
+            return;
+        }
 
-    if (verifyInstance(sessionId)) {
-        res.write(`data: ${JSON.stringify({ error: 'Session already exists' })}\n\n`);
+        // Check if device already has an active session
+        const existingSession = await prisma.session.findFirst({
+            where: {
+                deviceId: existingDevice.pkId,
+                device: { status: 'open' },
+            },
+        });
+
+        if (existingSession) {
+            res.write(
+                `data: ${JSON.stringify({
+                    error: 'Device is already connected. Please disconnect first.',
+                })}\n\n`,
+            );
+            res.end();
+            return;
+        }
+
+        if (verifyInstance(sessionId)) {
+            res.write(`data: ${JSON.stringify({ error: 'Session already exists' })}\n\n`);
+            res.end();
+            return;
+        }
+
+        // Send initial status
+        res.write(`data: ${JSON.stringify({ connection: 'connecting', sessionId })}\n\n`);
+
+        createInstance({ sessionId, deviceId: existingDevice.pkId, res, SSE: true });
+    } catch (error) {
+        logger.error(error, 'Error in createSSE');
+        res.write(`data: ${JSON.stringify({ error: 'Internal server error' })}\n\n`);
         res.end();
-        return;
     }
-    createInstance({ sessionId, deviceId: existingDevice.pkId, res, SSE: true });
 };
 
 export const getSessionStatus: RequestHandler = async (req, res) => {

@@ -4,12 +4,15 @@
 
     <section class="create">
       <h3>Buat Device Baru</h3>
-      <form @submit.prevent="createDevice">
+      <div v-if="tutorReachedLimit" class="info">
+        Tutor hanya bisa memiliki 1 device. Hapus device lama terlebih dahulu untuk membuat yang baru.
+      </div>
+      <form v-else @submit.prevent="createDevice">
         <label>
           Nama Device
           <input v-model="name" placeholder="Contoh: Device Tutor" />
         </label>
-        <button :disabled="loading">{{ loading ? 'Menyimpan...' : 'Buat Device' }}</button>
+        <button :disabled="loading || tutorReachedLimit">{{ loading ? 'Menyimpan...' : 'Buat Device' }}</button>
       </form>
       <p v-if="error" class="error">{{ error }}</p>
       <p v-if="success" class="success">{{ success }}</p>
@@ -60,13 +63,18 @@
 <script setup>
 import { onMounted, ref, computed } from 'vue';
 import { userApi } from '../api/http.js';
+import { useAuthStore } from '../stores/auth.js';
 
+const auth = useAuthStore();
 const devices = ref([]);
 const name = ref('');
 const loading = ref(false);
 const deleting = ref(false);
 const error = ref('');
 const success = ref('');
+
+const isTutor = computed(() => auth.roleName === 'cs');
+const tutorReachedLimit = computed(() => isTutor.value && devices.value.length >= 1);
 
 // selection state
 const selectedIds = ref([]); // string[]
@@ -91,7 +99,6 @@ const fetchDevices = async () => {
   try {
     const { data } = await userApi.get('/devices');
     devices.value = data;
-    // keep selection only for ids that still exist
     const ids = new Set(devices.value.map((d) => d.id));
     selectedIds.value = selectedIds.value.filter((id) => ids.has(id));
   } catch (e) {
@@ -102,6 +109,10 @@ const fetchDevices = async () => {
 const createDevice = async () => {
   error.value = '';
   success.value = '';
+  if (tutorReachedLimit.value) {
+    error.value = 'Tutor hanya dapat memiliki 1 device';
+    return;
+  }
   loading.value = true;
   try {
     await userApi.post('/tutors/devices', { name: name.value });
@@ -154,7 +165,12 @@ const deleteOne = async (d) => {
   await doDelete([d.id]);
 };
 
-onMounted(fetchDevices);
+onMounted(async () => {
+  if (!auth.me) {
+    try { await auth.fetchMe(); } catch (_) {}
+  }
+  await fetchDevices();
+});
 </script>
 
 <style scoped>
@@ -164,6 +180,7 @@ input { padding: 8px; width: 320px; }
 button { margin-right: 8px; }
 .error { color: #c00; }
 .success { color: #0a0; }
+.info { color:#555; background:#f9f9f9; border:1px solid #eee; padding:8px; border-radius:6px; margin-bottom:8px; }
 .hint { color:#666; margin-top:8px; }
 table { width: 100%; border-collapse: collapse; margin-top: 8px; }
 th, td { border: 1px solid #eee; padding: 8px; text-align: left; }

@@ -53,7 +53,21 @@
               />
               <button type="button" @click="addRecipientsFromInput">Tambah</button>
             </div>
-            <!-- <small class="hint">Khusus: gunakan "all" untuk semua kontak, atau "label_nama" untuk label tertentu. Jangan campur keduanya.</small> -->
+          </div>
+        </div>
+
+        <div class="field span-2">
+          <label>Tambah Kontak (opsional)</label>
+          <div class="recipients">
+            <div class="add">
+              <!-- <input v-model.trim="contactSearch" placeholder="Cari nama/nomor..." /> -->
+              <select v-model="selectedContactId">
+                <option value="" disabled>Pilih kontak</option>
+                <option v-for="c in filteredContacts" :key="c.id" :value="c.phone">{{ c.firstName }} {{ c.lastName || '' }} ({{ c.phone }})</option>
+              </select>
+              <button type="button" @click="addSelectedContact" :disabled="!selectedContactId">Tambah Kontak</button>
+              <button type="button" @click="loadContacts" :disabled="loadingContacts">{{ loadingContacts ? 'Memuat...' : 'Muat Kontak' }}</button>
+            </div>
           </div>
         </div>
 
@@ -68,7 +82,21 @@
               <button type="button" @click="addSelectedGroup" :disabled="!selectedGroupId">Tambah Grup</button>
               <button type="button" @click="loadGroups" :disabled="loadingGroups">{{ loadingGroups ? 'Memuat...' : 'Muat Ulang Grup' }}</button>
             </div>
-            <!-- <small class="hint">Grup yang ditambahkan akan dikirim ke JID grup (bukan ke tiap anggota).</small> -->
+          </div>
+        </div>
+
+        <div class="field span-2">
+          <label>Tambah Kelas (Label) (opsional)</label>
+          <div class="recipients">
+            <div class="add">
+              <!-- <input v-model.trim="labelSearch" placeholder="Cari kelas..." /> -->
+              <select v-model="selectedLabelValue">
+                <option value="" disabled>Pilih label</option>
+                <option v-for="l in filteredLabels" :key="l.value" :value="l.value">{{ l.label }}</option>
+              </select>
+              <button type="button" @click="addSelectedLabel" :disabled="!selectedLabelValue">Tambah Label</button>
+              <button type="button" @click="loadLabels" :disabled="loadingLabels">{{ loadingLabels ? 'Memuat...' : 'Muat Label' }}</button>
+            </div>
           </div>
         </div>
 
@@ -97,6 +125,24 @@
 import { ref, computed, onMounted, watch } from 'vue';
 import { deviceApi, userApi } from '../api/http.js';
 
+// Pastikan deviceId tersedia/tersimpan sebelum memuat label/kontak
+const ensureDeviceId = async () => {
+  let deviceId = localStorage.getItem('device_selected_id');
+  if (deviceId) return deviceId;
+  try {
+    const { data } = await userApi.get('/devices');
+    const devices = Array.isArray(data) ? data : [];
+    const current = devices.find((d) => d.status === 'open') || devices[0];
+    if (current) {
+      if (current.id) localStorage.setItem('device_selected_id', current.id);
+      if (current.name) localStorage.setItem('device_selected_name', current.name);
+      if (current.apiKey) localStorage.setItem('device_api_key', current.apiKey);
+      return current.id || '';
+    }
+  } catch (_) {}
+  return '';
+};
+
 const form = ref({
   name: '',
   courseName: '',
@@ -116,6 +162,83 @@ const groups = ref([]); // { value, label, meta }
 const selectedGroupId = ref('');
 const loadingGroups = ref(false);
 const recipientLabels = ref({}); // map recipient string -> label for chip
+
+const contacts = ref([]);
+const selectedContactId = ref('');
+const loadingContacts = ref(false);
+const contactSearch = ref('');
+const filteredContacts = computed(() => {
+  const q = contactSearch.value.toLowerCase();
+  if (!q) return contacts.value;
+  return contacts.value.filter((c) =>
+    [c.firstName, c.lastName, c.phone]
+      .filter(Boolean)
+      .some((v) => String(v).toLowerCase().includes(q))
+  );
+});
+
+// Labels (kelas)
+const labels = ref([]); // { value: 'label_<slugOrName>', label: 'Name' }
+const selectedLabelValue = ref('');
+const loadingLabels = ref(false);
+const labelSearch = ref('');
+const filteredLabels = computed(() => {
+  const q = labelSearch.value.toLowerCase();
+  if (!q) return labels.value;
+  return labels.value.filter((l) => l.label.toLowerCase().includes(q));
+});
+
+const mapLabels = (items) => {
+  const arr = Array.isArray(items) ? items : [];
+  return arr
+    .map((it) => {
+      if (typeof it === 'string') {
+        const name = it;
+        return { value: `label_${name}`, label: name };
+      }
+      const name = it.name || it.label || it.title || '';
+      const slug = it.slug || '';
+      const value = `label_${slug || name}`;
+      return name ? { value, label: name } : null;
+    })
+    .filter(Boolean);
+};
+
+const deriveLabelsFromContacts = () => {
+  const names = new Set();
+  (contacts.value || []).forEach((c) => {
+    (c.ContactLabel || []).forEach((cl) => {
+      const n = cl?.label?.name;
+      if (n && !String(n).startsWith('device_')) names.add(n);
+    });
+  });
+  return Array.from(names);
+};
+
+const loadLabels = async () => {
+  try {
+    loadingLabels.value = true;
+    const deviceId = (await ensureDeviceId()) || undefined;
+    const res = await userApi.get('/contacts/labels', { params: deviceId ? { deviceId } : {} });
+    const data = res?.data;
+    let list = Array.isArray(data?.labels) ? data.labels : Array.isArray(data) ? data : [];
+    if (!Array.isArray(list) || list.length === 0) {
+      if (!contacts.value || contacts.value.length === 0) {
+        await loadContacts();
+      }
+      list = deriveLabelsFromContacts();
+    }
+    labels.value = mapLabels(list);
+  } catch (_) {
+    if (!contacts.value || contacts.value.length === 0) {
+      await loadContacts().catch(() => {});
+    }
+    const list = deriveLabelsFromContacts();
+    labels.value = mapLabels(list);
+  } finally {
+    loadingLabels.value = false;
+  }
+};
 
 const normalizeGroupValue = (g) => {
   const full = g.id || g.jid || '';
@@ -144,7 +267,13 @@ const loadGroups = async () => {
     try {
       res = await deviceApi.get('/messages/get-groups/detail');
     } catch (_) {
-      res = await deviceApi.get('/messages/get-groups');
+      try {
+        res = await deviceApi.get('/messages/get-groups');
+      } catch (__) {
+        // Fallback jika endpoint tidak ada
+        groups.value = [];
+        return;
+      }
     }
     const payload = res?.data;
     const list = Array.isArray(payload)
@@ -156,9 +285,30 @@ const loadGroups = async () => {
       : [];
     groups.value = mapGroups(list);
   } catch (e) {
-    err.value = e?.response?.data?.message || e?.message || 'Gagal memuat grup';
+    console.error('Error loading groups:', e);
+    // Jangan tampilkan error jika hanya gagal load groups
+    groups.value = [];
   } finally {
     loadingGroups.value = false;
+  }
+};
+
+const loadContacts = async () => {
+  try {
+    loadingContacts.value = true;
+    err.value = '';
+    // Gunakan userApi untuk contacts, bukan deviceApi
+    const deviceId = (await ensureDeviceId()) || undefined;
+    const res = await userApi.get('/contacts', {
+      params: deviceId ? { deviceId } : {},
+    });
+    contacts.value = res?.data || [];
+  } catch (e) {
+    console.error('Error loading contacts:', e);
+    // Jangan tampilkan error jika hanya gagal load contacts
+    contacts.value = [];
+  } finally {
+    loadingContacts.value = false;
   }
 };
 
@@ -202,6 +352,27 @@ const addSelectedGroup = async () => {
   selectedGroupId.value = '';
 };
 
+const addSelectedContact = () => {
+  if (!selectedContactId.value) return;
+  if (!recipients.value.includes(selectedContactId.value)) {
+    recipients.value.push(selectedContactId.value);
+    const found = contacts.value.find((c) => c.phone === selectedContactId.value);
+    if (found) recipientLabels.value[selectedContactId.value] = `Contact: ${found.firstName} ${found.lastName || ''}`;
+  }
+  selectedContactId.value = '';
+};
+
+const addSelectedLabel = () => {
+  if (!selectedLabelValue.value) return;
+  const val = selectedLabelValue.value;
+  if (!recipients.value.includes(val)) {
+    recipients.value.push(val);
+    const found = labels.value.find((l) => l.value === val);
+    if (found) recipientLabels.value[val] = `Label: ${found.label}`;
+  }
+  selectedLabelValue.value = '';
+};
+
 const chipLabel = (r) => recipientLabels.value[r] || r;
 
 // Add/remove recipients manually
@@ -235,17 +406,29 @@ const loadTemplates = async () => {
   try {
     let data;
     if (filterCourse.value) {
-      const res = await userApi.get(`/algorithmics/feedback/${encodeURIComponent(filterCourse.value)}`);
-      data = res.data;
-      templates.value = data.feedbacks || [];
+      try {
+        const res = await userApi.get(`/algorithmics/feedback/${encodeURIComponent(filterCourse.value)}`);
+        data = res.data;
+        templates.value = data.feedbacks || [];
+      } catch (e) {
+        console.error('Error loading course templates:', e);
+        templates.value = [];
+      }
     } else {
-      const res = await userApi.get('/algorithmics/feedbacks');
-      data = res.data;
-      templates.value = data.feedbacks || [];
+      try {
+        const res = await userApi.get('/algorithmics/feedbacks');
+        data = res.data;
+        templates.value = data.feedbacks || [];
+      } catch (e) {
+        console.error('Error loading all templates:', e);
+        templates.value = [];
+      }
     }
     extractCourseOptions(templates.value);
   } catch (e) {
-    // noop
+    console.error('Error in loadTemplates:', e);
+    templates.value = [];
+    courseOptions.value = [];
   }
 };
 
@@ -260,7 +443,7 @@ const createTemplate = async () => {
 };
 
 onMounted(async () => {
-  await Promise.allSettled([loadTemplates(), loadGroups()]);
+  await Promise.allSettled([loadTemplates(), loadGroups(), loadContacts(), loadLabels()]);
 });
 
 // Estimation helpers
@@ -322,24 +505,33 @@ const submit = async () => {
   }
   loading.value = true;
   try {
-    // Backend mengabaikan schedule di endpoint ini dan akan mulai dari waktu saat request diterima.
-    await deviceApi.post('/messages/broadcasts/feedback', {
+    // Pastikan schedule dikirim dengan benar
+    const payload = {
       name: form.value.name,
       courseName: form.value.courseName,
       startLesson: form.value.startLesson,
       delay: form.value.delay ?? 5000,
+      schedule: form.value.schedule, // Tambahkan schedule
       recipients: recipients.value,
-    });
+    };
+    
+    console.log('Sending feedback schedule payload:', payload);
+    
+    await deviceApi.post('/messages/broadcasts/feedback', payload);
+    
     msg.value = 'Jadwal feedback berhasil dibuat.';
-    // reset minimal
+    // reset form
     form.value.name = '';
     form.value.courseName = '';
     form.value.startLesson = 1;
     form.value.delay = 5000;
     form.value.schedule = '';
     recipients.value = [];
+    recipientLabels.value = {};
   } catch (e) {
-    err.value = (e && e.response && e.response.data && (e.response.data.message || e.response.data.error)) || 'Gagal membuat jadwal feedback';
+    console.error('Error creating feedback schedule:', e);
+    const errorMsg = e?.response?.data?.message || e?.response?.data?.error || e?.message || 'Gagal membuat jadwal feedback';
+    err.value = errorMsg;
   } finally {
     loading.value = false;
   }

@@ -13,11 +13,32 @@ import fs from 'fs';
 
 export const createContact: RequestHandler = async (req, res) => {
     try {
+        console.log('🚀 CREATE CONTACT REQUEST RECEIVED');
+        console.log('📝 Request body:', req.body);
+        console.log(
+            '👤 Authenticated user:',
+            req.authenticatedUser?.firstName,
+            req.authenticatedUser?.email,
+        );
+        console.log('🔐 Privilege:', req.privilege?.name);
+
         const { firstName, lastName, phone, email, gender, dob, labels, deviceId } = req.body;
+
+        if (!firstName || !phone || !deviceId) {
+            console.log('❌ Missing required fields:', {
+                firstName: !!firstName,
+                phone: !!phone,
+                deviceId: !!deviceId,
+            });
+            return res.status(400).json({ message: 'firstName, phone, and deviceId are required' });
+        }
 
         const pkId = req.authenticatedUser.pkId;
         const privilegeId = req.privilege.pkId;
-        const subscription = req.subscription;
+        console.log('🆔 User PKId:', pkId, 'Privilege PKId:', privilegeId);
+
+        // Check if contact already exists
+        console.log('🔍 Checking for existing contact with phone:', phone, 'deviceId:', deviceId);
 
         const existingContact = await prisma.contact.findFirst({
             where: {
@@ -39,12 +60,51 @@ export const createContact: RequestHandler = async (req, res) => {
         });
 
         if (existingContact) {
+            console.log(
+                '❌ Contact already exists:',
+                existingContact.firstName,
+                existingContact.phone,
+            );
             return res.status(400).json({
-                message: 'Contact with this email or phone number already exists in your contact',
+                message: 'Contact with this phone number already exists in your device',
             });
         }
 
-        await prisma.$transaction(async (transaction) => {
+        console.log('✅ No existing contact found, proceeding with creation...');
+
+        // Validate device exists and get session before transaction
+        console.log('🔍 Finding device with ID:', deviceId);
+        const existingDevice = await prisma.device.findUnique({
+            where: {
+                id: deviceId,
+            },
+            include: { sessions: { select: { sessionId: true } } },
+        });
+
+        if (!existingDevice) {
+            console.log('❌ Device not found with ID:', deviceId);
+            return res.status(404).json({ message: 'Device not found' });
+        }
+
+        console.log(
+            '✅ Device found:',
+            existingDevice.name,
+            'Sessions:',
+            existingDevice.sessions.length,
+        );
+
+        const sessionId = existingDevice.sessions[0]?.sessionId;
+
+        const created = await prisma.$transaction(async (transaction) => {
+            console.log('📝 Creating contact with data:', {
+                firstName,
+                lastName,
+                phone,
+                email,
+                gender,
+                dob,
+            });
+
             // step 1: create contact
             const createdContact = await transaction.contact.create({
                 data: {
@@ -57,42 +117,22 @@ export const createContact: RequestHandler = async (req, res) => {
                     colorCode: getRandomColor(),
                 },
             });
+            console.log('✅ Contact created with ID:', createdContact.id);
 
-            const existingDevice = await transaction.device.findUnique({
-                where: {
-                    id: deviceId,
-                },
-                include: { sessions: { select: { sessionId: true } } },
-            });
-
-            if (!existingDevice) {
-                return res.status(404).json({ message: 'Device not found' });
-            }
-            if (!existingDevice.sessions[0]) {
-                return res.status(404).json({ message: 'Session not found' });
-            }
-
-            // step 2: create labels
-            labels.push(`device_${existingDevice.name}`);
-            if (labels && labels.length > 0) {
+            // step 2: create labels (only if provided by user). Do NOT auto-append device label
+            const inputLabels: string[] = Array.isArray(labels)
+                ? labels.filter((l: any) => typeof l === 'string' && l.trim().length > 0)
+                : [];
+            if (inputLabels.length > 0) {
                 const labelIds: number[] = [];
 
-                for (const labelName of labels) {
+                for (const labelName of inputLabels) {
                     const slug = generateSlug(labelName);
                     const createdLabel = await transaction.label.upsert({
-                        where: {
-                            slug,
-                        },
-                        create: {
-                            name: labelName,
-                            slug,
-                        },
-                        update: {
-                            name: labelName,
-                            slug,
-                        },
+                        where: { slug },
+                        create: { name: labelName, slug },
+                        update: { name: labelName, slug },
                     });
-
                     labelIds.push(createdLabel.pkId);
                 }
 
@@ -103,29 +143,31 @@ export const createContact: RequestHandler = async (req, res) => {
                     })),
                     skipDuplicates: true,
                 });
+                console.log('✅ Labels created and linked');
             }
 
-            // step 3: replace contact info in outgoing & incoming message
-            await transaction.outgoingMessage.updateMany({
-                where: {
-                    to: phone + '@s.whatsapp.net',
-                    sessionId: existingDevice.sessions[0].sessionId,
-                },
-                data: {
-                    contactId: createdContact.pkId,
-                },
-            });
-            await transaction.incomingMessage.updateMany({
-                where: {
-                    from: phone + '@s.whatsapp.net',
-                    sessionId: existingDevice.sessions[0].sessionId,
-                },
-                data: {
-                    contactId: createdContact.pkId,
-                },
-            });
+            // step 3: update message history
+            if (sessionId) {
+                console.log('🔄 Updating message history...');
+                await transaction.outgoingMessage.updateMany({
+                    where: {
+                        to: phone + '@s.whatsapp.net',
+                        sessionId,
+                    },
+                    data: { contactId: createdContact.pkId },
+                });
 
-            // step 4: create contacts to devices relationship
+                await transaction.incomingMessage.updateMany({
+                    where: {
+                        from: phone + '@s.whatsapp.net',
+                        sessionId,
+                    },
+                    data: { contactId: createdContact.pkId },
+                });
+            }
+
+            // step 4: create contact-device relationship
+            console.log('🔗 Creating contact-device relationship...');
             await transaction.contactDevice.create({
                 data: {
                     contactId: createdContact.pkId,
@@ -133,18 +175,46 @@ export const createContact: RequestHandler = async (req, res) => {
                 },
             });
 
-            // step 5: decrease contact quota
-            await useContact(transaction, subscription);
-            res.status(200).json({ message: 'Contact created successfully' });
+            console.log('✅ Contact creation completed successfully');
+
+            return { contactId: createdContact.id, contactName: createdContact.firstName };
         });
-    } catch (error) {
+
+        // Send response after transaction completes successfully
+        res.status(200).json({
+            message: 'Contact created successfully',
+            contactId: created.contactId,
+            contactName: created.contactName,
+        });
+    } catch (error: unknown) {
+        console.error('❌ ERROR in createContact:', error);
         logger.error(error);
-        res.status(500).json({ message: 'Internal server error' });
+
+        // Handle specific database errors
+        if (error instanceof Error) {
+            if (error.message.includes('Unique constraint')) {
+                return res.status(400).json({
+                    message: 'Contact with this phone number already exists',
+                });
+            }
+            if (error.message.includes('Foreign key constraint')) {
+                return res.status(400).json({
+                    message: 'Invalid device ID provided',
+                });
+            }
+        }
+
+        const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
+        res.status(500).json({
+            message: 'Internal server error',
+            error: process.env.NODE_ENV === 'development' ? errorMessage : undefined,
+        });
     }
 };
 
 export const importContacts: RequestHandler = async (req, res) => {
-    const subscription = req.subscription;
+    // Hapus dependency subscription
+    // const subscription = req.subscription;
     const privilegeId = req.privilege.pkId;
 
     try {
@@ -199,13 +269,16 @@ export const importContacts: RequestHandler = async (req, res) => {
                     contacts.push(contact);
                 }
             });
-            if (subscription.contactUsed + contacts.length > subscription.contactMax) {
-                return res.status(404).json({
-                    message: `Need more ${
-                        subscription.contactUsed + contacts.length - subscription.contactMax
-                    } contact quota to perform this action`,
-                });
-            }
+
+            // Hapus pengecekan quota - biarkan unlimited
+            // if (subscription.contactUsed + contacts.length > subscription.contactMax) {
+            //     return res.status(404).json({
+            //         message: `Need more ${
+            //             subscription.contactUsed + contacts.length - subscription.contactMax
+            //         } contact quota to perform this action`,
+            //     });
+            // }
+
             const pkId = req.authenticatedUser.pkId;
             let group: {
                 pkId: any;
@@ -290,26 +363,25 @@ export const importContacts: RequestHandler = async (req, res) => {
                             throw new Error('Session not found');
                         }
 
-                        // step 3: create labels
-                        const labels = contacts[index].labels?.split(',') || null;
-                        labels.push(`device_${existingDevice.name}`);
-                        if (labels && labels.length > 0) {
+                        // step 3: create labels (only those provided in file, do NOT auto append device label)
+                        const labelsArr = [
+                            ...((typeof contacts[index].labels === 'string'
+                                ? contacts[index].labels.split(',')
+                                : Array.isArray(contacts[index].labels)
+                                ? contacts[index].labels
+                                : []) as string[]),
+                        ]
+                            .map((l) => (typeof l === 'string' ? l.trim() : ''))
+                            .filter((l) => l.length > 0);
+                        if (labelsArr.length > 0) {
                             const labelIds: number[] = [];
 
-                            for (const labelName of labels) {
+                            for (const labelName of labelsArr) {
                                 const slug = generateSlug(labelName);
                                 const createdLabel = await transaction.label.upsert({
-                                    where: {
-                                        slug,
-                                    },
-                                    create: {
-                                        name: labelName,
-                                        slug,
-                                    },
-                                    update: {
-                                        name: labelName,
-                                        slug,
-                                    },
+                                    where: { slug },
+                                    create: { name: labelName, slug },
+                                    update: { name: labelName, slug },
                                 });
 
                                 labelIds.push(createdLabel.pkId);
@@ -353,9 +425,9 @@ export const importContacts: RequestHandler = async (req, res) => {
                             },
                         });
 
-                        // step 6: decrease contact quota
-                        await useContact(transaction, subscription, subscription.contactUsed + 1);
-                        subscription.contactUsed = subscription.contactUsed + 1;
+                        // Hapus step 6: decrease contact quota
+                        // await useContact(transaction, subscription, subscription.contactUsed + 1);
+                        // subscription.contactUsed = subscription.contactUsed + 1;
 
                         results.push({ index, createdContact });
                     });
@@ -379,76 +451,88 @@ export const getContacts: RequestHandler = async (req, res) => {
     const pkId = req.authenticatedUser.pkId;
     const privilegeId = req.privilege.pkId;
     const deviceId = req.query.deviceId as string;
+    const q = (req.query.q as string) || '';
+    const page = Math.max(1, Number(req.query.page) || 1);
+    const pageSize = Math.max(1, Math.min(200, Number(req.query.pageSize) || 25));
+    const sortByRaw = String(req.query.sortBy || 'createdAt');
+    const sortDirRaw = String(req.query.sortDir || 'desc').toLowerCase();
+    const wantsMeta =
+        typeof req.query.page !== 'undefined' ||
+        typeof req.query.pageSize !== 'undefined' ||
+        String(req.query.withMeta || '').toLowerCase() === 'true';
+
+    const sortBy = ['firstName', 'lastName', 'phone', 'createdAt'].includes(sortByRaw)
+        ? (sortByRaw as 'firstName' | 'lastName' | 'phone' | 'createdAt')
+        : 'createdAt';
+    const sortDir = sortDirRaw === 'asc' ? 'asc' : 'desc';
+
+    const searchWhere = q
+        ? {
+              OR: [
+                  { firstName: { contains: q, mode: 'insensitive' as const } },
+                  { lastName: { contains: q, mode: 'insensitive' as const } },
+                  { phone: { contains: q } },
+                  {
+                      ContactLabel: {
+                          some: { label: { name: { contains: q, mode: 'insensitive' as const } } },
+                      },
+                  },
+              ],
+          }
+        : {};
 
     try {
-        let contacts;
-        if (privilegeId == Number(process.env.SUPER_ADMIN_ID)) {
-            contacts = await prisma.contact.findMany({
-                where: {
-                    contactDevices: {
-                        some: {
-                            device: {
-                                id: deviceId ?? undefined,
-                            },
-                        },
+        const baseWhereSuper = {
+            contactDevices: { some: { device: { id: deviceId ?? undefined } } },
+            ...(q ? searchWhere : {}),
+        } as const;
+        const baseWhereCS = {
+            contactDevices: {
+                some: {
+                    device: {
+                        id: deviceId ?? undefined,
+                        OR: [{ CustomerService: { is: { userId: pkId } } }, { userId: pkId }],
                     },
                 },
-                include: {
-                    ContactLabel: {
-                        select: {
-                            label: {
-                                select: { name: true },
-                            },
-                        },
-                    },
-                },
-            });
-        } else if (privilegeId == Number(process.env.CS_ID)) {
-            contacts = await prisma.contact.findMany({
-                where: {
-                    contactDevices: {
-                        some: {
-                            device: {
-                                id: deviceId ?? undefined,
-                                CustomerService: { pkId },
-                            },
-                        },
-                    },
-                },
-                include: {
-                    ContactLabel: {
-                        select: {
-                            label: {
-                                select: { name: true },
-                            },
-                        },
-                    },
-                },
-            });
-        } else {
-            contacts = await prisma.contact.findMany({
-                where: {
-                    contactDevices: {
-                        some: {
-                            device: {
-                                id: deviceId ?? undefined,
-                                userId: pkId,
-                            },
-                        },
-                    },
-                },
-                include: {
-                    ContactLabel: {
-                        select: {
-                            label: {
-                                select: { name: true },
-                            },
-                        },
-                    },
-                },
-            });
+            },
+            ...(q ? searchWhere : {}),
+        } as const;
+        const baseWhereUser = {
+            contactDevices: { some: { device: { id: deviceId ?? undefined, userId: pkId } } },
+            ...(q ? searchWhere : {}),
+        } as const;
+
+        const where =
+            privilegeId == Number(process.env.SUPER_ADMIN_ID)
+                ? (baseWhereSuper as any)
+                : privilegeId == Number(process.env.CS_ID)
+                ? (baseWhereCS as any)
+                : (baseWhereUser as any);
+
+        const skip = (page - 1) * pageSize;
+        const [rows, total] = await Promise.all([
+            prisma.contact.findMany({
+                where,
+                include: { ContactLabel: { select: { label: { select: { name: true } } } } },
+                orderBy: { [sortBy]: sortDir } as any,
+                skip: wantsMeta ? skip : 0,
+                take: wantsMeta ? pageSize : undefined,
+            }),
+            prisma.contact.count({ where }),
+        ]);
+
+        if (!wantsMeta) {
+            // Legacy response: plain array
+            return res.status(200).json(rows);
         }
-        res.status(200).json(contacts);
+
+        const totalPages = Math.ceil(total / pageSize) || 1;
+        const hasMore = page * pageSize < total;
+
+        return res.status(200).json({
+            data: rows,
+            metadata: { totalContacts: total, currentPage: page, totalPages, hasMore },
+        });
     } catch (error) {
         logger.error(error);
         res.status(500).json({ message: 'Internal server error' });
@@ -457,31 +541,58 @@ export const getContacts: RequestHandler = async (req, res) => {
 
 export const getContactLabels: RequestHandler = async (req, res) => {
     const pkId = req.authenticatedUser.pkId;
+    const privilegeId = req.privilege.pkId;
+    const deviceId = (req.query.deviceId as string) || undefined;
 
     try {
-        // const labels = await prisma.contact.findMany({
-        //     where: { contactDevices: { some: { device: { userId: pkId } } } },
-        //     select: {
-        //         ContactLabel: {
-        //             select: {
-        //                 label: {
-        //                     select: { name: true },
-        //                 },
-        //             },
-        //         },
-        //     },
-        // });
-        // const newLabels = labels.flatMap((item) => item.ContactLabel.map((obj) => obj.label.name));
+        // Build where clause based on privilege and optional deviceId
+        let whereClause: any;
+        const isSuperAdmin = privilegeId == Number(process.env.SUPER_ADMIN_ID);
 
-        const labels = await prisma.label.findMany({
-            where: {
+        if (isSuperAdmin) {
+            whereClause = deviceId
+                ? {
+                      ContactLabel: {
+                          some: {
+                              contact: { contactDevices: { some: { device: { id: deviceId } } } },
+                          },
+                      },
+                  }
+                : { ContactLabel: { some: { contact: { contactDevices: { some: {} } } } } };
+        } else {
+            // For regular users and CS users: labels from devices they own OR they are assigned to (via CustomerService.userId)
+            whereClause = {
                 ContactLabel: {
-                    some: { contact: { contactDevices: { some: { device: { userId: pkId } } } } },
+                    some: {
+                        contact: {
+                            contactDevices: {
+                                some: {
+                                    device: {
+                                        id: deviceId ?? undefined,
+                                        OR: [
+                                            { userId: pkId },
+                                            { CustomerService: { is: { userId: pkId } } },
+                                        ],
+                                    },
+                                },
+                            },
+                        },
+                    },
                 },
-            },
-        });
+            };
+        }
 
-        res.status(200).json(labels.map((label) => label.name));
+        const labels = await prisma.label.findMany({ where: whereClause, select: { name: true } });
+        // Filter out internal device_* labels and deduplicate
+        const unique = Array.from(
+            new Set(
+                labels
+                    .map((l) => l.name)
+                    .filter((name) => typeof name === 'string' && !name.startsWith('device_')),
+            ),
+        );
+
+        res.status(200).json(unique);
     } catch (error) {
         logger.error(error);
         res.status(500).json({ message: 'Internal server error' });
@@ -546,28 +657,18 @@ export const updateContact: RequestHandler = async (req, res) => {
         }
 
         await prisma.$transaction(async (transaction) => {
-            const existingContact = await prisma.contact.findUnique({
-                where: {
-                    id: contactId,
-                },
-                include: {
-                    contactDevices: {
-                        select: {
-                            id: true,
-                        },
-                    },
-                },
+            const existingContact = await transaction.contact.findUnique({
+                where: { id: contactId },
+                include: { contactDevices: { select: { id: true } } },
             });
 
             if (!existingContact) {
-                return res.status(404).json({ message: 'Contact not found' });
+                throw new Error('Contact not found');
             }
 
-            // update contact
+            // update contact core fields
             const updatedContact = await transaction.contact.update({
-                where: {
-                    pkId: existingContact.pkId,
-                },
+                where: { pkId: existingContact.pkId },
                 data: {
                     firstName,
                     lastName,
@@ -579,93 +680,54 @@ export const updateContact: RequestHandler = async (req, res) => {
                 },
             });
 
-            // update device
-            const existingDevice = await transaction.device.findUnique({
-                where: {
-                    id: deviceId,
-                },
-            });
-
-            if (!existingDevice) {
-                return res.status(404).json({ message: 'Device not found' });
-            }
-
-            await transaction.contactDevice.update({
-                where: { id: existingContact.contactDevices[0].id },
-                data: {
-                    deviceId: existingDevice.pkId,
-                },
-            });
-
-            // update labels
-            labels.push(`device_${existingDevice.name}`);
-            if (labels && labels.length > 0) {
-                const labelIds: number[] = [];
-                const slugs = labels.map((slug: string) => generateSlug(slug));
-
-                await transaction.label.deleteMany({
-                    where: {
-                        ContactLabel: {
-                            some: {
-                                contactId: updatedContact.pkId,
-                            },
-                        },
-                        NOT: {
-                            slug: {
-                                in: slugs,
-                            },
-                        },
-                    },
+            // update device link if provided (do NOT enforce device_* label automatically)
+            if (deviceId) {
+                const existingDevice = await transaction.device.findUnique({
+                    where: { id: deviceId },
                 });
-
-                for (const labelName of labels) {
-                    const slug = generateSlug(labelName);
-                    const createdLabel = await transaction.label.upsert({
-                        where: {
-                            slug,
-                        },
-                        create: {
-                            name: labelName,
-                            slug,
-                        },
-                        update: {
-                            name: labelName,
-                            slug,
-                        },
-                    });
-
-                    labelIds.push(createdLabel.pkId);
+                if (!existingDevice) {
+                    throw new Error('Device not found');
                 }
 
-                // update contact-label
+                if (existingContact.contactDevices.length > 0) {
+                    await transaction.contactDevice.update({
+                        where: { id: existingContact.contactDevices[0].id },
+                        data: { deviceId: existingDevice.pkId },
+                    });
+                } else {
+                    await transaction.contactDevice.create({
+                        data: { contactId: updatedContact.pkId, deviceId: existingDevice.pkId },
+                    });
+                }
+            }
+
+            // update labels associations
+            // If labels is provided (even empty array), set associations to match exactly.
+            if (Array.isArray(labels)) {
+                // Remove all current associations
                 await transaction.contactLabel.deleteMany({
-                    where: {
-                        contactId: updatedContact.pkId,
-                    },
+                    where: { contactId: updatedContact.pkId },
                 });
 
-                await transaction.contactLabel.createMany({
-                    data: labelIds.map((labelId) => ({
-                        contactId: updatedContact.pkId,
-                        labelId: labelId,
-                    })),
-                    skipDuplicates: true,
-                });
-            } else {
-                await transaction.label.deleteMany({
-                    where: {
-                        ContactLabel: {
-                            some: {
-                                contactId: updatedContact.pkId,
-                            },
-                        },
-                    },
-                });
+                const cleanLabels: string[] = labels.filter(
+                    (l: any) => typeof l === 'string' && l.trim().length > 0,
+                );
+
+                for (const labelName of cleanLabels) {
+                    const slug = generateSlug(labelName);
+                    const lbl = await transaction.label.upsert({
+                        where: { slug },
+                        create: { name: labelName, slug },
+                        update: { name: labelName, slug },
+                    });
+                    await transaction.contactLabel.create({
+                        data: { contactId: updatedContact.pkId, labelId: lbl.pkId },
+                    });
+                }
             }
         });
 
         res.status(200).json({ message: 'Contact updated successfully' });
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
     } catch (error) {
         logger.error(error);
         res.status(500).json({ message: 'Internal server error' });
@@ -674,42 +736,19 @@ export const updateContact: RequestHandler = async (req, res) => {
 
 export const deleteContacts: RequestHandler = async (req, res) => {
     try {
-        const contactIds = req.body.contactIds;
+        const contactIds = (req.body.contactIds as string[]) || [];
+        if (!Array.isArray(contactIds) || contactIds.length === 0) {
+            return res.status(400).json({ message: 'contactIds is required' });
+        }
 
-        const contactPromises = contactIds.map(async (contactId: string) => {
-            const existingContact = await prisma.contact.findUnique({
-                where: {
-                    id: contactId,
-                },
-            });
-
-            if (!existingContact) {
-                return res.status(404).json({ message: 'Contact not found' });
-            }
-
-            await prisma.contact.delete({
-                where: {
-                    pkId: existingContact.pkId,
-                },
-            });
-
-            await prisma.label.deleteMany({
-                where: {
-                    NOT: {
-                        ContactLabel: {
-                            some: {
-                                contactId: { not: existingContact.pkId },
-                            },
-                        },
-                    },
-                },
-            });
+        await prisma.$transaction(async (tx) => {
+            // Delete contacts by UUID ids
+            await tx.contact.deleteMany({ where: { id: { in: contactIds } } });
+            // Cleanup orphan labels (no longer referenced by any contact)
+            await tx.label.deleteMany({ where: { ContactLabel: { none: {} } } });
         });
 
-        // wait for all the Promises to settle (either resolve or reject)
-        await Promise.all(contactPromises);
-
-        res.status(200).json({ message: 'Device(s) deleted successfully' });
+        res.status(200).json({ message: 'Contact(s) deleted successfully' });
     } catch (error) {
         logger.error(error);
         res.status(500).json({ message: 'Internal server error' });
@@ -1049,7 +1088,10 @@ export const exportContacts: RequestHandler = async (req, res) => {
                         some: {
                             device: {
                                 id: deviceId ?? undefined,
-                                CustomerService: { pkId },
+                                OR: [
+                                    { CustomerService: { is: { userId: pkId } } }, // Assigned as CS (by userId)
+                                    { userId: pkId }, // Owned by user
+                                ],
                             },
                         },
                     },

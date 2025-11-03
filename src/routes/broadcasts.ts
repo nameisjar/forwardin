@@ -12,4 +12,9 @@ router.put('/:id', controller.updateBroadcast);
 router.patch('/:id/status', controller.updateBroadcastStatus);
 router.delete('/', controller.deleteBroadcasts);
 
+// Added alias routes for reminder and scheduled broadcasts to avoid 404 in UI menus
+router.post('/reminder', controller.createBroadcastReminder);
+router.post('/scheduled', controller.createBroadcastScheduled);
+router.post('/feedback', controller.createBroadcastFeedback);
+
 export default router;

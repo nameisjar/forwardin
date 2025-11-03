@@ -58,6 +58,21 @@
         </div>
 
         <div class="field span-2">
+          <label>Tambah Kontak (opsional)</label>
+          <div class="recipients">
+            <div class="add">
+              <!-- <input v-model.trim="contactSearch" placeholder="Cari nama/nomor..." /> -->
+              <select v-model="selectedContactId">
+                <option value="" disabled>Pilih kontak</option>
+                <option v-for="c in filteredContacts" :key="c.id" :value="c.phone">{{ c.firstName }} {{ c.lastName || '' }} ({{ c.phone }})</option>
+              </select>
+              <button type="button" @click="addSelectedContact" :disabled="!selectedContactId">Tambah Kontak</button>
+              <button type="button" @click="loadContacts" :disabled="loadingContacts">{{ loadingContacts ? 'Memuat...' : 'Muat Kontak' }}</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="field span-2">
           <label>Tambah Grup (opsional)</label>
           <div class="recipients">
             <div class="add">
@@ -69,6 +84,21 @@
               <button type="button" @click="loadGroups" :disabled="loadingGroups">{{ loadingGroups ? 'Memuat...' : 'Muat Ulang Grup' }}</button>
             </div>
             <!-- <small class="hint">Grup yang ditambahkan akan dikirim ke JID grup (bukan ke tiap anggota).</small> -->
+          </div>
+        </div>
+
+        <div class="field span-2">
+          <label>Tambah Kelas (Label) (opsional)</label>
+          <div class="recipients">
+            <div class="add">
+              <!-- <input v-model.trim="labelSearch" placeholder="Cari kelas..." /> -->
+              <select v-model="selectedLabelValue">
+                <option value="" disabled>Pilih label</option>
+                <option v-for="l in filteredLabels" :key="l.value" :value="l.value">{{ l.label }}</option>
+              </select>
+              <button type="button" @click="addSelectedLabel" :disabled="!selectedLabelValue">Tambah Label</button>
+              <button type="button" @click="loadLabels" :disabled="loadingLabels">{{ loadingLabels ? 'Memuat...' : 'Muat Label' }}</button>
+            </div>
           </div>
         </div>
 
@@ -86,7 +116,25 @@
 
 <script setup>
 import { ref, computed } from 'vue';
-import { deviceApi } from '../api/http.js';
+import { deviceApi, userApi } from '../api/http.js';
+
+// Pastikan ada device terpilih sebelum memuat data berbasis device (labels/kontak)
+const ensureDeviceId = async () => {
+  let deviceId = localStorage.getItem('device_selected_id');
+  if (deviceId) return deviceId;
+  try {
+    const { data } = await userApi.get('/devices');
+    const devices = Array.isArray(data) ? data : [];
+    const current = devices.find((d) => d.status === 'open') || devices[0];
+    if (current) {
+      if (current.id) localStorage.setItem('device_selected_id', current.id);
+      if (current.name) localStorage.setItem('device_selected_name', current.name);
+      if (current.apiKey) localStorage.setItem('device_api_key', current.apiKey);
+      return current.id || '';
+    }
+  } catch (_) {}
+  return '';
+};
 
 const form = ref({
   name: '',
@@ -235,6 +283,125 @@ const addSelectedGroup = async () => {
 // auto-load groups initially (best-effort)
 loadGroups().catch(() => {});
 
+const contacts = ref([]); // { id, firstName, lastName, phone }
+const selectedContactId = ref('');
+const loadingContacts = ref(false);
+const contactSearch = ref('');
+const filteredContacts = computed(() => {
+  const q = contactSearch.value.toLowerCase();
+  if (!q) return contacts.value;
+  return contacts.value.filter((c) =>
+    [c.firstName, c.lastName, c.phone]
+      .filter(Boolean)
+      .some((v) => String(v).toLowerCase().includes(q))
+  );
+});
+
+const loadContacts = async () => {
+  try {
+    loadingContacts.value = true;
+    err.value = '';
+    const deviceId = (await ensureDeviceId()) || undefined;
+    const res = await userApi.get('/contacts', { params: deviceId ? { deviceId } : {} });
+    contacts.value = Array.isArray(res?.data) ? res.data : [];
+  } catch (e) {
+    err.value = e?.response?.data?.message || e?.message || 'Gagal memuat kontak';
+  } finally {
+    loadingContacts.value = false;
+  }
+};
+
+const addSelectedContact = () => {
+  if (!selectedContactId.value) return;
+  if (!recipients.value.includes(selectedContactId.value)) {
+    recipients.value.push(selectedContactId.value);
+    const found = contacts.value.find((c) => c.phone === selectedContactId.value);
+    if (found) recipientLabels.value[selectedContactId.value] = `Kontak: ${found.firstName} ${found.lastName || ''}`;
+  }
+  selectedContactId.value = '';
+};
+
+// Labels (kelas)
+const labels = ref([]); // { value: 'label_<slugOrName>', label: 'Name' }
+const selectedLabelValue = ref('');
+const loadingLabels = ref(false);
+const labelSearch = ref('');
+const filteredLabels = computed(() => {
+  const q = labelSearch.value.toLowerCase();
+  if (!q) return labels.value;
+  return labels.value.filter((l) => l.label.toLowerCase().includes(q));
+});
+
+const mapLabels = (items) => {
+  const arr = Array.isArray(items) ? items : [];
+  return arr
+    .map((it) => {
+      if (typeof it === 'string') {
+        const name = it;
+        return { value: `label_${name}`, label: name };
+      }
+      const name = it.name || it.label || it.title || '';
+      const slug = it.slug || '';
+      const value = `label_${slug || name}`;
+      return name ? { value, label: name } : null;
+    })
+    .filter(Boolean);
+};
+
+const deriveLabelsFromContacts = () => {
+  const names = new Set();
+  (contacts.value || []).forEach((c) => {
+    (c.ContactLabel || []).forEach((cl) => {
+      const n = cl?.label?.name;
+      if (n && !String(n).startsWith('device_')) names.add(n);
+    });
+  });
+  return Array.from(names);
+};
+
+const loadLabels = async () => {
+  try {
+    loadingLabels.value = true;
+    const deviceId = (await ensureDeviceId()) || undefined;
+    const res = await userApi.get('/contacts/labels', { params: deviceId ? { deviceId } : {} });
+    const data = res?.data;
+    let list = Array.isArray(data?.labels) ? data.labels : Array.isArray(data) ? data : [];
+    if (!Array.isArray(list) || list.length === 0) {
+      // fallback dari contacts jika API labels kosong
+      if (!contacts.value || contacts.value.length === 0) {
+        await loadContacts();
+      }
+      list = deriveLabelsFromContacts();
+    }
+    labels.value = mapLabels(list);
+  } catch (_) {
+    // fallback dari contacts jika gagal
+    if (!contacts.value || contacts.value.length === 0) {
+      await loadContacts().catch(() => {});
+    }
+    const list = deriveLabelsFromContacts();
+    labels.value = mapLabels(list);
+  } finally {
+    loadingLabels.value = false;
+  }
+};
+
+const addSelectedLabel = () => {
+  if (!selectedLabelValue.value) return;
+  const val = selectedLabelValue.value;
+  if (!recipients.value.includes(val)) {
+    recipients.value.push(val);
+    const found = labels.value.find((l) => l.value === val);
+    if (found) recipientLabels.value[val] = `Label: ${found.label}`;
+  }
+  selectedLabelValue.value = '';
+};
+
+// auto-load groups & contacts & labels
+loadGroups().catch(() => {});
+loadContacts().catch(() => {});
+loadLabels().catch(() => {});
+
 const validationError = computed(() => {
   if (!form.value.name) return 'Nama wajib diisi';
   if (!form.value.message) return 'Pesan wajib diisi';
@@ -313,4 +480,5 @@ button[disabled] { opacity: .6; cursor: not-allowed; }
 .preview img { max-width: 220px; max-height: 140px; border-radius: 6px; border: 1px solid #ddd; }
 .file-chip { display: inline-block; background: #f3f3f3; padding: 4px 8px; border-radius: 6px; border: 1px solid #ddd; }
 .recipients .add select { flex: 1; }
+.recipients .add input { flex: 1; }
 </style>

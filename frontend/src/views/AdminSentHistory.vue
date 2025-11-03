@@ -6,6 +6,22 @@
       <input v-model="phoneNumber" placeholder="Filter nomor (628xx)" />
       <input v-model="tutorQuery" placeholder="Tutor" />
       <input v-model="messageQuery" placeholder="Cari pesan" />
+      <select v-model="sortBy">
+        <option value="createdAt">Terbaru</option>
+        <option value="to">Nomor</option>
+        <option value="message">Pesan</option>
+        <option value="status">Status</option>
+      </select>
+      <select v-model="sortDir">
+        <option value="desc">↓</option>
+        <option value="asc">↑</option>
+      </select>
+      <select v-model.number="pageSize">
+        <option :value="10">10</option>
+        <option :value="25">25</option>
+        <option :value="50">50</option>
+        <option :value="100">100</option>
+      </select>
       <button @click="load(1)" :disabled="loading">{{ loading ? 'Memuat...' : 'Muat' }}</button>
     </div>
 
@@ -55,22 +71,22 @@
 </template>
 
 <script setup>
-import { ref, onMounted, computed } from 'vue';
+import { ref, onMounted, computed, watch } from 'vue';
 import { userApi, deviceApi } from '../api/http.js';
 
 const rows = ref([]);
 const meta = ref({ totalMessages: 0, currentPage: 1, totalPages: 1, hasMore: false });
 const page = ref(1);
 const pageSize = ref(25);
+const sortBy = ref('createdAt');
+const sortDir = ref('desc');
 const phoneNumber = ref('');
-// Removed contactName filter, replaced with tutor query for client-side filtering
 const tutorQuery = ref('');
 const messageQuery = ref('');
 const loading = ref(false);
 const err = ref('');
 
 const isBroadcast = (r) => String(r?.id || '').startsWith('BC_');
-// Show all rows and apply client-side tutor filter
 const displayedRows = computed(() => {
   const list = rows.value || [];
   if (!tutorQuery.value) return list;
@@ -78,13 +94,10 @@ const displayedRows = computed(() => {
   return list.filter((r) => tutorName(r).toLowerCase().includes(q));
 });
 
-// Map deviceId -> Tutor Name (built from /tutors list)
 const deviceTutorMap = ref({});
-// Map sessionId -> Tutor Name (built from /devices/:deviceId sessions)
 const sessionTutorMap = ref({});
 const tutorMapLoaded = ref(false);
 
-// Map broadcast pkId -> name to classify Reminder vs Feedback
 const broadcastNameMap = ref({});
 const getBroadcastPkId = (id) => {
   const m = String(id || '').match(/^BC_(\d+)_/);
@@ -96,7 +109,6 @@ const loadBroadcasts = async () => {
     const arr = Array.isArray(data) ? data : [];
     const map = {};
     for (const b of arr) {
-      // prefer numeric pkId; some APIs also expose id (UUID) which is not numeric
       const key = Number(b?.pkId ?? b?.id);
       if (Number.isFinite(key)) map[key] = String(b?.name || '');
     }
@@ -116,34 +128,28 @@ const badgeClass = (status) => {
   return 'info';
 };
 const tutorName = (r) => {
-  // Prefer explicit tutor/user field if present
   const f = r.tutor?.firstName || r.user?.firstName;
   const l = r.tutor?.lastName || r.user?.lastName;
   if (f) return [f, l].filter(Boolean).join(' ');
-  // Fallback: resolve via deviceId
   const did = r.deviceId || r.device?.id || r.device_id;
   const byDevice = did && deviceTutorMap.value[did];
   if (byDevice) return byDevice;
-  // Fallback: resolve via sessionId (covers broadcasts sent via sessions)
   const sid = r.sessionId || r.session_id;
   const bySession = sid && sessionTutorMap.value[sid];
   return bySession || '-';
 };
 
 const sourceLabel = (r) => {
-  // Prefer backend-provided type if available
   const t = (r && r.broadcastType) ? String(r.broadcastType).toLowerCase() : '';
   if (t === 'feedback') return 'Feedback';
   if (t === 'reminder') return 'Reminder';
 
-  // Fallback: use backend-provided broadcastName if present
   const name = typeof r?.broadcastName === 'string' ? r.broadcastName : '';
   if (name) {
     const isReminderByName = /\bRecipients\b/i.test(name);
     return isReminderByName ? 'Reminder' : 'Feedback';
   }
 
-  // Final fallback: infer by local map using BC_<pkId> pattern
   const id = r?.id;
   if (!id || typeof id !== 'string' || !id.startsWith('BC_')) return '';
   const pk = getBroadcastPkId(id);
@@ -209,11 +215,9 @@ const load = async (p = page.value) => {
   err.value = '';
   try {
     page.value = p;
-    const params = { page: page.value, pageSize: pageSize.value };
+    const params = { page: page.value, pageSize: pageSize.value, sortBy: sortBy.value, sortDir: sortDir.value };
     if (phoneNumber.value) params.phoneNumber = phoneNumber.value;
-    // Removed contactName param; tutor filtering is handled client-side
     if (messageQuery.value) params.message = messageQuery.value;
-    // Removed onlyBroadcast to truly fetch all sent messages
     const { data } = await userApi.get('/tutors/messages/all', { params });
     rows.value = data.data || [];
     meta.value = data.metadata || meta.value;
@@ -252,7 +256,6 @@ const getBroadcastName = (r) => {
 const isReminderName = (name) => /\b(Recipients|Reminder)\b/i.test(String(name || ''));
 const isFeedbackName = (name) => {
   if (!name) return false;
-  // If the name matches a known feedback course mapping, consider it feedback
   const key = normalizeCourseKey(name);
   return !!fbNameMapNorm.value[key];
 };
@@ -266,8 +269,12 @@ const sourceSimple = (r) => {
   return 'broadcast';
 };
 
+watch([sortBy, sortDir, pageSize], () => {
+  page.value = 1;
+  load(1);
+});
+
 onMounted(async () => {
-  // Load mappings, broadcasts and first page in parallel
   await Promise.allSettled([loadTutorDeviceMap(), loadSessionTutorMap(), loadBroadcasts(), loadFbNameMap(), load(1)]);
 });
 </script>
@@ -276,6 +283,7 @@ onMounted(async () => {
 .wrapper { max-width: 980px; }
 .toolbar { display: flex; gap: 8px; margin: 8px 0 16px; }
 .toolbar input { padding: 8px; border: 1px solid #ddd; border-radius: 6px; }
+.toolbar select { padding: 8px; border: 1px solid #ddd; border-radius: 6px; }
 .table-wrap { overflow: auto; border: 1px solid #eee; border-radius: 8px; }
 table { width: 100%; border-collapse: collapse; }
 th, td { padding: 10px; border-bottom: 1px solid #f0f0f0; text-align: left; }

@@ -7,6 +7,8 @@
         <label>Tujuan</label>
         <label><input type="radio" value="number" v-model="targetType" /> Nomor</label>
         <label><input type="radio" value="group" v-model="targetType" /> Group</label>
+        <label><input type="radio" value="contact" v-model="targetType" /> Kontak</label>
+        <label><input type="radio" value="label" v-model="targetType" /> Label</label>
       </div>
 
       <div class="row" v-if="targetType === 'number'">
@@ -14,7 +16,7 @@
         <input v-model="phone" placeholder="contoh: 62812xxxx" />
       </div>
 
-      <div class="row" v-else>
+      <div class="row" v-else-if="targetType === 'group'">
         <label>Group</label>
         <select v-model="selectedGroupId">
           <option value="" disabled>Pilih group</option>
@@ -23,9 +25,55 @@
         <button @click="loadGroups" :disabled="loadingGroups">{{ loadingGroups ? 'Memuat...' : 'Muat Ulang Grup' }}</button>
       </div>
 
+      <div class="row" v-else-if="targetType === 'contact'">
+        <label>Kontak</label>
+        <select v-model="selectedContacts" multiple size="6">
+          <option v-for="c in contacts" :key="c.value" :value="c.value">{{ c.label }}</option>
+        </select>
+        <button @click="loadContacts" :disabled="loadingContacts">{{ loadingContacts ? 'Memuat...' : 'Muat Ulang Kontak' }}</button>
+      </div>
+
+      <div class="row" v-else>
+        <label>Label</label>
+        <select v-model="selectedLabels" multiple size="6">
+          <option v-for="l in labels" :key="l" :value="l">{{ l }}</option>
+        </select>
+        <button @click="loadLabels" :disabled="loadingLabels">{{ loadingLabels ? 'Memuat...' : 'Muat Ulang Label' }}</button>
+      </div>
+
+      <hr/>
+
       <div class="row">
-        <label>Pesan</label>
-        <textarea v-model="text" rows="4" placeholder="Tulis pesan..."></textarea>
+        <label>Tipe Pesan</label>
+        <label><input type="radio" value="text" v-model="messageMode" /> Teks</label>
+        <label><input type="radio" value="media" v-model="messageMode" /> Media</label>
+      </div>
+
+      <div v-if="messageMode === 'text'">
+        <div class="row">
+          <label>Pesan</label>
+          <textarea v-model="text" rows="4" placeholder="Tulis pesan..."></textarea>
+        </div>
+      </div>
+
+      <div v-else>
+        <div class="row">
+          <label>Jenis Media</label>
+          <select v-model="mediaType">
+            <option value="image">Gambar</option>
+            <option value="document">Dokumen</option>
+            <option value="audio">Audio</option>
+            <option value="video">Video</option>
+          </select>
+        </div>
+        <div class="row">
+          <label>File</label>
+          <input type="file" @change="onFile" :accept="acceptByType" />
+        </div>
+        <div class="row">
+          <label>Keterangan</label>
+          <input v-model="caption" placeholder="Caption (opsional)" />
+        </div>
       </div>
 
       <div class="row">
@@ -33,24 +81,49 @@
       </div>
 
       <p v-if="error" class="error">{{ error }}</p>
-      <p v-if="ok" class="ok">Pesan terkirim.</p>
+      <p v-if="ok" class="ok">Berhasil diproses.</p>
     </section>
   </div>
 </template>
 
 <script setup>
-import { onMounted, ref } from 'vue';
+import { onMounted, ref, computed } from 'vue';
 import { deviceApi, userApi } from '../api/http.js';
 
 const targetType = ref('number');
+const messageMode = ref('text'); // 'text' | 'media'
+
 const phone = ref('');
 const groups = ref([]); // { value, label }
 const selectedGroupId = ref('');
+
+const contacts = ref([]); // { value: phone, label: 'Name (phone)', labels: string[] }
+const selectedContacts = ref([]);
+
+const labels = ref([]); // string[]
+const selectedLabels = ref([]);
+
 const text = ref('');
+const caption = ref('');
+const mediaType = ref('image'); // image|document|audio|video
+const mediaFile = ref(null);
+
 const sending = ref(false);
 const loadingGroups = ref(false);
+const loadingContacts = ref(false);
+const loadingLabels = ref(false);
 const error = ref('');
 const ok = ref(false);
+
+const acceptByType = computed(() => {
+  switch (mediaType.value) {
+    case 'image': return 'image/*';
+    case 'document': return '*/*';
+    case 'audio': return 'audio/*';
+    case 'video': return 'video/*';
+    default: return '*/*';
+  }
+});
 
 // prefer full group id/jid when available; append @g.us if missing
 const normalizeGroupValue = (g) => {
@@ -65,14 +138,14 @@ const mapGroups = (items) => {
   const arr = Array.isArray(items) ? items : [];
   return arr
     .map((g) => ({
-      // prefer full id that already includes hyphen if present in API
       value: normalizeGroupValue(g),
       label: g.subject || g.name || g.title || g.id || g.jid || 'Tanpa Nama',
-      // keep helpers for later resolution
       meta: { id: g.id, shortId: g.shortId || g.idShort, jid: g.jid },
     }))
     .filter((g) => g.value);
 };
+
+const getDeviceId = () => localStorage.getItem('device_selected_id') || undefined;
 
 const loadGroups = async () => {
   try {
@@ -80,14 +153,12 @@ const loadGroups = async () => {
     error.value = '';
     // ensure device api key is available (interceptor does this lazily)
     await userApi.get('/devices').catch(() => {});
-    // try detail endpoint first
     let res;
     try {
       res = await deviceApi.get('/messages/get-groups/detail');
     } catch (_) {
       res = await deviceApi.get('/messages/get-groups');
     }
-    // backend returns an array or an object with results/data
     const payload = res?.data;
     const list = Array.isArray(payload)
       ? payload
@@ -104,26 +175,50 @@ const loadGroups = async () => {
   }
 };
 
+const loadContacts = async () => {
+  try {
+    loadingContacts.value = true;
+    error.value = '';
+    const deviceId = getDeviceId();
+    const { data } = await userApi.get('/contacts', { params: { deviceId } });
+    contacts.value = (Array.isArray(data) ? data : []).map((c) => ({
+      value: String(c.phone || ''),
+      label: `${c.firstName || c.lastName ? (c.firstName || '') + ' ' + (c.lastName || '') : c.phone} (${c.phone})`,
+      labels: (c.ContactLabel || []).map((x) => x.label?.name).filter(Boolean),
+    }));
+  } catch (e) {
+    error.value = e?.response?.data?.message || e?.message || 'Gagal memuat kontak';
+  } finally {
+    loadingContacts.value = false;
+  }
+};
+
+const loadLabels = async () => {
+  try {
+    loadingLabels.value = true;
+    error.value = '';
+    const deviceId = getDeviceId();
+    const { data } = await userApi.get('/contacts/labels', { params: { deviceId } });
+    labels.value = Array.isArray(data) ? data : [];
+  } catch (e) {
+    error.value = e?.response?.data?.message || e?.message || 'Gagal memuat label';
+  } finally {
+    loadingLabels.value = false;
+  }
+};
+
 // Ensure we have a full group JID (with hyphen). If selected id has no hyphen, resolve via API list.
 const ensureFullGroupJid = async (jidOrId) => {
   let val = String(jidOrId || '').trim();
   if (!val) return '';
-  // ensure domain
   if (!val.includes('@')) val = `${val}@g.us`;
-  // if already contains hyphen, return
   if (val.split('@')[0].includes('-')) return val;
-
-  // try direct lookup endpoint by id/shortId
   try {
     const clean = val.replace(/@g\.us$/i, '');
     const byId = await deviceApi.get(`/messages/get-groups/${encodeURIComponent(clean)}`);
     const full = byId?.data?.id || byId?.data?.jid || '';
     if (full && full.split('@')[0].includes('-')) return full.includes('@g.us') ? full : `${full}@g.us`;
-  } catch (_) {
-    // ignore and attempt list fallback
-  }
-
-  // fallback: fetch detail list and match shortId -> full id
+  } catch (_) {}
   try {
     const res = await deviceApi.get('/messages/get-groups/detail');
     const items = Array.isArray(res?.data?.results)
@@ -141,53 +236,79 @@ const ensureFullGroupJid = async (jidOrId) => {
       const full = match.id;
       return full.includes('@g.us') ? full : `${full}@g.us`;
     }
-  } catch (_) {
-    // ignore
-  }
-
-  // return original as last resort (backend will validate)
+  } catch (_) {}
   return val;
 };
 
-const validate = () => {
-  if (!text.value.trim()) {
-    error.value = 'Pesan tidak boleh kosong';
-    return false;
-  }
+const onFile = (e) => {
+  const f = e.target.files && e.target.files[0];
+  mediaFile.value = f || null;
+};
+
+const buildRecipients = async () => {
   if (targetType.value === 'number') {
-    if (!phone.value.trim()) { error.value = 'Nomor wajib diisi'; return false; }
-  } else {
-    if (!selectedGroupId.value) { error.value = 'Pilih group'; return false; }
+    return phone.value ? [String(phone.value).trim()] : [];
   }
+  if (targetType.value === 'group') {
+    const gid = await ensureFullGroupJid(selectedGroupId.value);
+    return gid ? [gid] : [];
+  }
+  if (targetType.value === 'contact') {
+    return selectedContacts.value.map((p) => String(p)).filter(Boolean);
+  }
+  // label: expand via loaded contacts
+  const selected = new Set(selectedLabels.value);
+  const phones = contacts.value
+    .filter((c) => (c.labels || []).some((l) => selected.has(l)))
+    .map((c) => c.value)
+    .filter(Boolean);
+  return Array.from(new Set(phones));
+};
+
+const validate = async () => {
+  if (messageMode.value === 'text') {
+    if (!text.value.trim()) { error.value = 'Pesan tidak boleh kosong'; return false; }
+  } else {
+    if (!mediaFile.value) { error.value = 'File media wajib diisi'; return false; }
+  }
+  const rec = await buildRecipients();
+  if (!rec.length) { error.value = 'Tujuan belum dipilih/dimasukkan'; return false; }
   return true;
 };
 
 const send = async () => {
-  if (!validate()) return;
+  if (!(await validate())) return;
   sending.value = true;
   ok.value = false;
   error.value = '';
   try {
-    // resolve recipient
-    let recipientValue;
-    if (targetType.value === 'number') {
-      recipientValue = String(phone.value).trim();
+    const recipients = await buildRecipients();
+
+    if (messageMode.value === 'text') {
+      const isGroup = targetType.value === 'group';
+      const payload = recipients.map((r) => ({
+        recipient: r,
+        ...(isGroup ? { type: 'group' } : {}),
+        message: { text: text.value },
+      }));
+      await deviceApi.post('/messages/send', payload);
     } else {
-      recipientValue = await ensureFullGroupJid(selectedGroupId.value);
+      const form = new FormData();
+      // append recipients as repeated field
+      for (const r of recipients) form.append('recipients', r);
+      if (caption.value) form.append('caption', caption.value);
+      // form.append('delay', String(5000)); // optional
+      const fileField = mediaType.value === 'document' ? 'document' : mediaType.value; // image|document|audio|video
+      form.append(fileField, mediaFile.value);
+      const path = `/messages/send/${mediaType.value}`;
+      await deviceApi.post(path, form);
     }
 
-    const payload = [{
-      recipient: recipientValue,
-      message: { text: text.value },
-    }];
-
-    await deviceApi.post('/messages/send', payload);
     ok.value = true;
   } catch (e) {
-    const msg = e?.response?.data?.message || e?.message || 'Gagal mengirim pesan';
-    // provide friendlier hint for invalid group jid
+    const msg = e?.response?.data?.message || e?.response?.data?.error || e?.message || 'Gagal mengirim';
     error.value = /Invalid group JID/i.test(msg)
-      ? 'ID grup tidak valid. Silakan pilih ulang grup dari daftar agar ID lengkap (dengan hyphen) terpakai.'
+      ? 'ID grup tidak valid. Pilih ulang grup agar ID lengkap (dengan hyphen) terpakai.'
       : msg;
   } finally {
     sending.value = false;
@@ -195,8 +316,9 @@ const send = async () => {
 };
 
 onMounted(() => {
-  // prefetch groups for convenience
   loadGroups();
+  loadContacts();
+  loadLabels();
 });
 </script>
 

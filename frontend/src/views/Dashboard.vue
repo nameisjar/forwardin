@@ -5,13 +5,14 @@
       <nav>
         <router-link to="/add-device">Tambah Device</router-link>
         <router-link to="/pairing">Pairing (QR)</router-link>
-        <router-link to="/send-message">Kirim Pesan</router-link>
+        <router-link to="/contacts">Kontak</router-link>
         <router-link to="/broadcasts">Broadcast</router-link>
         <router-link to="/schedule-feedback">Jadwal Feedback</router-link>
         <router-link to="/schedule-reminder">Jadwal Reminder Berkala</router-link>
         <router-link to="/schedules">Jadwal Saya</router-link>
         <!-- Admin-only menus -->
         <template v-if="isAdmin">
+          <router-link to="/send-message">Kirim Pesan</router-link>
           <router-link to="/templates">Templates</router-link>
           <hr/>
           <router-link to="/admin/tutors">Kelola Tutor</router-link>

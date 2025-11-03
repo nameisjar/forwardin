@@ -162,8 +162,15 @@ export async function createInstance(options: createInstanceOptions) {
                 } catch (e) {
                     logger.error(e, 'An error occured during QR generation');
                     res.status(500).json({ error: 'Unable to generate QR' });
+                    res.end();
                 }
             }
+            // Don't destroy the session immediately, let it continue for potential reconnection
+            return;
+        }
+
+        // Only destroy if connection is closed and not generating QR
+        if (connectionState.connection === 'close') {
             destroy();
         }
     };
@@ -171,6 +178,7 @@ export async function createInstance(options: createInstanceOptions) {
     const handleSSEConnectionUpdate = async () => {
         let qr: string | undefined = undefined;
         let qrAscii: string | undefined = undefined;
+
         if (connectionState.qr?.length) {
             try {
                 qr = await toDataURL(connectionState.qr);
@@ -184,26 +192,44 @@ export async function createInstance(options: createInstanceOptions) {
                 }
             } catch (e) {
                 logger.error(e, 'An error occured during QR generation');
+                // Continue even if QR generation fails
             }
         }
 
         const currentGenerations = SSEQRGenerations.get(sessionId) ?? 0;
         const maxGenerations = Math.max(1, SSE_MAX_QR_GENERATION);
-        if (!res || res.writableEnded || (qr && currentGenerations >= maxGenerations)) {
-            res && !res.writableEnded && res.end();
+
+        // Check if response is still writable
+        if (!res || res.writableEnded) {
             destroy();
+            return;
+        }
+
+        // If we have QR and reached max generations, end gracefully
+        if (qr && currentGenerations >= maxGenerations) {
+            const data = { ...connectionState, qr, qrRaw: qrAscii, maxGenerationsReached: true };
+            res.write(`data: ${JSON.stringify(data)}\n\n`);
+            setTimeout(() => {
+                if (!res.writableEnded) {
+                    res.end();
+                }
+                destroy();
+            }, 1000); // Give time for the client to receive the final QR
             return;
         }
 
         const data = { ...connectionState, qr, qrRaw: qrAscii };
         if (qr) SSEQRGenerations.set(sessionId, currentGenerations + 1);
-        res.write(`data: ${JSON.stringify(data)}\n\n`);
 
-        if (qr && currentGenerations + 1 >= maxGenerations) {
-            res.end();
+        try {
+            res.write(`data: ${JSON.stringify(data)}\n\n`);
+        } catch (e) {
+            logger.error(e, 'Error writing SSE data');
             destroy();
             return;
         }
+
+        // Don't end the connection immediately, let it continue for more QR updates or connection success
     };
 
     const handleConnectionUpdate = SSE ? handleSSEConnectionUpdate : handleNormalConnectionUpdate;

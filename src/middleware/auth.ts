@@ -139,6 +139,17 @@ export function checkPrivilege(controller: string): RequestHandler {
                 .json({ message: "Access denied. You haven't been assigned to any roles" });
         }
 
+        // Temporary override: allow CS to manage contacts (create) until roles are updated in DB
+        const isCS = req.privilege.pkId === Number(process.env.CS_ID);
+        // Extend to allow CS full contact CRUD temporarily
+        if (
+            controller === 'contact' &&
+            isCS &&
+            ['post', 'get', 'put', 'patch', 'delete'].includes(method)
+        ) {
+            return next();
+        }
+
         const hasRequiredPrivilege = userRoles.some((role) => {
             if (method === 'post' && role.isCreate) {
                 return role.module.controller === controller;

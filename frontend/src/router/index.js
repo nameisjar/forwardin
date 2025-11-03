@@ -12,6 +12,7 @@ import AdminSentHistory from '../views/AdminSentHistory.vue';
 import SendMessage from '../views/SendMessage.vue';
 import Schedules from '../views/Schedules.vue';
 import Broadcasts from '../views/Broadcasts.vue';
+import Contacts from '../views/Contacts.vue';
 import { userApi } from '../api/http.js';
 
 const routes = [
@@ -23,6 +24,7 @@ const routes = [
             { path: '', redirect: '/add-device' },
             { path: 'add-device', name: 'add-device', component: AddDevice },
             { path: 'pairing', name: 'pairing', component: PairSession },
+            { path: 'contacts', name: 'contacts', component: Contacts },
             { path: 'schedule-feedback', name: 'schedule-feedback', component: ScheduleFeedback },
             { path: 'schedule-reminder', name: 'schedule-reminder', component: ScheduleReminder },
             { path: 'schedules', name: 'schedules', component: Schedules },
@@ -53,7 +55,12 @@ const routes = [
                 component: AdminSentHistory,
                 meta: { requiresAdmin: true },
             },
-            { path: 'send-message', name: 'send-message', component: SendMessage },
+            {
+                path: 'send-message',
+                name: 'send-message',
+                component: SendMessage,
+                meta: { requiresAdmin: true },
+            },
         ],
     },
 ];

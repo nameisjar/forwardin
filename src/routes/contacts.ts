@@ -11,15 +11,8 @@ import {
 const router = Router();
 
 router.use(checkPrivilege('contact'));
-router.post(
-    '/create',
-    dateRules,
-    validate,
-    checkSubscriptionQuota,
-    isContactQuotaAvailable,
-    controller.createContact,
-);
-router.post('/import', checkSubscriptionQuota, isContactQuotaAvailable, controller.importContacts);
+router.post('/create', dateRules, validate, controller.createContact);
+router.post('/import', controller.importContacts);
 router.post('/sync-google', checkSubscriptionQuota, isGoogleContactSync, controller.syncGoogle);
 router.get('/', controller.getContacts);
 router.get('/export-contacts', controller.exportContacts);

@@ -72,6 +72,8 @@ async function seedPrivileges(prisma: PrismaClient, logger: Logger) {
                     'analytics',
                     'customerService',
                     'order',
+                    // allow CS to manage contacts
+                    'contact',
                 ];
                 const isCsController = csControllers.includes(controllerName);
 

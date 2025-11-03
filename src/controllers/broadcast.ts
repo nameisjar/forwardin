@@ -731,7 +731,7 @@ schedule.scheduleJob('* * * * *', async () => {
                 };
 
                 // Generate deterministic outgoing message id and text
-                const outgoingId = `BC_${broadcast.pkId}_${Date.now()}`;
+                const outgoingId = `BC_${broadcast.pkId}_${Date.now()}_${i}`;
                 const textPayload = replaceVariables(broadcast.message, variables);
 
                 if (broadcast.mediaPath) {

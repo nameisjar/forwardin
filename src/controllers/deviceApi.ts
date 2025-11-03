@@ -1959,11 +1959,13 @@ export const createBroadcastFeedback: RequestHandler = async (req, res) => {
             }
 
             const { deviceId } = req.authenticatedDevice;
-            const { courseName, startLesson = 1, recipients } = req.body;
+            const { name, courseName, startLesson = 1, recipients } = req.body;
             const delay = Number(req.body.delay) ?? 5000;
 
-            if (!courseName || !recipients) {
-                return res.status(400).json({ message: 'Missing required fields' });
+            if (!name || !courseName || !recipients) {
+                return res
+                    .status(400)
+                    .json({ message: 'Missing required fields: name, courseName, recipients' });
             }
 
             if (
@@ -2014,7 +2016,7 @@ export const createBroadcastFeedback: RequestHandler = async (req, res) => {
 
                     await transaction.broadcast.create({
                         data: {
-                            name: courseName,
+                            name: `${name} - ${courseName}`, // Store as "feedbackName - courseName"
                             message: feedback.message,
                             schedule,
                             deviceId: device.pkId,
@@ -2028,7 +2030,10 @@ export const createBroadcastFeedback: RequestHandler = async (req, res) => {
                 }
             });
 
-            res.status(201).json({ message: 'Broadcasts created successfully' });
+            res.status(201).json({
+                message: 'Feedback broadcasts created successfully',
+                broadcastName: `${name} - ${courseName}`,
+            });
         });
     } catch (error) {
         logger.error(error);
