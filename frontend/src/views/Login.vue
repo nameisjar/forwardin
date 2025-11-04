@@ -1,16 +1,16 @@
 <template>
-  <div class="auth">
+  <div class="wrapper auth">
     <h2>Login</h2>
-    <form @submit.prevent="login">
-      <label>
-        email/username
+    <form @submit.prevent="login" class="card form">
+      <label class="field">
+        <span>email/username</span>
         <input v-model="identifier" placeholder="email or username" />
       </label>
-      <label>
-        Password
+      <label class="field">
+        <span>Password</span>
         <input v-model="password" type="password" placeholder="password" />
       </label>
-      <button :disabled="loading">{{ loading ? 'Signing in...' : 'Login' }}</button>
+      <button class="btn primary" :disabled="loading">{{ loading ? 'Signing in...' : 'Login' }}</button>
       <p v-if="error" class="error">{{ error }}</p>
     </form>
   </div>
@@ -46,9 +46,13 @@ const login = async () => {
 </script>
 
 <style scoped>
-.auth { max-width: 420px; margin: 64px auto; padding: 24px; border: 1px solid #eee; border-radius: 8px; }
-label { display: block; margin: 12px 0; }
-input { width: 100%; padding: 10px; }
-button { width: 100%; padding: 10px; margin-top: 12px; }
+.wrapper { max-width: 420px; margin: 64px auto; }
+.card { background: #fff; border: 1px solid #eaeaea; border-radius: 12px; box-shadow: 0 1px 2px rgba(16,24,40,0.04); padding: 16px; }
+.form { display: flex; flex-direction: column; gap: 10px; }
+.field { display: flex; flex-direction: column; gap: 6px; }
+.field > span { font-size: 12px; color: #667085; }
+.field input { padding: 10px; border: 1px solid #d8dde6; border-radius: 8px; }
+.btn { height: 40px; padding: 0 12px; border: 1px solid #2563eb; background: #2563eb; color: #fff; border-radius: 8px; cursor: pointer; font-weight: 500; }
+.btn:disabled { opacity: .7; cursor: default; }
 .error { color: #c00; }
 </style>

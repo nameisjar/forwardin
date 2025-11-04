@@ -1,83 +1,107 @@
 <template>
-  <div>
+  <div class="wrapper">
     <h2>Kirim Pesan</h2>
 
-    <section class="form">
-      <div class="row">
-        <label>Tujuan</label>
-        <label><input type="radio" value="number" v-model="targetType" /> Nomor</label>
-        <label><input type="radio" value="group" v-model="targetType" /> Group</label>
-        <label><input type="radio" value="contact" v-model="targetType" /> Kontak</label>
-        <label><input type="radio" value="label" v-model="targetType" /> Label</label>
+    <section class="form card">
+      <!-- Target selector -->
+      <div class="row radios">
+        <label class="field">
+          <span>Tujuan</span>
+          <div class="choices">
+            <label><input type="radio" value="number" v-model="targetType" /> Nomor</label>
+            <label><input type="radio" value="group" v-model="targetType" /> Group</label>
+            <label><input type="radio" value="contact" v-model="targetType" /> Kontak</label>
+            <label><input type="radio" value="label" v-model="targetType" /> Label</label>
+          </div>
+        </label>
       </div>
 
       <div class="row" v-if="targetType === 'number'">
-        <label>Nomor</label>
-        <input v-model="phone" placeholder="contoh: 62812xxxx" />
+        <label class="field grow">
+          <span>Nomor</span>
+          <input v-model="phone" placeholder="contoh: 62812xxxx" />
+        </label>
       </div>
 
       <div class="row" v-else-if="targetType === 'group'">
-        <label>Group</label>
-        <select v-model="selectedGroupId">
-          <option value="" disabled>Pilih group</option>
-          <option v-for="g in groups" :key="g.value" :value="g.value">{{ g.label }}</option>
-        </select>
-        <button @click="loadGroups" :disabled="loadingGroups">{{ loadingGroups ? 'Memuat...' : 'Muat Ulang Grup' }}</button>
+        <label class="field grow">
+          <span>Group</span>
+          <select v-model="selectedGroupId">
+            <option value="" disabled>Pilih group</option>
+            <option v-for="g in groups" :key="g.value" :value="g.value">{{ g.label }}</option>
+          </select>
+        </label>
+        <button class="btn outline" @click="loadGroups" :disabled="loadingGroups">{{ loadingGroups ? 'Memuat...' : 'Muat Ulang Grup' }}</button>
       </div>
 
       <div class="row" v-else-if="targetType === 'contact'">
-        <label>Kontak</label>
-        <select v-model="selectedContacts" multiple size="6">
-          <option v-for="c in contacts" :key="c.value" :value="c.value">{{ c.label }}</option>
-        </select>
-        <button @click="loadContacts" :disabled="loadingContacts">{{ loadingContacts ? 'Memuat...' : 'Muat Ulang Kontak' }}</button>
+        <label class="field grow">
+          <span>Kontak</span>
+          <select v-model="selectedContacts" multiple size="6">
+            <option v-for="c in contacts" :key="c.value" :value="c.value">{{ c.label }}</option>
+          </select>
+        </label>
+        <button class="btn outline" @click="loadContacts" :disabled="loadingContacts">{{ loadingContacts ? 'Memuat...' : 'Muat Ulang Kontak' }}</button>
       </div>
 
       <div class="row" v-else>
-        <label>Label</label>
-        <select v-model="selectedLabels" multiple size="6">
-          <option v-for="l in labels" :key="l" :value="l">{{ l }}</option>
-        </select>
-        <button @click="loadLabels" :disabled="loadingLabels">{{ loadingLabels ? 'Memuat...' : 'Muat Ulang Label' }}</button>
-      </div>
-
-      <hr/>
-
-      <div class="row">
-        <label>Tipe Pesan</label>
-        <label><input type="radio" value="text" v-model="messageMode" /> Teks</label>
-        <label><input type="radio" value="media" v-model="messageMode" /> Media</label>
-      </div>
-
-      <div v-if="messageMode === 'text'">
-        <div class="row">
-          <label>Pesan</label>
-          <textarea v-model="text" rows="4" placeholder="Tulis pesan..."></textarea>
-        </div>
-      </div>
-
-      <div v-else>
-        <div class="row">
-          <label>Jenis Media</label>
-          <select v-model="mediaType">
-            <option value="image">Gambar</option>
-            <option value="document">Dokumen</option>
-            <option value="audio">Audio</option>
-            <option value="video">Video</option>
+        <label class="field grow">
+          <span>Label</span>
+          <select v-model="selectedLabels" multiple size="6">
+            <option v-for="l in labels" :key="l" :value="l">{{ l }}</option>
           </select>
-        </div>
-        <div class="row">
-          <label>File</label>
-          <input type="file" @change="onFile" :accept="acceptByType" />
-        </div>
-        <div class="row">
-          <label>Keterangan</label>
-          <input v-model="caption" placeholder="Caption (opsional)" />
-        </div>
+        </label>
+        <button class="btn outline" @click="loadLabels" :disabled="loadingLabels">{{ loadingLabels ? 'Memuat...' : 'Muat Ulang Label' }}</button>
       </div>
 
-      <div class="row">
-        <button @click="send" :disabled="sending">{{ sending ? 'Mengirim...' : 'Kirim' }}</button>
+      <hr />
+
+      <!-- Message type -->
+      <div class="row radios">
+        <label class="field">
+          <span>Tipe Pesan</span>
+          <div class="choices">
+            <label><input type="radio" value="text" v-model="messageMode" /> Teks</label>
+            <label><input type="radio" value="media" v-model="messageMode" /> Media</label>
+          </div>
+        </label>
+      </div>
+
+      <template v-if="messageMode === 'text'">
+        <div class="row">
+          <label class="field grow">
+            <span>Pesan</span>
+            <textarea v-model="text" rows="4" placeholder="Tulis pesan..."></textarea>
+          </label>
+        </div>
+      </template>
+
+      <template v-else>
+        <div class="row">
+          <label class="field">
+            <span>Jenis Media</span>
+            <select v-model="mediaType">
+              <option value="image">Gambar</option>
+              <option value="document">Dokumen</option>
+              <option value="audio">Audio</option>
+              <option value="video">Video</option>
+            </select>
+          </label>
+          <label class="field grow">
+            <span>File</span>
+            <input type="file" @change="onFile" :accept="acceptByType" />
+          </label>
+        </div>
+        <div class="row">
+          <label class="field grow">
+            <span>Keterangan</span>
+            <input v-model="caption" placeholder="Caption (opsional)" />
+          </label>
+        </div>
+      </template>
+
+      <div class="row actions">
+        <button class="btn primary" @click="send" :disabled="sending">{{ sending ? 'Mengirim...' : 'Kirim' }}</button>
       </div>
 
       <p v-if="error" class="error">{{ error }}</p>
@@ -323,11 +347,26 @@ onMounted(() => {
 </script>
 
 <style scoped>
-.form { display: flex; flex-direction: column; gap: 12px; max-width: 720px; }
-.row { display:flex; gap:8px; align-items:center; }
-.row.small label { width: 120px; }
-label { min-width: 80px; }
-select, input, textarea { padding: 8px; width: 100%; max-width: 420px; }
+.wrapper { max-width: 920px; margin: 0 auto; }
+.card { background: #fff; border: 1px solid #eaeaea; border-radius: 12px; box-shadow: 0 1px 2px rgba(16,24,40,0.04); padding: 12px; }
+
+.form { display: flex; flex-direction: column; gap: 12px; }
+.row { display:flex; gap:12px; align-items:flex-end; flex-wrap: wrap; }
+.radios .choices { display:flex; gap: 12px; align-items: center; }
+
+.field { display:flex; flex-direction: column; gap:6px; }
+.field > span { font-size: 12px; color: #667085; }
+.field input, .field select, .field textarea { padding: 8px 10px; border: 1px solid #d8dde6; border-radius: 8px; background: #fff; }
+.field textarea { min-height: 100px; }
+.field.grow { flex: 1; min-width: 260px; }
+
+.actions { margin-top: 6px; }
+
+.btn { height: 36px; padding: 0 12px; border: 1px solid #d0d5dd; background: #f9fafb; border-radius: 8px; cursor: pointer; font-weight: 500; }
+.btn:disabled { opacity: .6; cursor: not-allowed; }
+.btn.primary { background: #2563eb; border-color: #2563eb; color: #fff; }
+.btn.outline { background: #fff; }
+
 .error { color: #b00020; }
 .ok { color: #2e7d32; }
 </style>

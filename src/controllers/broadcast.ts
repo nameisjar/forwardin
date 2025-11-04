@@ -663,6 +663,82 @@ export const deleteBroadcasts: RequestHandler = async (req, res) => {
     }
 };
 
+export const bulkDeleteBroadcasts: RequestHandler = async (req, res) => {
+    try {
+        const isSentParam = (req.query.isSent as string | undefined)?.toLowerCase();
+        const olderThanDaysRaw = req.query.olderThanDays as string | undefined;
+        const cascadeParam = (req.query.cascade as string | undefined)?.toLowerCase();
+        const deviceId = (req.query.deviceId as string | undefined) || undefined;
+
+        const cascade =
+            cascadeParam === undefined ? true : ['1', 'true', 'yes'].includes(cascadeParam);
+        const olderThanDays = olderThanDaysRaw ? Math.max(0, Number(olderThanDaysRaw)) : undefined;
+
+        let isSentFilter: boolean | undefined = undefined;
+        if (isSentParam === 'true' || isSentParam === '1') isSentFilter = true;
+        if (isSentParam === 'false' || isSentParam === '0') isSentFilter = false;
+
+        // If no filter provided, default to isSent=true for safety
+        if (isSentFilter === undefined && olderThanDays === undefined) {
+            isSentFilter = true;
+        }
+
+        const where: any = {
+            // user scoping (same as getAllBroadcasts)
+            device: {
+                userId:
+                    req.privilege.pkId !== Number(process.env.SUPER_ADMIN_ID)
+                        ? req.authenticatedUser.pkId
+                        : undefined,
+                id: deviceId,
+            },
+        };
+        if (typeof isSentFilter === 'boolean') where.isSent = isSentFilter;
+        if (olderThanDays !== undefined) {
+            const threshold = new Date(Date.now() - olderThanDays * 24 * 60 * 60 * 1000);
+            where.createdAt = { lt: threshold };
+        }
+
+        // Find candidates
+        const candidates = await prisma.broadcast.findMany({ select: { pkId: true }, where });
+        if (!candidates.length) {
+            return res
+                .status(200)
+                .json({
+                    message: 'No broadcasts matched the criteria',
+                    broadcastsDeleted: 0,
+                    outgoingDeleted: 0,
+                });
+        }
+
+        const pkIds = candidates.map((c) => c.pkId);
+        let outgoingDeleted = 0;
+
+        await prisma.$transaction(async (tx) => {
+            if (cascade) {
+                // Delete related outgoing messages in chunks to avoid huge OR clauses
+                const chunkSize = 50;
+                for (let i = 0; i < pkIds.length; i += chunkSize) {
+                    const chunk = pkIds.slice(i, i + chunkSize);
+                    const orConds = chunk.map((pk) => ({ id: { startsWith: `BC_${pk}_` } }));
+                    const resDel = await tx.outgoingMessage.deleteMany({ where: { OR: orConds } });
+                    outgoingDeleted += resDel.count;
+                }
+            }
+            await tx.broadcast.deleteMany({ where: { pkId: { in: pkIds } } });
+        });
+
+        res.status(200).json({
+            message: 'Bulk delete completed',
+            broadcastsDeleted: pkIds.length,
+            outgoingDeleted,
+        });
+    } catch (error) {
+        logger.error(error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};
+
 // run scheduler every minute instead of invalid pattern
 schedule.scheduleJob('* * * * *', async () => {
     try {

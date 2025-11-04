@@ -27,6 +27,7 @@ router.get('/me', authMiddleware, tutor.getMe);
 router.post('/', authMiddleware, isAdmin, tutor.createTutor);
 router.get('/', authMiddleware, isAdmin, tutor.listTutors);
 router.get('/messages/all', authMiddleware, isAdmin, tutor.listOutgoingMessagesAll);
+router.delete('/messages/all', authMiddleware, isAdmin, tutor.deleteOutgoingMessagesAll);
 
 // Tutor flows without subscription involvement
 router.post('/devices', authMiddleware, isTutor, tutor.createDeviceNoSubscription);

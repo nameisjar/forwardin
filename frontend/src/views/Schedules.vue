@@ -2,7 +2,7 @@
   <div class="wrapper">
     <h2>Jadwal Saya</h2>
 
-    <div class="toolbar">
+    <div class="toolbar card">
       <input v-model="q" placeholder="Cari nama..." />
       <select v-model="statusFilter">
         <option value="all">Semua</option>
@@ -27,10 +27,10 @@
         <option :value="25">25</option>
         <option :value="50">50</option>
       </select>
-      <button @click="load" :disabled="loading">{{ loading ? 'Memuat...' : 'Muat Ulang' }}</button>
+      <button class="btn outline" @click="load" :disabled="loading">{{ loading ? 'Memuat...' : 'Muat Ulang' }}</button>
     </div>
 
-    <div class="table-wrap">
+    <div class="table-wrap card">
       <table>
         <thead>
           <tr>
@@ -77,9 +77,9 @@
     </div>
 
     <div class="pager" v-if="meta.totalPages > 1">
-      <button :disabled="page<=1 || loading" @click="goPrev">Prev</button>
+      <button class="btn" :disabled="page<=1 || loading" @click="goPrev">Prev</button>
       <span>Halaman {{ page }} / {{ meta.totalPages }}</span>
-      <button :disabled="!meta.hasMore || loading" @click="goNext">Next</button>
+      <button class="btn" :disabled="!meta.hasMore || loading" @click="goNext">Next</button>
     </div>
 
     <p v-if="msg" class="success">{{ msg }}</p>
@@ -400,12 +400,16 @@ onMounted(async () => {
 </script>
 
 <style scoped>
-.wrapper { max-width: 980px; }
-.toolbar { display: flex; gap: 8px; margin: 8px 0 16px; }
+.wrapper { max-width: 1200px; margin: 0 auto; padding: 0 16px; }
+.toolbar { display: flex; gap: 8px; margin: 8px 0 16px; align-items: center; flex-wrap: wrap; }
+.card { background: #fff; border: 1px solid #eaeaea; border-radius: 12px; box-shadow: 0 1px 2px rgba(16,24,40,0.04); padding: 10px; }
 .toolbar input, .toolbar select { padding: 8px; border: 1px solid #ddd; border-radius: 6px; }
-.table-wrap { overflow: auto; border: 1px solid #eee; border-radius: 8px; }
-table { width: 100%; border-collapse: collapse; }
-th, td { padding: 10px; border-bottom: 1px solid #f0f0f0; text-align: left; }
+.btn { height: 36px; padding: 0 12px; border: 1px solid #d0d5dd; background: #f9fafb; border-radius: 8px; cursor: pointer; font-weight: 500; }
+.btn.outline { background: #fff; }
+.table-wrap { overflow: auto; border: 1px solid #eee; border-radius: 12px; }
+ table { width: 100%; border-collapse: collapse; }
+ thead th { position: sticky; top: 0; background: #f8fafc; z-index: 1; }
+ th, td { padding: 10px; border-bottom: 1px solid #f0f0f0; text-align: left; }
 .name { font-weight: 600; }
 .dim { color: #777; }
 .badge { padding: 2px 8px; border-radius: 10px; font-size: 12px; }
@@ -422,5 +426,5 @@ th, td { padding: 10px; border-bottom: 1px solid #f0f0f0; text-align: left; }
 .btn-small.danger { border-color: #c33; background: #e74c3c; }
 .chip-num { background: #f7fff2; border-color: #cfe9bf; color: #2f7a1f; }
 .chip-label { background: #fff7f0; border-color: #ffd8b5; color: #8a4b0f; }
-.pager { display:flex; gap:8px; align-items:center; margin-top:12px; }
+.pager { display:flex; gap:8px; align-items:center; margin-top:12px; justify-content: center; }
 </style>

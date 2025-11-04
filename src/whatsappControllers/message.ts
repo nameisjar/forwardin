@@ -358,7 +358,7 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
 
         // event.on('messaging-history.set', set);
         event.on('messages.upsert', upsert);
-        // event.on('messages.update', update);
+        event.on('messages.update', update);
         event.on('messages.delete', del);
         event.on('message-receipt.update', updateReceipt);
         event.on('messages.reaction', updateReaction);

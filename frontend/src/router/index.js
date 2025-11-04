@@ -83,7 +83,8 @@ router.beforeEach(async (to, _from, next) => {
     if (to.meta && to.meta.requiresAdmin) {
         try {
             const { data } = await userApi.get('/tutors/me');
-            const isAdmin = data?.privilege?.name === 'admin';
+            const roleName = (data?.privilege?.name || '').toLowerCase();
+            const isAdmin = roleName === 'admin' || roleName === 'super admin';
             if (!isAdmin) {
                 next({ name: 'add-device' });
                 return;

@@ -2,7 +2,7 @@
   <div class="wrapper">
     <h2>Broadcast</h2>
 
-    <section class="form">
+    <section class="form card">
       <form @submit.prevent="submit" class="grid">
         <div class="field">
           <label>Nama</label>
@@ -51,9 +51,8 @@
                 @keydown.enter.prevent="addRecipientsFromInput"
                 placeholder="cth: 62812... jika banyak: 62812...,62813...,62814..."
               />
-              <button type="button" @click="addRecipientsFromInput">Tambah</button>
+              <button type="button" class="btn" @click="addRecipientsFromInput">Tambah</button>
             </div>
-            <!-- <small class="hint">Khusus: gunakan "all" untuk semua kontak, atau "label_nama" untuk label tertentu. Jangan campur keduanya.</small> -->
           </div>
         </div>
 
@@ -68,8 +67,8 @@
                   {{ contactDisplay(c) }}
                 </option>
               </select>
-              <button type="button" @click="addSelectedContact" :disabled="!selectedContactId">Tambah Kontak</button>
-              <button type="button" @click="loadContacts" :disabled="loadingContacts">{{ loadingContacts ? 'Memuat...' : 'Muat Kontak' }}</button>
+              <button type="button" class="btn" @click="addSelectedContact" :disabled="!selectedContactId">Tambah Kontak</button>
+              <button type="button" class="btn outline" @click="loadContacts" :disabled="loadingContacts">{{ loadingContacts ? 'Memuat...' : 'Muat Kontak' }}</button>
             </div>
           </div>
         </div>
@@ -82,10 +81,9 @@
                 <option value="" disabled>Pilih group</option>
                 <option v-for="g in groups" :key="g.value" :value="g.value">{{ g.label }}</option>
               </select>
-              <button type="button" @click="addSelectedGroup" :disabled="!selectedGroupId">Tambah Grup</button>
-              <button type="button" @click="loadGroups" :disabled="loadingGroups">{{ loadingGroups ? 'Memuat...' : 'Muat Ulang Grup' }}</button>
+              <button type="button" class="btn" @click="addSelectedGroup" :disabled="!selectedGroupId">Tambah Grup</button>
+              <button type="button" class="btn outline" @click="loadGroups" :disabled="loadingGroups">{{ loadingGroups ? 'Memuat...' : 'Muat Ulang Grup' }}</button>
             </div>
-            <!-- <small class="hint">Grup yang ditambahkan akan dikirim ke JID grup (bukan ke tiap anggota).</small> -->
           </div>
         </div>
 
@@ -98,14 +96,14 @@
                 <option value="" disabled>Pilih label</option>
                 <option v-for="l in filteredLabels" :key="l.value" :value="l.value">{{ l.label }}</option>
               </select>
-              <button type="button" @click="addSelectedLabel" :disabled="!selectedLabelValue">Tambah Label</button>
-              <button type="button" @click="loadLabels" :disabled="loadingLabels">{{ loadingLabels ? 'Memuat...' : 'Muat Label' }}</button>
+              <button type="button" class="btn" @click="addSelectedLabel" :disabled="!selectedLabelValue">Tambah Label</button>
+              <button type="button" class="btn outline" @click="loadLabels" :disabled="loadingLabels">{{ loadingLabels ? 'Memuat...' : 'Muat Label' }}</button>
             </div>
           </div>
         </div>
 
         <div class="actions span-2">
-          <button :disabled="loading || !!validationError">{{ loading ? 'Memproses...' : 'Kirim Broadcast' }}</button>
+          <button class="btn primary" :disabled="loading || !!validationError">{{ loading ? 'Memproses...' : 'Kirim Broadcast' }}</button>
         </div>
       </form>
 
@@ -478,14 +476,19 @@ async function submit() {
 </script>
 
 <style scoped>
-.wrapper { max-width: 920px; }
+.wrapper { max-width: 1200px; margin: 0 auto; padding: 0 16px; }
+.card { background: #fff; border: 1px solid #eaeaea; border-radius: 12px; box-shadow: 0 1px 2px rgba(16,24,40,0.04); padding: 12px; }
 .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 .field { display: flex; flex-direction: column; }
-.field input, .field textarea { padding: 8px; border: 1px solid #d6d6d6; border-radius: 6px; }
+.field input, .field textarea, .field select { padding: 8px 10px; border: 1px solid #d6d6d6; border-radius: 8px; }
 .span-2 { grid-column: span 2; }
 .actions { display: flex; justify-content: flex-end; }
-button { padding: 8px 14px; border-radius: 6px; border: 1px solid #0a7; background: #0a7; color: #fff; cursor: pointer; }
-button[disabled] { opacity: .6; cursor: not-allowed; }
+
+.btn { height: 36px; padding: 0 12px; border: 1px solid #d0d5dd; background: #f9fafb; border-radius: 8px; cursor: pointer; font-weight: 500; }
+.btn.primary { background: #2563eb; border-color: #2563eb; color: #fff; }
+.btn.outline { background: #fff; }
+.btn:disabled { opacity: .6; cursor: not-allowed; }
+
 .dim { color: #666; }
 .error { color: #c00; margin-top: 8px; }
 .success { color: #070; margin-top: 8px; }

@@ -1,16 +1,41 @@
 <template>
-  <div>
+  <div class="wrapper">
     <h2>Riwayat Pesan Terkirim</h2>
 
-    <section class="filters">
-      <input v-model="phoneNumber" placeholder="Filter nomor (628xx)" />
-      <input v-model="contactName" placeholder="Nama kontak" />
-      <input v-model="messageQuery" placeholder="Cari pesan" />
-      <button @click="load(1)">Muat</button>
-      <button @click="downloadExport" :disabled="!phoneNumber">Export ZIP (butuh phone)</button>
-    </section>
+    <div class="toolbar card">
+      <div class="filters">
+        <div class="field">
+          <label>Nomor</label>
+          <input v-model="phoneNumber" placeholder="Filter nomor (628xx)" />
+        </div>
+        <div class="field">
+          <label>Kontak</label>
+          <input v-model="contactName" placeholder="Nama kontak" />
+        </div>
+        <div class="field grow">
+          <label>Cari Pesan</label>
+          <input v-model="messageQuery" placeholder="Cari pesan" />
+        </div>
+        <div class="field">
+          <label>Tampil</label>
+          <select v-model.number="pageSize">
+            <option :value="10">10</option>
+            <option :value="25">25</option>
+            <option :value="50">50</option>
+            <option :value="100">100</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>&nbsp;</label>
+          <button class="btn primary w-100" @click="load(1)">Muat</button>
+        </div>
+      </div>
+      <div class="actions">
+        <button class="btn outline" @click="downloadExport" :disabled="!phoneNumber">Export ZIP</button>
+      </div>
+    </div>
 
-    <section class="list">
+    <div class="table-wrap card">
       <table v-if="rows.length">
         <thead>
           <tr>
@@ -23,22 +48,22 @@
         </thead>
         <tbody>
           <tr v-for="r in rows" :key="r.id">
-            <td>{{ new Date(r.createdAt).toLocaleString() }}</td>
-            <td>{{ (r.to || '').replace('@s.whatsapp.net','') }}</td>
+            <td class="muted">{{ new Date(r.createdAt).toLocaleString() }}</td>
+            <td class="mono">{{ (r.to || '').replace('@s.whatsapp.net','') }}</td>
             <td>{{ r.contact ? (r.contact.firstName + ' ' + (r.contact.lastName||'')) : '-' }}</td>
-            <td>{{ r.message }}</td>
-            <td>{{ r.status }}</td>
+            <td class="cell-msg">{{ r.message }}</td>
+            <td><span class="badge">{{ r.status }}</span></td>
           </tr>
         </tbody>
       </table>
-      <p v-else>Belum ada data.</p>
+      <div v-else class="empty">Belum ada data.</div>
+    </div>
 
-      <div class="pager" v-if="meta.totalPages > 1">
-        <button :disabled="page<=1" @click="load(page-1)">Prev</button>
-        <span>Halaman {{ page }} / {{ meta.totalPages }}</span>
-        <button :disabled="!meta.hasMore" @click="load(page+1)">Next</button>
-      </div>
-    </section>
+    <div class="pager" v-if="meta.totalPages > 1">
+      <button class="btn" :disabled="page<=1" @click="load(page-1)">Prev</button>
+      <span>Halaman {{ page }} / {{ meta.totalPages }}</span>
+      <button class="btn" :disabled="!meta.hasMore" @click="load(page+1)">Next</button>
+    </div>
   </div>
 </template>
 
@@ -85,9 +110,48 @@ load(1);
 </script>
 
 <style scoped>
-.filters { display: flex; gap: 8px; align-items: center; margin-bottom: 12px; }
-input { padding: 8px; }
-.pager { margin-top: 8px; display: flex; gap: 8px; align-items: center; }
- table { width: 100%; border-collapse: collapse; }
- th, td { border: 1px solid #eee; padding: 6px; text-align: left; }
+.wrapper { max-width: 1200px; margin: 0 auto; padding: 0 16px; }
+
+h2 { margin-bottom: 12px; }
+
+.card { background: #fff; border: 1px solid #eaeaea; border-radius: 12px; box-shadow: 0 1px 2px rgba(16,24,40,0.04); }
+
+.toolbar { padding: 14px; display: flex; justify-content: space-between; align-items: stretch; gap: 12px; flex-wrap: wrap; }
+.toolbar .filters { display: grid; grid-template-columns: repeat(6, minmax(120px, 1fr)); gap: 10px; flex: 1 1 680px; }
+.field { display: flex; flex-direction: column; gap: 6px; }
+.field.grow { min-width: 200px; grid-column: span 2; }
+.field label { font-size: 12px; color: #667085; }
+.field input, .field select { height: 36px; padding: 6px 10px; border: 1px solid #d8dde6; border-radius: 8px; background: #fff; }
+.w-100 { width: 100%; }
+.toolbar .actions { display: flex; gap: 8px; align-items: flex-end; }
+
+.btn { height: 36px; padding: 0 12px; border: 1px solid #d0d5dd; background: #f9fafb; border-radius: 8px; cursor: pointer; font-weight: 500; }
+.btn:disabled { opacity: .6; cursor: not-allowed; }
+.btn.primary { background: #2563eb; border-color: #2563eb; color: #fff; }
+.btn.outline { background: #fff; }
+
+.table-wrap { overflow: auto; margin-top: 12px; }
+
+table { width: 100%; border-collapse: collapse; font-size: 14px; }
+thead th { position: sticky; top: 0; background: #f8fafc; z-index: 1; }
+th, td { padding: 10px 12px; border-bottom: 1px solid #f0f0f0; text-align: left; vertical-align: top; }
+tbody tr:nth-child(odd) { background: #fcfcfc; }
+tbody tr:hover { background: #f6faff; }
+
+.muted { color: #667085; }
+.mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
+
+.badge { padding: 2px 8px; border-radius: 12px; font-size: 12px; font-weight: 600; background: #eef2ff; color: #3730a3; }
+
+.pager { margin-top: 12px; display: flex; gap: 8px; align-items: center; justify-content: center; }
+.empty { text-align: center; color: #777; padding: 28px; }
+.cell-msg { max-width: 480px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+@media (max-width: 1100px) { .toolbar .filters { grid-template-columns: repeat(4, minmax(120px, 1fr)); } }
+@media (max-width: 720px) {
+  .toolbar { align-items: stretch; }
+  .toolbar .filters { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .field.grow { grid-column: span 2; }
+  .cell-msg { max-width: 260px; }
+}
 </style>

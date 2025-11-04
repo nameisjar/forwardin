@@ -10,6 +10,7 @@ router.get('/:broadcastId/outgoing', controller.getOutgoingBroadcasts);
 router.get('/:broadcastId/replies', controller.getBrodcastReplies);
 router.put('/:id', controller.updateBroadcast);
 router.patch('/:id/status', controller.updateBroadcastStatus);
+router.delete('/bulk', controller.bulkDeleteBroadcasts);
 router.delete('/', controller.deleteBroadcasts);
 
 // Added alias routes for reminder and scheduled broadcasts to avoid 404 in UI menus

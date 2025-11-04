@@ -1,23 +1,32 @@
 <template>
-  <div>
+  <div class="wrapper">
     <h2>Kelola Tutor</h2>
 
-    <section class="create">
+    <section class="create card">
       <h3>Tambah Tutor</h3>
-      <form @submit.prevent="createTutor">
-        <input v-model.trim="firstName" placeholder="First name" required />
-        <input v-model.trim="email" type="email" placeholder="Email" required />
-        <input v-model="password" type="password" placeholder="Password" />
-        <button :disabled="loading || !canSubmit">{{ loading ? 'Menyimpan...' : 'Tambah' }}</button>
+      <form @submit.prevent="createTutor" class="form-inline">
+        <label class="field">
+          <span>First name</span>
+          <input v-model.trim="firstName" placeholder="First name" required />
+        </label>
+        <label class="field">
+          <span>Email</span>
+          <input v-model.trim="email" type="email" placeholder="Email" required />
+        </label>
+        <label class="field">
+          <span>Password</span>
+          <input v-model="password" type="password" placeholder="Password" />
+        </label>
+        <button class="btn primary" :disabled="loading || !canSubmit">{{ loading ? 'Menyimpan...' : 'Tambah' }}</button>
       </form>
       <small class="hint">Isi nama depan, email, dan password yang valid</small>
       <p v-if="msg" class="success">{{ msg }}</p>
       <p v-if="err" class="error">{{ err }}</p>
     </section>
 
-    <section class="list">
+    <section class="list card">
       <h3>Daftar Tutor</h3>
-      <div class="tools">
+      <div class="tools toolbar">
         <input v-model.trim="search" placeholder="Cari nama/email..." @input="onSearchInput" />
         <select v-model.number="pageSize" @change="onPageSizeChange">
           <option :value="10">10</option>
@@ -26,73 +35,76 @@
           <option :value="100">100</option>
         </select>
         <div class="spacer"></div>
-        <button @click="loadTutors">Muat Ulang</button>
+        <button class="btn outline" @click="loadTutors">Muat Ulang</button>
       </div>
-      <table v-if="rows.length">
-        <thead>
-          <tr>
-            <th @click="setSort('firstName')" class="sortable">
-              Nama
-              <SortIcon :active="sortBy === 'firstName'" :dir="sortDir" />
-            </th>
-            <th @click="setSort('email')" class="sortable">
-              Email
-              <SortIcon :active="sortBy === 'email'" :dir="sortDir" />
-            </th>
-            <th>Devices</th>
-            <th @click="setSort('createdAt')" class="sortable">
-              Dibuat
-              <SortIcon :active="sortBy === 'createdAt'" :dir="sortDir" />
-            </th>
-            <th style="width:220px;">Aksi</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="u in rows" :key="u.id">
-            <template v-if="editingId === u.id">
-              <td>
-                <input v-model.trim="ed.firstName" placeholder="First name" style="width:120px" />
-                <input v-model.trim="ed.lastName" placeholder="Last name" style="width:120px; margin-left:6px" />
-              </td>
-              <td>
-                <input v-model.trim="ed.email" type="email" placeholder="Email" style="width:220px" />
-              </td>
-              <td>
-                <input v-model="ed.password" type="password" placeholder="Password baru" style="width:180px" />
-              </td>
-              <td>{{ new Date(u.createdAt).toLocaleString() }}</td>
-              <td>
-                <button class="btn" @click="saveEdit(u)" :disabled="savingEdit">{{ savingEdit ? 'Menyimpan...' : 'Simpan' }}</button>
-                <button class="btn" @click="cancelEdit" :disabled="savingEdit">Batal</button>
-              </td>
-            </template>
-            <template v-else>
-              <td>{{ u.firstName }} {{ u.lastName || '' }}</td>
-              <td>{{ u.email }}</td>
-              <td>
-                <ul>
-                  <li v-for="d in (u.devices || [])" :key="d.id">{{ d.name }} — {{ d.status }}</li>
-                </ul>
-              </td>
-              <td>{{ new Date(u.createdAt).toLocaleString() }}</td>
-              <td>
-                <button class="btn" @click="startEdit(u)">Edit</button>
-                <button class="btn-danger" @click="deleteTutor(u)" :disabled="deletingId === u.id">
-                  {{ deletingId === u.id ? 'Menghapus...' : 'Hapus Akun' }}
-                </button>
-              </td>
-            </template>
-          </tr>
-        </tbody>
-      </table>
-      <p v-else>Belum ada tutor.</p>
+
+      <div class="table-wrap">
+        <table v-if="rows.length">
+          <thead>
+            <tr>
+              <th @click="setSort('firstName')" class="sortable">
+                Nama
+                <SortIcon :active="sortBy === 'firstName'" :dir="sortDir" />
+              </th>
+              <th @click="setSort('email')" class="sortable">
+                Email
+                <SortIcon :active="sortBy === 'email'" :dir="sortDir" />
+              </th>
+              <th>Devices</th>
+              <th @click="setSort('createdAt')" class="sortable">
+                Dibuat
+                <SortIcon :active="sortBy === 'createdAt'" :dir="sortDir" />
+              </th>
+              <th style="width:220px;">Aksi</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="u in rows" :key="u.id">
+              <template v-if="editingId === u.id">
+                <td>
+                  <input v-model.trim="ed.firstName" placeholder="First name" style="width:120px" />
+                  <input v-model.trim="ed.lastName" placeholder="Last name" style="width:120px; margin-left:6px" />
+                </td>
+                <td>
+                  <input v-model.trim="ed.email" type="email" placeholder="Email" style="width:220px" />
+                </td>
+                <td>
+                  <input v-model="ed.password" type="password" placeholder="Password baru" style="width:180px" />
+                </td>
+                <td>{{ new Date(u.createdAt).toLocaleString() }}</td>
+                <td>
+                  <button class="btn small" @click="saveEdit(u)" :disabled="savingEdit">{{ savingEdit ? 'Menyimpan...' : 'Simpan' }}</button>
+                  <button class="btn small" @click="cancelEdit" :disabled="savingEdit">Batal</button>
+                </td>
+              </template>
+              <template v-else>
+                <td>{{ u.firstName }} {{ u.lastName || '' }}</td>
+                <td>{{ u.email }}</td>
+                <td>
+                  <ul>
+                    <li v-for="d in (u.devices || [])" :key="d.id">{{ d.name }} — {{ d.status }}</li>
+                  </ul>
+                </td>
+                <td>{{ new Date(u.createdAt).toLocaleString() }}</td>
+                <td>
+                  <button class="btn small" @click="startEdit(u)">Edit</button>
+                  <button class="btn small danger" @click="deleteTutor(u)" :disabled="deletingId === u.id">
+                    {{ deletingId === u.id ? 'Menghapus...' : 'Hapus Akun' }}
+                  </button>
+                </td>
+              </template>
+            </tr>
+          </tbody>
+        </table>
+        <p v-else class="empty">Belum ada tutor.</p>
+      </div>
 
       <div v-if="total > 0" class="pagination">
         <div>Menampilkan {{ startItem }}-{{ endItem }} dari {{ total }}</div>
         <div class="pager">
-          <button :disabled="page <= 1" @click="goToPage(page - 1)">Sebelumnya</button>
+          <button class="btn" :disabled="page <= 1" @click="goToPage(page - 1)">Sebelumnya</button>
           <span>Halaman {{ page }} / {{ totalPages }}</span>
-          <button :disabled="page >= totalPages" @click="goToPage(page + 1)">Berikutnya</button>
+          <button class="btn" :disabled="page >= totalPages" @click="goToPage(page + 1)">Berikutnya</button>
         </div>
       </div>
     </section>
@@ -289,21 +301,36 @@ const SortIcon = {
 </script>
 
 <style scoped>
-.create, .list { margin-top: 16px; }
-input { padding: 8px; margin-right: 6px; }
+.wrapper { max-width: 1200px; margin: 0 auto; padding: 0 16px; }
+.card { background: #fff; border: 1px solid #eaeaea; border-radius: 12px; box-shadow: 0 1px 2px rgba(16,24,40,0.04); padding: 12px; margin-top: 16px; }
+
+.form-inline { display: flex; gap: 12px; align-items: flex-end; flex-wrap: wrap; }
+.field { display: flex; flex-direction: column; gap: 6px; }
+.field > span { font-size: 12px; color: #667085; }
+.field input { height: 36px; padding: 6px 10px; border: 1px solid #d8dde6; border-radius: 8px; background: #fff; }
+
+.toolbar { display:flex; gap: 8px; align-items: center; margin-bottom: 8px; flex-wrap: wrap; }
+.toolbar input, .toolbar select { padding: 8px; border: 1px solid #ddd; border-radius: 6px; }
+.toolbar .spacer { flex: 1; }
+
+.table-wrap { overflow: auto; border: 1px solid #eee; border-radius: 12px; }
+ table { width: 100%; border-collapse: collapse; margin-top: 8px; }
+ thead th { position: sticky; top: 0; background: #f8fafc; z-index: 1; }
+ th, td { border-bottom: 1px solid #f0f0f0; padding: 8px 10px; text-align: left; vertical-align: top; }
+ th.sortable { cursor: pointer; user-select: none; }
+ .sort-icon { font-size: 10px; margin-left: 4px; color: #555; }
+
+.btn { height: 36px; padding: 0 12px; border: 1px solid #d0d5dd; background: #f9fafb; border-radius: 8px; cursor: pointer; font-weight: 500; }
+.btn.small { height: 30px; padding: 0 10px; font-size: 13px; }
+.btn.primary { background: #2563eb; border-color: #2563eb; color: #fff; }
+.btn.outline { background: #fff; }
+.btn.danger { background: #e74c3c; border-color: #e74c3c; color: #fff; }
+.btn:disabled { opacity: .7; cursor: default; }
+
 .hint { display:block; color:#666; margin-top: 6px; }
 .success { color:#070 }
 .error { color:#c00 }
-.table { width: 100%; }
-.tools { display:flex; align-items:center; gap:8px; margin-bottom: 8px; }
-.tools .spacer { flex: 1; }
-.btn { padding: 6px 10px; border: 1px solid #ccc; background: #fff; border-radius: 6px; cursor: pointer; margin-right: 6px; }
- table { width: 100%; border-collapse: collapse; margin-top: 8px; }
- th, td { border: 1px solid #eee; padding: 8px; text-align: left; vertical-align: top; }
- th.sortable { cursor: pointer; user-select: none; }
- .sort-icon { font-size: 10px; margin-left: 4px; color: #555; }
-.btn-danger { padding: 6px 10px; border: 1px solid #c33; background: #e74c3c; color: #fff; border-radius: 6px; cursor: pointer; }
-.btn-danger:disabled { opacity: .7; cursor: default; }
 .pagination { display:flex; align-items:center; justify-content: space-between; margin-top: 10px; }
 .pager { display:flex; align-items:center; gap: 8px; }
+.empty { text-align: center; color: #777; padding: 18px; }
 </style>

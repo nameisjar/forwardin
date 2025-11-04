@@ -20,7 +20,7 @@
       <div class="me" v-if="me">
         <small>Masuk sebagai: {{ me.firstName }}</small>
         <small v-if="me.privilege?.name === 'cs'"> (Tutor)</small>
-        <small v-if="me.privilege?.name === 'admin'"> (Admin)</small>
+        <small v-if="me.privilege?.name === 'super admin'"> (Admin)</small>
       </div>
       <button class="logout" @click="logout">Logout</button>
     </aside>

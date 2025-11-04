@@ -1,17 +1,21 @@
 <template>
-  <div>
+  <div class="wrapper">
     <h2>Pairing (QR)</h2>
 
-    <section class="start">
+    <section class="start card">
       <h3>Mulai Pairing</h3>
       <div class="row">
-        <label>Device</label>
-        <select v-model="deviceId" :disabled="loading">
-          <option value="" disabled>Pilih device</option>
-          <option v-for="d in devices" :key="d.id" :value="String(d.id)">{{ d.name }} — {{ d.id }}</option>
-        </select>
-        <button @click="startPairing" :disabled="!deviceId || loading">{{ loading ? 'Menunggu QR...' : 'Mulai' }}</button>
-        <button v-if="controller" @click="stopPairing">Hentikan</button>
+        <label class="field">
+          <span>Device</span>
+          <select v-model="deviceId" :disabled="loading">
+            <option value="" disabled>Pilih device</option>
+            <option v-for="d in devices" :key="d.id" :value="String(d.id)">{{ d.name }} — {{ d.id }}</option>
+          </select>
+        </label>
+        <div class="row-btns">
+          <button class="btn primary" @click="startPairing" :disabled="!deviceId || loading">{{ loading ? 'Menunggu QR...' : 'Mulai' }}</button>
+          <button v-if="controller" class="btn outline" @click="stopPairing">Hentikan</button>
+        </div>
       </div>
       <p class="hint">Scan QR dari WhatsApp di ponsel Anda. QR mungkin diperbarui beberapa kali.</p>
       <p v-if="selectedStatus === 'open'" class="hint success">Device sudah terhubung. Hapus sesi jika ingin Pairing ulang.</p>
@@ -39,14 +43,16 @@
       </div>
     </section>
 
-    <section class="sessions" v-if="showSessions">
+    <section class="sessions card" v-if="showSessions">
       <h3>Sesi Aktif</h3>
-      <button @click="loadSessions">Muat Ulang Sesi</button>
+      <div class="list-header">
+        <button class="btn outline" @click="loadSessions">Muat Ulang Sesi</button>
+      </div>
       <ul>
         <li v-for="(s, idx) in sessions" :key="s.sessionId || idx" class="session-item">
           <span>{{ (s.device && s.device.name) ? s.device.name : '-' }} — {{ (s.device && s.device.phone) ? s.device.phone : '-' }} — {{ (s.device && s.device.status) ? s.device.status : (s.status || '-') }}</span>
           <span v-if="s.sessionId" class="session-id"> — sessionId: {{ s.sessionId }}</span>
-          <button v-if="(s.device?.status || s.status) === 'open' && s.sessionId" @click="onSendTest(s.sessionId)">Kirim pesan tes</button>
+          <button v-if="(s.device?.status || s.status) === 'open' && s.sessionId" class="btn" @click="onSendTest(s.sessionId)">Kirim pesan tes</button>
         </li>
       </ul>
     </section>
@@ -304,153 +310,35 @@ onMounted(async () => {
 </script>
 
 <style scoped>
-.row { 
-  display: flex; 
-  gap: 8px; 
-  align-items: center; 
-  margin-bottom: 16px;
-}
+.wrapper { max-width: 980px; margin: 0 auto; }
+.card { background: #fff; border: 1px solid #eaeaea; border-radius: 12px; box-shadow: 0 1px 2px rgba(16,24,40,0.04); padding: 12px; margin-top: 16px; }
 
-select { 
-  padding: 8px; 
-  min-width: 360px; 
-  border: 1px solid #ddd;
-  border-radius: 4px;
-}
+.row { display: flex; gap: 12px; align-items: flex-end; margin-bottom: 12px; flex-wrap: wrap; }
+.field { display: flex; flex-direction: column; gap: 6px; }
+.field > span { font-size: 12px; color: #667085; }
+.field select { height: 36px; min-width: 300px; padding: 6px 10px; border: 1px solid #d8dde6; border-radius: 8px; background: #fff; }
+.row-btns { display: flex; gap: 8px; }
 
-button {
-  padding: 8px 16px;
-  background: #007bff;
-  color: white;
-  border: none;
-  border-radius: 4px;
-  cursor: pointer;
-}
+.btn { height: 36px; padding: 0 12px; border: 1px solid #d0d5dd; background: #f9fafb; border-radius: 8px; cursor: pointer; font-weight: 500; }
+.btn:disabled { opacity: .6; cursor: not-allowed; }
+.btn.primary { background: #2563eb; border-color: #2563eb; color: #fff; }
+.btn.outline { background: #fff; }
 
-button:disabled {
-  background: #ccc;
-  cursor: not-allowed;
-}
+/* keep existing QR styles */
+.qr-container { margin-top: 20px; text-align: center; }
+.qr { margin: 12px 0; display: flex; justify-content: center; }
+.qr img { width: 320px; height: 320px; object-fit: contain; border: 2px solid #eee; border-radius: 8px; padding: 16px; background: white; box-shadow: 0 2px 8px rgba(0,0,0,0.1); }
+.qr-ascii { margin-top: 12px; border: 1px solid #eee; background: #fff; padding: 8px; border-radius: 4px; }
+.qr-ascii pre { margin: 0; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 10px; line-height: 10px; white-space: pre; color: #000; }
+.loading-qr { display: flex; flex-direction: column; align-items: center; margin: 20px 0; padding: 20px; }
+.spinner { width: 40px; height: 40px; border: 4px solid #f3f3f3; border-top: 4px solid #007bff; border-radius: 50%; animation: spin 1s linear infinite; margin-bottom: 16px; }
+@keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
 
-button:hover:not(:disabled) {
-  background: #0056b3;
-}
+.hint { color: #666; font-size: 14px; margin: 8px 0; }
+.hint.success { color: #28a745; font-weight: bold; }
+.error { color: #dc3545; font-weight: bold; padding: 8px; background: #f8d7da; border: 1px solid #f5c6cb; border-radius: 4px; margin: 8px 0; }
 
-.qr-container {
-  margin-top: 20px;
-  text-align: center;
-}
-
-.qr { 
-  margin: 12px 0;
-  display: flex;
-  justify-content: center;
-}
-
-.qr img { 
-  width: 320px; 
-  height: 320px; 
-  object-fit: contain; 
-  border: 2px solid #eee; 
-  border-radius: 8px;
-  padding: 16px; 
-  background: white;
-  box-shadow: 0 2px 8px rgba(0,0,0,0.1);
-}
-
-.qr-ascii { 
-  margin-top: 12px; 
-  border: 1px solid #eee; 
-  background: #fff; 
-  padding: 8px; 
-  border-radius: 4px;
-}
-
-.qr-ascii pre { 
-  margin: 0; 
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; 
-  font-size: 10px; 
-  line-height: 10px; 
-  white-space: pre; 
-  color: #000; 
-}
-
-.qr-instructions {
-  color: #666;
-  font-size: 14px;
-  margin-top: 12px;
-  padding: 12px;
-  background: #f8f9fa;
-  border-radius: 4px;
-  border-left: 4px solid #007bff;
-}
-
-.loading-qr {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  margin: 20px 0;
-  padding: 20px;
-}
-
-.spinner {
-  width: 40px;
-  height: 40px;
-  border: 4px solid #f3f3f3;
-  border-top: 4px solid #007bff;
-  border-radius: 50%;
-  animation: spin 1s linear infinite;
-  margin-bottom: 16px;
-}
-
-@keyframes spin {
-  0% { transform: rotate(0deg); }
-  100% { transform: rotate(360deg); }
-}
-
-.hint { 
-  color: #666; 
-  font-size: 14px;
-  margin: 8px 0;
-}
-
-.hint.success {
-  color: #28a745;
-  font-weight: bold;
-}
-
-.error { 
-  color: #dc3545; 
-  font-weight: bold;
-  padding: 8px;
-  background: #f8d7da;
-  border: 1px solid #f5c6cb;
-  border-radius: 4px;
-  margin: 8px 0;
-}
-
-.session-item { 
-  display: flex; 
-  align-items: center; 
-  gap: 8px; 
-  flex-wrap: wrap; 
-  padding: 8px;
-  border: 1px solid #eee;
-  border-radius: 4px;
-  margin: 8px 0;
-}
-
-.session-id { 
-  color: #888; 
-  font-size: 12px;
-}
-
-.sessions {
-  margin-top: 32px;
-}
-
-.sessions ul {
-  list-style: none;
-  padding: 0;
-}
+.session-item { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 8px; border: 1px solid #eee; border-radius: 8px; margin: 8px 0; }
+.session-id { color: #888; font-size: 12px; }
+.sessions ul { list-style: none; padding: 0; }
 </style>

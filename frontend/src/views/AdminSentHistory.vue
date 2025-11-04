@@ -2,29 +2,57 @@
   <div class="wrapper">
     <h2>Semua Pesan Terkirim (Admin)</h2>
 
-    <div class="toolbar">
-      <input v-model="phoneNumber" placeholder="Filter nomor (628xx)" />
-      <input v-model="tutorQuery" placeholder="Tutor" />
-      <input v-model="messageQuery" placeholder="Cari pesan" />
-      <select v-model="sortBy">
-        <option value="createdAt">Terbaru</option>
-        <option value="to">Nomor</option>
-        <option value="message">Pesan</option>
-      </select>
-      <select v-model="sortDir">
-        <option value="desc">↓</option>
-        <option value="asc">↑</option>
-      </select>
-      <select v-model.number="pageSize">
-        <option :value="10">10</option>
-        <option :value="25">25</option>
-        <option :value="50">50</option>
-        <option :value="100">100</option>
-      </select>
-      <button @click="load(1)" :disabled="loading">{{ loading ? 'Memuat...' : 'Muat' }}</button>
+    <div class="toolbar card">
+      <div class="filters">
+        <div class="field">
+          <label>Nomor</label>
+          <input v-model="phoneNumber" placeholder="Filter nomor (628xx)" />
+        </div>
+        <div class="field">
+          <label>Tutor</label>
+          <input v-model="tutorQuery" placeholder="Tutor" />
+        </div>
+        <div class="field grow">
+          <label>Cari Pesan</label>
+          <input v-model="messageQuery" placeholder="Cari pesan" />
+        </div>
+        <div class="field">
+          <label>Urut</label>
+          <select v-model="sortBy">
+            <option value="createdAt">Terbaru</option>
+            <option value="to">Nomor</option>
+            <option value="message">Pesan</option>
+            <option value="status">Status</option>
+          </select>
+        </div>
+        <div class="field compact">
+          <label>Arah</label>
+          <select v-model="sortDir">
+            <option value="desc">↓</option>
+            <option value="asc">↑</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>Tampil</label>
+          <select v-model.number="pageSize">
+            <option :value="10">10</option>
+            <option :value="25">25</option>
+            <option :value="50">50</option>
+            <option :value="100">100</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>&nbsp;</label>
+          <button class="btn primary w-100" @click="load(1)" :disabled="loading">{{ loading ? 'Memuat...' : 'Muat' }}</button>
+        </div>
+      </div>
+      <div class="actions">
+        <button class="btn outline" @click="exportCsv" :disabled="loading || exporting">{{ exporting ? 'Mengekspor...' : 'Export CSV' }}</button>
+        <button class="btn danger" @click="deleteAllSent" :disabled="loading || deleting">{{ deleting ? 'Menghapus...' : 'Hapus Semua' }}</button>
+      </div>
     </div>
 
-    <div class="table-wrap">
+    <div class="table-wrap card">
       <table v-if="displayedRows.length">
         <thead>
           <tr>
@@ -32,21 +60,25 @@
             <th>Nomor</th>
             <th>Kontak</th>
             <th>Pesan</th>
+            <th>Status</th>
             <th>Sumber</th>
             <th>Tutor</th>
           </tr>
         </thead>
         <tbody>
           <tr v-for="r in displayedRows" :key="r.id">
-            <td>{{ fmt(r.createdAt) }}</td>
-            <td>{{ normalizeNumber(r.to) }}</td>
+            <td class="muted">{{ fmt(r.createdAt) }}</td>
+            <td class="mono">{{ normalizeNumber(r.to) }}</td>
             <td>{{ r.contact ? (r.contact.firstName + ' ' + (r.contact.lastName||'')) : '-' }}</td>
             <td class="cell-msg">{{ r.message }}</td>
             <td>
-              <span v-if="sourceSimple(r) === 'reminder'" class="badge rm">Reminder</span>
-              <span v-else-if="sourceSimple(r) === 'feedback'" class="badge fb">Feedback</span>
-              <span v-else-if="sourceSimple(r) === 'broadcast'" class="badge bc">Broadcast</span>
-              <span v-else>-</span>
+              <span class="badge" :class="badgeClass(r.status)">{{ r.status }}</span>
+            </td>
+            <td>
+              <span v-if="sourceSimple(r) === 'reminder'" class="chip rm">Reminder</span>
+              <span v-else-if="sourceSimple(r) === 'feedback'" class="chip fb">Feedback</span>
+              <span v-else-if="sourceSimple(r) === 'broadcast'" class="chip bc">Broadcast</span>
+              <span v-else class="muted">-</span>
             </td>
             <td>{{ tutorName(r) }}</td>
           </tr>
@@ -56,9 +88,9 @@
     </div>
 
     <div class="pager" v-if="meta.totalPages > 1">
-      <button :disabled="page<=1 || loading" @click="load(page-1)">Prev</button>
+      <button class="btn" :disabled="page<=1 || loading" @click="load(page-1)">Prev</button>
       <span>Halaman {{ page }} / {{ meta.totalPages }}</span>
-      <button :disabled="!meta.hasMore || loading" @click="load(page+1)">Next</button>
+      <button class="btn" :disabled="!meta.hasMore || loading" @click="load(page+1)">Next</button>
     </div>
 
     <p v-if="err" class="error">{{ err }}</p>
@@ -80,6 +112,9 @@ const tutorQuery = ref('');
 const messageQuery = ref('');
 const loading = ref(false);
 const err = ref('');
+
+const exporting = ref(false);
+const deleting = ref(false);
 
 const isBroadcast = (r) => String(r?.id || '').startsWith('BC_');
 const displayedRows = computed(() => {
@@ -264,6 +299,54 @@ const sourceSimple = (r) => {
   return 'broadcast';
 };
 
+const exportCsv = async () => {
+  try {
+    exporting.value = true;
+    const params = {
+      export: 'csv',
+      sortBy: sortBy.value,
+      sortDir: sortDir.value,
+    };
+    if (phoneNumber.value) params.phoneNumber = phoneNumber.value;
+    if (messageQuery.value) params.message = messageQuery.value;
+    const resp = await userApi.get('/tutors/messages/all', { params, responseType: 'blob' });
+    const blob = new Blob([resp.data], { type: 'text/csv;charset=utf-8;' });
+    const url = window.URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.setAttribute('download', 'sent-messages.csv');
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+  } catch (e) {
+    err.value = e?.response?.data?.message || e?.message || 'Gagal mengekspor CSV';
+  } finally {
+    exporting.value = false;
+  }
+};
+
+const deleteAllSent = async () => {
+  try {
+    if (!window.confirm('Hapus SEMUA status pesan terkirim pada tampilan ini? Tindakan ini permanen.')) return;
+    deleting.value = true;
+
+    // 1) Hapus semua status di outgoingMessage
+    const msgParams = { status: 'all' };
+    if (phoneNumber.value) msgParams.phoneNumber = phoneNumber.value;
+    await userApi.delete('/tutors/messages/all', { params: msgParams });
+
+    // 2) Sinkron: hapus broadcast yang sudah terkirim (cascade akan bersih-kan BC_*)
+    await userApi.delete('/broadcasts/bulk', { params: { isSent: true } });
+
+    await load(1);
+  } catch (e) {
+    err.value = e?.response?.data?.message || e?.message || 'Gagal menghapus pesan';
+  } finally {
+    deleting.value = false;
+  }
+};
+
 watch([sortBy, sortDir, pageSize], () => {
   page.value = 1;
   load(1);
@@ -275,22 +358,93 @@ onMounted(async () => {
 </script>
 
 <style scoped>
-.wrapper { max-width: 980px; }
-.toolbar { display: flex; gap: 8px; margin: 8px 0 16px; }
-.toolbar input { padding: 8px; border: 1px solid #ddd; border-radius: 6px; }
-.toolbar select { padding: 8px; border: 1px solid #ddd; border-radius: 6px; }
-.table-wrap { overflow: auto; border: 1px solid #eee; border-radius: 8px; }
-table { width: 100%; border-collapse: collapse; }
-th, td { padding: 10px; border-bottom: 1px solid #f0f0f0; text-align: left; }
-.badge { padding: 2px 8px; border-radius: 10px; font-size: 12px; }
-.badge.ok { background: #e7f8ec; color: #1a7f37; }
+.wrapper {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 0 16px;
+}
+
+h2 { margin-bottom: 12px; }
+
+.card {
+  background: #fff;
+  border: 1px solid #eaeaea;
+  border-radius: 12px;
+  box-shadow: 0 1px 2px rgba(16,24,40,0.04);
+}
+
+.toolbar {
+  padding: 14px;
+  display: flex;
+  justify-content: space-between;
+  align-items: stretch;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.toolbar .filters {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(120px, 1fr));
+  gap: 10px;
+  flex: 1 1 680px;
+}
+
+.field { display: flex; flex-direction: column; gap: 6px; }
+.field.grow { min-width: 200px; grid-column: span 2; }
+.field label { font-size: 12px; color: #667085; }
+.field input, .field select { height: 36px; padding: 6px 10px; border: 1px solid #d8dde6; border-radius: 8px; background: #fff; }
+.field.compact select { width: 80px; }
+.w-100 { width: 100%; }
+
+.toolbar .actions { display: flex; gap: 8px; align-items: flex-end; }
+
+.btn {
+  height: 36px;
+  padding: 0 12px;
+  border: 1px solid #d0d5dd;
+  background: #f9fafb;
+  border-radius: 8px;
+  cursor: pointer;
+  font-weight: 500;
+}
+.btn:disabled { opacity: .6; cursor: not-allowed; }
+.btn.primary { background: #2563eb; border-color: #2563eb; color: #fff; }
+.btn.outline { background: #fff; }
+.btn.danger { background: #e74c3c; border-color: #e74c3c; color: #fff; }
+
+.table-wrap { overflow: auto; margin-top: 12px; }
+
+table { width: 100%; border-collapse: collapse; font-size: 14px; }
+thead th { position: sticky; top: 0; background: #f8fafc; z-index: 1; }
+th, td { padding: 10px 12px; border-bottom: 1px solid #f0f0f0; text-align: left; vertical-align: top; }
+tbody tr:nth-child(odd) { background: #fcfcfc; }
+tbody tr:hover { background: #f6faff; }
+
+.muted { color: #667085; }
+.mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
+
+.badge { padding: 2px 8px; border-radius: 12px; font-size: 12px; font-weight: 600; }
+.badge.ok { background: #e7f8ec; color: #067647; }
 .badge.info { background: #eaf2ff; color: #1d4ed8; }
-.badge.warn { background: #fff4e5; color: #8a4b0f; }
-.badge.bc { background: #eef2f7; color: #334155; }
-.badge.fb { background: #e7f8ec; color: #1a7f37; }
-.badge.rm { background: #fff4e5; color: #8a4b0f; }
-.pager { margin-top: 10px; display: flex; gap: 8px; align-items: center; }
-.empty { text-align: center; color: #777; padding: 24px; }
+.badge.warn { background: #fff1f0; color: #d92d20; }
+
+.chip { padding: 2px 6px; border-radius: 999px; font-size: 12px; border: 1px solid #e2e8f0; background: #fff; color: #475569; }
+.chip.bc { color: #334155; }
+.chip.fb { color: #0f5132; border-color: #c7eed8; background: #e7f8ec; }
+.chip.rm { color: #8a4b0f; border-color: #ffe0b2; background: #fff7ed; }
+
+.pager { margin-top: 12px; display: flex; gap: 8px; align-items: center; justify-content: center; }
+.empty { text-align: center; color: #777; padding: 28px; }
 .error { color: #c00; margin-top: 8px; }
 .cell-msg { max-width: 480px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+@media (max-width: 1100px) {
+  .toolbar .filters { grid-template-columns: repeat(4, minmax(120px, 1fr)); }
+}
+@media (max-width: 720px) {
+  .toolbar { align-items: stretch; }
+  .toolbar .filters { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .field.grow { grid-column: span 2; }
+  .cell-msg { max-width: 260px; }
+}
 </style>

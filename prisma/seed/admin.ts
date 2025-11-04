@@ -19,7 +19,7 @@ async function seedAdminAccount(prisma: PrismaClient, logger: Logger) {
                 accountApiKey: generateUuid(),
                 emailVerifiedAt: new Date(),
                 createdAt: new Date(),
-                privilegeId: Number(process.env.ADMIN_ID) || 1,
+                privilegeId: Number(process.env.SUPER_ADMIN_ID) || 1,
             },
         });
         const refreshToken = generateRefreshToken(admin);

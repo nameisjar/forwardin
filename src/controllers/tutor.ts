@@ -263,7 +263,8 @@ export const listOutgoingMessagesAll: RequestHandler = async (req, res) => {
         const message = (req.query.message as string) || undefined;
         const contactName = (req.query.contactName as string) || undefined;
         const onlyBroadcast = String(req.query.onlyBroadcast || '').toLowerCase();
-        const isOnlyBroadcast = onlyBroadcast === '1' || onlyBroadcast === 'true' || 'yes';
+        const isOnlyBroadcast =
+            onlyBroadcast === '1' || onlyBroadcast === 'true' || onlyBroadcast === 'yes';
         const skip = (page - 1) * pageSize;
 
         // New: sorting support
@@ -286,6 +287,115 @@ export const listOutgoingMessagesAll: RequestHandler = async (req, res) => {
                   }
                 : undefined,
         } as const;
+
+        // Export branch: return CSV when export=csv
+        const exportMode = String(req.query.export || '').toLowerCase() === 'csv';
+        if (exportMode) {
+            // Fetch up to 10000 rows for export to avoid memory issues
+            const take = Math.min(Number(req.query.limit || 10000), 50000);
+            const rows = await prisma.outgoingMessage.findMany({
+                where: where as any,
+                orderBy: { [sortBy]: sortDir } as any,
+                take,
+                include: { contact: { select: { firstName: true, lastName: true } } },
+            });
+
+            // Try to enrich tutor and source type minimally (best-effort)
+            const data = [...rows] as any[];
+            try {
+                const sessionIds = Array.from(
+                    new Set(rows.map((r) => r.sessionId).filter(Boolean) as string[]),
+                );
+                if (sessionIds.length) {
+                    const sessions = await prisma.session.findMany({
+                        where: { sessionId: { in: sessionIds } },
+                        select: {
+                            sessionId: true,
+                            device: {
+                                select: {
+                                    user: {
+                                        select: { firstName: true, lastName: true, email: true },
+                                    },
+                                    CustomerService: {
+                                        select: {
+                                            user: {
+                                                select: {
+                                                    firstName: true,
+                                                    lastName: true,
+                                                    email: true,
+                                                },
+                                            },
+                                        },
+                                    },
+                                },
+                            },
+                        },
+                    });
+                    const sidToTutor = new Map<
+                        string,
+                        {
+                            firstName?: string | null;
+                            lastName?: string | null;
+                            email?: string | null;
+                        }
+                    >();
+                    sessions.forEach((s) => {
+                        const csUser = (s.device as any).CustomerService?.user;
+                        const user = csUser || (s.device as any).user;
+                        sidToTutor.set(s.sessionId, {
+                            firstName: user?.firstName,
+                            lastName: user?.lastName,
+                            email: user?.email,
+                        });
+                    });
+                    data.forEach((r) => {
+                        const info = r.sessionId ? sidToTutor.get(r.sessionId) : undefined;
+                        if (info) {
+                            (r as any).tutor = {
+                                firstName: info.firstName || info.email || 'Tutor',
+                                lastName: info.lastName || '',
+                            };
+                        }
+                    });
+                }
+            } catch {}
+
+            // Prepare CSV
+            const escapeCsv = (v: any) => {
+                const s = v == null ? '' : String(v);
+                if (/[",\n]/.test(s)) return '"' + s.replace(/"/g, '""') + '"';
+                return s;
+            };
+            const headers = [
+                'Waktu',
+                'Nomor',
+                'Kontak',
+                'Pesan',
+                // keep status in export for reference, though UI hides it
+                'Status',
+                'Tutor',
+            ];
+            const lines = [headers.join(',')];
+            for (const r of data) {
+                const waktu = r.createdAt ? new Date(r.createdAt).toISOString() : '';
+                const nomor = String(r.to || '').replace('@s.whatsapp.net', '');
+                const kontak = r.contact
+                    ? [r.contact.firstName, r.contact.lastName].filter(Boolean).join(' ')
+                    : '';
+                const pesan = r.message || '';
+                const status = r.status || '';
+                const tutor = r.tutor
+                    ? [r.tutor.firstName, r.tutor.lastName].filter(Boolean).join(' ')
+                    : '';
+                lines.push([waktu, nomor, kontak, pesan, status, tutor].map(escapeCsv).join(','));
+            }
+
+            res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+            res.setHeader('Content-Disposition', 'attachment; filename="sent-messages.csv"');
+            res.status(200).send(lines.join('\n'));
+            return;
+        }
+
         const [rows, total] = await Promise.all([
             prisma.outgoingMessage.findMany({
                 where: where as any,
@@ -480,6 +590,49 @@ export const listOutgoingMessagesAll: RequestHandler = async (req, res) => {
                 hasMore: skip + rows.length < total,
             },
         });
+    } catch (e) {
+        logger.error(e);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};
+
+export const deleteOutgoingMessagesAll: RequestHandler = async (req, res) => {
+    try {
+        const phoneNumber = (req.query.phoneNumber as string) || undefined;
+        const onlyBroadcast = String(req.query.onlyBroadcast || '').toLowerCase();
+        const isOnlyBroadcast =
+            onlyBroadcast === '1' || onlyBroadcast === 'true' || onlyBroadcast === 'yes';
+        const statusesRaw = (req.query.status as string) || '';
+        const olderThanMinutes = Math.max(0, Number(req.query.olderThanMinutes || 10));
+        const threshold = olderThanMinutes
+            ? new Date(Date.now() - olderThanMinutes * 60 * 1000)
+            : undefined;
+
+        // Defaults: delete acked/delivered/read/played. Also delete stale 'pending' older than threshold.
+        const defaultAckStatuses = ['server_ack', 'delivery_ack', 'read', 'played'];
+
+        let where: any = {
+            id: isOnlyBroadcast ? { startsWith: 'BC_' } : undefined,
+            to: phoneNumber ? { contains: phoneNumber } : undefined,
+        };
+
+        if (!statusesRaw) {
+            where.OR = [
+                { status: { in: defaultAckStatuses } },
+                ...(threshold ? [{ status: 'pending', createdAt: { lt: threshold } }] : []),
+            ];
+        } else if (statusesRaw.toLowerCase() === 'all') {
+            // no status filter
+        } else {
+            const list = statusesRaw
+                .split(',')
+                .map((s) => s.trim())
+                .filter(Boolean);
+            if (list.length) where.status = { in: list };
+        }
+
+        const result = await prisma.outgoingMessage.deleteMany({ where });
+        res.status(200).json({ message: 'Deleted sent messages', deletedCount: result.count });
     } catch (e) {
         logger.error(e);
         res.status(500).json({ message: 'Internal server error' });

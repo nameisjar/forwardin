@@ -3,64 +3,80 @@
     <h2>Kelola Kontak</h2>
     
     <!-- Device Selection Toolbar -->
-    <div class="toolbar">
-      <select v-model="selectedDeviceId" @change="onDeviceChange">
-        <option value="">Pilih Perangkat</option>
-        <option v-for="d in devices" :key="d.id" :value="d.id">{{ d.name || d.id }} — {{ d.status }}</option>
-      </select>
-      <!-- New: search box -->
-      <input v-model="q" placeholder="Cari nama/nomor/label..." />
-      <!-- Sort controls -->
-      <select v-model="sortBy">
-        <option value="createdAt">Terbaru</option>
-        <option value="firstName">Nama Depan</option>
-        <option value="lastName">Nama Belakang</option>
-        <option value="phone">Nomor</option>
-      </select>
-      <select v-model="sortDir">
-        <option value="desc">↓</option>
-        <option value="asc">↑</option>
-      </select>
-      <select v-model.number="pageSize">
-        <option :value="10">10</option>
-        <option :value="25">25</option>
-        <option :value="50">50</option>
-        <option :value="100">100</option>
-      </select>
-      <button @click="showAddForm = true" class="btn-primary">+ Tambah Kontak</button>
-      <button @click="loadContacts" :disabled="loading">{{ loading ? 'Memuat...' : 'Muat Ulang' }}</button>
-      <!-- New: Import/Export Controls -->
-      <button @click="triggerImport" :disabled="!selectedDeviceId || importBusy">{{ importBusy ? 'Mengimpor...' : 'Import' }}</button>
-      <button @click="exportContactsFile" :disabled="!selectedDeviceId || exportBusy">{{ exportBusy ? 'Mengekspor...' : 'Export' }}</button>
-      <input ref="fileInput" type="file" accept=".xlsx,.xls" style="display:none" @change="onImportFileChange" />
+    <div class="toolbar card">
+      <div class="filters">
+        <div class="field">
+          <label>Perangkat</label>
+          <select v-model="selectedDeviceId" @change="onDeviceChange">
+            <option value="">Pilih Perangkat</option>
+            <option v-for="d in devices" :key="d.id" :value="d.id">{{ d.name || d.id }} — {{ d.status }}</option>
+          </select>
+        </div>
+        <div class="field grow">
+          <label>Cari</label>
+          <input v-model="q" placeholder="Cari nama/nomor/label..." />
+        </div>
+        <div class="field">
+          <label>Urut</label>
+          <select v-model="sortBy">
+            <option value="createdAt">Terbaru</option>
+            <option value="firstName">Nama Depan</option>
+            <option value="lastName">Nama Belakang</option>
+            <option value="phone">Nomor</option>
+          </select>
+        </div>
+        <div class="field compact">
+          <label>Arah</label>
+          <select v-model="sortDir">
+            <option value="desc">↓</option>
+            <option value="asc">↑</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>Tampil</label>
+          <select v-model.number="pageSize">
+            <option :value="10">10</option>
+            <option :value="25">25</option>
+            <option :value="50">50</option>
+            <option :value="100">100</option>
+          </select>
+        </div>
+      </div>
+      <div class="actions">
+        <button @click="showAddForm = true" class="btn primary">+ Tambah Kontak</button>
+        <button @click="loadContacts" :disabled="loading" class="btn outline">{{ loading ? 'Memuat...' : 'Muat Ulang' }}</button>
+        <button @click="triggerImport" :disabled="!selectedDeviceId || importBusy" class="btn outline">{{ importBusy ? 'Mengimpor...' : 'Import' }}</button>
+        <button @click="exportContactsFile" :disabled="!selectedDeviceId || exportBusy" class="btn outline">{{ exportBusy ? 'Mengekspor...' : 'Export' }}</button>
+        <input ref="fileInput" type="file" accept=".xlsx,.xls" style="display:none" @change="onImportFileChange" />
+      </div>
     </div>
 
     <!-- Contacts Table -->
-    <div class="table-wrap" v-if="selectedDeviceId">
+    <div class="table-wrap card" v-if="selectedDeviceId">
       <table>
         <thead>
           <tr>
             <th>Nama</th>
             <th>Nomor HP</th>
             <th>Nama Kelas</th>
-            <th>Aksi</th>
+            <th style="width:160px">Aksi</th>
           </tr>
         </thead>
         <tbody>
           <tr v-for="contact in visibleContacts" :key="contact.id">
             <td>{{ contact.firstName }} {{ contact.lastName || '' }}</td>
-            <td>{{ contact.phone }}</td>
+            <td class="mono">{{ contact.phone }}</td>
             <td>
               <div class="labels" v-if="contact.ContactLabel && filteredContactLabels(contact).length">
                 <span v-for="label in filteredContactLabels(contact)" :key="label" class="label-chip">
                   {{ label }}
                 </span>
               </div>
-              <span v-else>-</span>
+              <span v-else class="muted">-</span>
             </td>
             <td>
-              <button @click="editContact(contact)" class="btn-small">Edit</button>
-              <button @click="deleteContact(contact.id)" class="btn-small danger">Hapus</button>
+              <button @click="editContact(contact)" class="btn small">Edit</button>
+              <button @click="deleteContact(contact.id)" class="btn small danger">Hapus</button>
             </td>
           </tr>
           <tr v-if="!loading && visibleContacts.length === 0">
@@ -69,17 +85,16 @@
         </tbody>
       </table>
       <div class="pager">
-        <button :disabled="page===1 || loading" @click="goPrev">Prev</button>
+        <button class="btn" :disabled="page===1 || loading" @click="goPrev">Prev</button>
         <span>Hal {{ page }} / {{ meta.totalPages || 1 }}</span>
-        <button :disabled="!meta.hasMore || loading" @click="goNext">Next</button>
+        <button class="btn" :disabled="!meta.hasMore || loading" @click="goNext">Next</button>
       </div>
     </div>
-    <div v-else class="empty-state">
+    <div v-else class="empty-state card">
       <p>Pilih perangkat untuk melihat dan mengelola kontak</p>
     </div>
 
     <!-- Add/Edit Contact Modal -->
-    <!-- <div v-if="showAddForm || editingContact" class="modal-overlay" @click="cancelForm"></div> -->
     <div v-if="showAddForm || editingContact" class="modal-overlay" @click="cancelForm">
       <div class="modal" @click.stop>
         <h3>{{ editingContact ? 'Edit Kontak' : 'Tambah Kontak' }}</h3>
@@ -108,12 +123,11 @@
           </div>
         </form>
       </div>
-      </div>
     </div>
 
     <p v-if="msg" class="success">{{ msg }}</p>
     <p v-if="err" class="error">{{ err }}</p>
-  
+  </div>
 </template>
 
 <script setup>
@@ -488,31 +502,49 @@ onMounted(async () => {
 </script>
 
 <style scoped>
-.wrapper { max-width: 1200px; }
-.toolbar { display: flex; gap: 12px; margin: 16px 0; align-items: center; }
-.toolbar select, .toolbar button, .toolbar input { padding: 8px 12px; border: 1px solid #ddd; border-radius: 6px; }
-.btn-primary { background: #0066cc; color: white; border-color: #0066cc; }
-.btn-small { padding: 4px 8px; margin: 0 2px; font-size: 12px; border-radius: 4px; border: 1px solid #ccc; background: #f8f9fa; cursor: pointer; }
-.btn-small.danger { background: #dc3545; color: white; border-color: #dc3545; }
-.table-wrap { border: 1px solid #eee; border-radius: 8px; overflow: auto; }
-table { width: 100%; border-collapse: collapse; }
-th, td { padding: 12px; text-align: left; border-bottom: 1px solid #f0f0f0; }
-th { background: #f8f9fa; font-weight: 600; }
+.wrapper { max-width: 1200px; margin: 0 auto; }
+
+.card { background: #fff; border: 1px solid #eaeaea; border-radius: 12px; box-shadow: 0 1px 2px rgba(16,24,40,0.04); padding: 12px; }
+
+.toolbar { display: flex; justify-content: space-between; align-items: stretch; gap: 12px; margin: 12px 0; flex-wrap: wrap; }
+.toolbar .filters { display: grid; grid-template-columns: repeat(6, minmax(140px, 1fr)); gap: 10px; flex: 1 1 720px; }
+.field { display: flex; flex-direction: column; gap: 6px; }
+.field.grow { grid-column: span 2; }
+.field label { font-size: 12px; color: #667085; }
+.field input, .field select { height: 36px; padding: 6px 10px; border: 1px solid #d8dde6; border-radius: 8px; background: #fff; }
+.field.compact select { width: 80px; }
+.toolbar .actions { display: flex; gap: 8px; align-items: flex-end; }
+
+.btn { height: 36px; padding: 0 12px; border: 1px solid #d0d5dd; background: #f9fafb; border-radius: 8px; cursor: pointer; font-weight: 500; }
+.btn.small { height: 30px; padding: 0 10px; font-size: 13px; }
+.btn:disabled { opacity: .6; cursor: not-allowed; }
+.btn.primary { background: #2563eb; border-color: #2563eb; color: #fff; }
+.btn.outline { background: #fff; }
+.btn.danger { background: #e74c3c; border-color: #e74c3c; color: #fff; }
+
+.table-wrap { border-radius: 12px; overflow: auto; margin-top: 8px; }
+ table { width: 100%; border-collapse: collapse; font-size: 14px; }
+ thead th { position: sticky; top: 0; background: #f8fafc; z-index: 1; }
+ th, td { padding: 10px 12px; text-align: left; border-bottom: 1px solid #f0f0f0; }
+ tbody tr:nth-child(odd) { background: #fcfcfc; }
+ .muted { color: #667085; }
+ .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
+
+.labels { display: flex; flex-wrap: wrap; gap: 6px; }
+.label-chip { background: #e3f2fd; color: #1976d2; padding: 2px 8px; border-radius: 12px; font-size: 11px; border: 1px solid #cbe2ff; }
+
 .empty { text-align: center; color: #666; padding: 24px; }
-.empty-state { text-align: center; color: #666; padding: 48px; }
-.labels { display: flex; flex-wrap: wrap; gap: 4px; }
-.label-chip { background: #e3f2fd; color: #1976d2; padding: 2px 6px; border-radius: 12px; font-size: 11px; }
+.empty-state { text-align: center; color: #666; padding: 28px; }
+
+.pager { display:flex; gap:8px; align-items:center; justify-content: center; padding: 12px; }
+
+/* Modal unchanged */
 .modal-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; z-index: 1000; }
 .modal { background: white; padding: 24px; border-radius: 8px; max-width: 600px; width: 90%; max-height: 90vh; overflow-y: auto; }
-.form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin: 16px 0; }
-.field { display: flex; flex-direction: column; }
-.field label { margin-bottom: 4px; font-weight: 500; }
-.field input, .field select { padding: 8px; border: 1px solid #ddd; border-radius: 4px; }
-.span-2 { grid-column: span 2; }
-.actions { display: flex; gap: 12px; justify-content: flex-end; margin-top: 24px; }
-.actions button { padding: 8px 16px; border: 1px solid #ddd; border-radius: 4px; cursor: pointer; }
-.actions button[type="submit"] { background: #0066cc; color: white; border-color: #0066cc; }
+
 .success { color: #28a745; margin-top: 12px; }
 .error { color: #dc3545; margin-top: 12px; }
-.pager { display:flex; gap:12px; align-items:center; padding: 12px; }
+
+@media (max-width: 1000px) { .toolbar .filters { grid-template-columns: repeat(4, minmax(140px, 1fr)); } }
+@media (max-width: 700px) { .toolbar .filters { grid-template-columns: repeat(2, minmax(0, 1fr)); } .field.grow { grid-column: span 2; } }
 </style>
