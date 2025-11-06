@@ -1,0 +1,311 @@
+classDiagram
+  %% Device (Tambah Device)
+  class m_Device {
+    +id: uuid
+    +pkId: number
+    +name: string
+    +status: string
+    +apiKey: string
+  }
+  class c_Device {
+    +id: uuid
+    +name: string
+    +deviceId: uuid
+    +apiKey: string
+    +labels: string[]
+    +listDevices()
+    +createDevice(name)
+    +deleteDevice(id)
+    +generateApiKey(id)
+    +selectDevice(id, apiKey)
+  }
+  class v_AddDevice {
+    +onSubmit()
+    +onSelectDevice()
+  }
+  v_AddDevice --> c_Device: uses
+  c_Device --> m_Device: uses
+
+  %% Contacts (Kontak)
+  class m_Contact {
+    +id: uuid
+    +firstName: string
+    +lastName: string
+    +phone: string
+  }
+  class m_Label { +name: string +slug: string }
+  class c_Contact {
+    +id: uuid
+    +firstName: string
+    +lastName: string
+    +phone: string
+    +email: string
+    +deviceId: uuid
+    +labels: string[]
+    +q: string
+    +page: number
+    +pageSize: number
+    +sortBy: string
+    +sortDir: string
+    +listContacts(filters)
+    +createContact(payload)
+    +updateContact(id, payload)
+    +deleteContact(id)
+    +importContacts(file)
+    +exportContacts(deviceId)
+    +listLabels(deviceId)
+  }
+  class v_Contacts {
+    +table()
+    +search()
+    +paging()
+    +importExport()
+  }
+  v_Contacts --> c_Contact: uses
+  c_Contact --> m_Contact: uses
+  c_Contact --> m_Label: uses
+
+  %% Broadcasts
+  class m_Broadcast {
+    +id: uuid
+    +pkId: number
+    +name: string
+    +message: string
+    +schedule: Date
+    +recipients: string[]
+    +isSent: boolean
+    +status: boolean
+  }
+  class m_Group { +id: string +name: string +jid: string }
+  class c_Broadcast {
+    +id: uuid
+    +name: string
+    +message: string
+    +schedule: Date
+    +recurrence: string
+    +interval: number
+    +deviceId: uuid
+    +recipients: string[]
+    +delay: number
+    +status: boolean
+    +isSent: boolean
+    +loadGroups()
+    +loadContacts()
+    +loadLabels()
+    +createBroadcast(payload)
+    +updateBroadcast(id, payload)
+    +deleteBroadcast(id)
+  }
+  class v_Broadcasts {
+    +scheduleForm()
+    +recipientPickers()
+    +mediaUpload()
+  }
+  v_Broadcasts --> c_Broadcast: uses
+  c_Broadcast --> m_Broadcast: uses
+  c_Broadcast --> m_Group: uses
+  c_Broadcast --> m_Contact: uses
+  c_Broadcast --> m_Label: uses
+
+  %% Feedback Scheduling
+  class m_CourseFeedback { +courseName: string +lesson: number +message: string }
+  class c_Feedback {
+    +courseName: string
+    +startLesson: number
+    +deviceId: uuid
+    +recipients: string[]
+    +delay: number
+    +mediaPath: string
+    +createFeedbackSchedule(payload)
+    +loadGroupsContactsLabels()
+  }
+  class v_ScheduleFeedback { +form() }
+  v_ScheduleFeedback --> c_Feedback: uses
+  c_Feedback --> m_CourseFeedback: uses
+  c_Feedback --> m_Broadcast: uses
+
+  %% Reminder Scheduling
+  class m_CourseReminder { +courseName: string +lesson: number +message: string }
+  class c_Reminder {
+    +courseName: string
+    +startLesson: number
+    +deviceId: uuid
+    +recipients: string[]
+    +delay: number
+    +mediaPath: string
+    +createReminderSchedule(payload)
+    +loadGroupsContactsLabels()
+  }
+  class v_ScheduleReminder { +form() }
+  v_ScheduleReminder --> c_Reminder: uses
+  c_Reminder --> m_CourseReminder: uses
+  c_Reminder --> m_Broadcast: uses
+
+  %% Jadwal Saya
+  class c_Schedules {
+    +name: string
+    +deviceId: uuid
+    +status: string
+    +isSent: boolean
+    +fromDate: Date
+    +toDate: Date
+    +page: number
+    +pageSize: number
+    +listBroadcasts()
+    +deleteByName(name)
+    +expandRecipients()
+  }
+  class v_Schedules { +grid() +filters() +deleteAction() }
+  v_Schedules --> c_Schedules: uses
+  c_Schedules --> m_Broadcast: uses
+  c_Schedules --> m_Group: uses
+  c_Schedules --> m_Contact: uses
+  c_Schedules --> m_Label: uses
+
+  %% Templates
+  class c_Template {
+    +id: uuid
+    +name: string
+    +message: string
+    +userId: uuid
+    +listCourseFeedbacks()
+    +listCourseReminders()
+  }
+  class v_Templates { +filters() }
+  v_Templates --> c_Template: uses
+  c_Template --> m_CourseFeedback: uses
+  c_Template --> m_CourseReminder: uses
+
+  %% Kelola Tutor
+  class m_User { +id: uuid +firstName: string +lastName: string +email: string +role: string }
+  class c_Tutor {
+    +userId: uuid
+    +email: string
+    +firstName: string
+    +lastName: string
+    +deviceId: uuid
+    +listTutors()
+    +assignDevice()
+    +revokeDevice()
+  }
+  class v_AdminTutors { +grid() +assignRevoke() }
+  v_AdminTutors --> c_Tutor: uses
+  c_Tutor --> m_User: uses
+  c_Tutor --> m_Device: uses
+
+  %% Semua Pesan Terkirim
+  class m_OutgoingMessage {
+    +id: string
+    +to: string
+    +message: string
+    +status: string
+    +createdAt: Date
+  }
+  class c_SentMessages {
+    +broadcastId: uuid
+    +status: string
+    +deviceId: uuid
+    +q: string
+    +page: number
+    +pageSize: number
+    +fromDate: Date
+    +toDate: Date
+    +list(filters)
+    +exportCsv(filters)
+    +delete(filters)
+    +resolveBroadcastType()
+  }
+  class v_SentHistory { +filters() +paging() +exportCsv() +bulkDelete() }
+  v_SentHistory --> c_SentMessages: uses
+  c_SentMessages --> m_OutgoingMessage: uses
+  c_SentMessages --> m_Broadcast: uses
+  c_SentMessages --> m_User: uses
+
+  %% Data relationships (from schema.prisma)
+  %% User — Device
+  m_User "1" --> "*" m_Device: has many
+  m_Device --> m_User: belongs to "1"
+
+  %% Group — User
+  m_Group --> m_User: belongs to "1"
+  m_User "1" --> "*" m_Group: has many
+
+  %% Broadcast — Device
+  m_Broadcast --> m_Device: belongs to "1"
+  m_Device "1" --> "*" m_Broadcast: has many
+
+  %% Device — BusinessHour (one-to-one)
+  m_Device "1" -- "1" m_BusinessHour: one-to-one
+
+  %% Device — CustomerService (optional one-to-one)
+  m_CustomerService "0..1" --> "1" m_Device: belongs to (optional)
+  m_Device "1" --> "0..1" m_CustomerService: has one (optional)
+
+  %% Contact — OutgoingMessage
+  m_Contact "1" --> "0..*" m_OutgoingMessage: has many
+  m_OutgoingMessage --> m_Contact: belongs to "0..1" (optional)
+
+  %% Many-to-many via join tables
+  m_Contact "*" -- "*" m_Group: many-to-many (via ContactGroup)
+  m_Contact "*" -- "*" m_Device: many-to-many (via ContactDevice)
+  m_Contact "*" -- "*" m_Label: many-to-many (via ContactLabel)
+  m_Device "*" -- "*" m_Label: many-to-many (via DeviceLabel)
+
+  %% Frontend -> Backend : API calls (dependency)
+  %% Devices
+  v_AddDevice ..> c_Device : "<<HTTP POST>> /devices/create"
+  v_AddDevice ..> c_Device : "<<HTTP GET>> /devices/:deviceId"
+  v_AddDevice ..> c_Device : "<<HTTP GET>> /devices/api-key/:deviceId"
+
+  %% Contacts
+  v_Contacts ..> c_Contact : "<<HTTP GET>> /contacts"
+  v_Contacts ..> c_Contact : "<<HTTP POST>> /contacts/create"
+  v_Contacts ..> c_Contact : "<<HTTP PUT>> /contacts/:contactId"
+  v_Contacts ..> c_Contact : "<<HTTP DELETE>> /contacts"
+  v_Contacts ..> c_Contact : "<<HTTP POST>> /contacts/import"
+  v_Contacts ..> c_Contact : "<<HTTP GET>> /contacts/labels"
+  v_Contacts ..> c_Contact : "<<HTTP GET>> /contacts/export-contacts"
+  v_Contacts ..> c_Contact : "<<HTTP POST>> /contacts/sync-google"
+
+  %% Broadcasts
+  v_Broadcasts ..> c_Broadcast : "<<HTTP POST>> /broadcasts"
+  v_Broadcasts ..> c_Broadcast : "<<HTTP GET>> /broadcasts"
+  v_Broadcasts ..> c_Broadcast : "<<HTTP GET>> /broadcasts/:broadcastId"
+  v_Broadcasts ..> c_Broadcast : "<<HTTP PUT>> /broadcasts/:id"
+  v_Broadcasts ..> c_Broadcast : "<<HTTP PATCH>> /broadcasts/:id/status"
+  v_Broadcasts ..> c_Broadcast : "<<HTTP DELETE>> /broadcasts"
+  v_Broadcasts ..> c_Broadcast : "<<HTTP DELETE>> /broadcasts/bulk"
+  v_Broadcasts ..> c_Broadcast : "<<HTTP POST>> /broadcasts/feedback"
+  v_Broadcasts ..> c_Broadcast : "<<HTTP POST>> /broadcasts/reminder"
+  v_Broadcasts ..> c_Broadcast : "<<HTTP POST>> /broadcasts/scheduled"
+
+  %% Schedule Feedback / Reminder
+  v_ScheduleFeedback ..> c_Feedback : "<<HTTP POST>> /broadcasts/feedback"
+  v_ScheduleFeedback ..> c_Feedback : "<<HTTP GET>> /algorithmics/feedbacks"
+  v_ScheduleFeedback ..> c_Feedback : "<<HTTP GET>> /algorithmics/feedback/:courseName"
+
+  v_ScheduleReminder ..> c_Reminder : "<<HTTP POST>> /broadcasts/reminder"
+  v_ScheduleReminder ..> c_Reminder : "<<HTTP GET>> /algorithmics/reminders"
+  v_ScheduleReminder ..> c_Reminder : "<<HTTP GET>> /algorithmics/reminder/:courseName"
+
+  %% Schedules (My Schedules)
+  v_Schedules ..> c_Schedules : "<<HTTP GET>> /broadcasts"
+  v_Schedules ..> c_Schedules : "<<HTTP DELETE>> /broadcasts"
+  v_Schedules ..> c_Schedules : "<<HTTP DELETE>> /broadcasts/bulk"
+
+  %% Templates (Feedback templates UI)
+  v_Templates ..> c_Template : "<<HTTP GET>> /algorithmics/feedbacks"
+  v_Templates ..> c_Template : "<<HTTP GET>> /algorithmics/feedback/:courseName"
+  v_Templates ..> c_Template : "<<HTTP POST>> /algorithmics/feedback"
+  v_Templates ..> c_Template : "<<HTTP PUT>> /algorithmics/feedback/:id"
+  v_Templates ..> c_Template : "<<HTTP DELETE>> /algorithmics/feedback/:id"
+  v_Templates ..> c_Template : "<<HTTP POST>> /algorithmics/feedback/import"
+
+  %% Tutors
+  v_AdminTutors ..> c_Tutor : "<<HTTP GET>> /tutors"
+
+  %% Sent History (Admin)
+  v_SentHistory ..> c_SentMessages : "<<HTTP GET>> /tutors/messages/all"
+  v_SentHistory ..> c_SentMessages : "<<HTTP DELETE>> /tutors/messages/all"
+  v_SentHistory ..> c_SentMessages : "<<HTTP GET>> /messages/broadcasts"
+  v_SentHistory ..> c_Broadcast : "<<HTTP DELETE>> /broadcasts/bulk"

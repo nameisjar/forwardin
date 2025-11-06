@@ -3,7 +3,7 @@
     <h2>Jadwal Reminder Terjadwal</h2>
 
     <section class="schedule card">
-      <h3>Buat Jadwal</h3>
+      <!-- <h3>Buat Jadwal</h3> -->
       <form @submit.prevent="submit" class="form-grid">
         <div class="field">
           <label>Nama</label>

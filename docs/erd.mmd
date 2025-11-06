@@ -1,0 +1,115 @@
+erDiagram
+  USER {
+    uuid id
+    string email
+    string role
+  }
+
+  DEVICE {
+    uuid id
+    int pkId
+    string name
+    string status
+    string apiKey
+    uuid user_id
+  }
+
+  SESSION {
+    string sessionId
+    int device_id
+  }
+
+  CONTACT {
+    uuid id
+    string firstName
+    string lastName
+    string phone
+  }
+
+  LABEL {
+    int id
+    string name
+    string slug
+  }
+
+  CONTACT_LABEL {
+    int contact_id
+    int label_id
+  }
+
+  GROUP {
+    uuid id
+    string name
+  }
+
+  CONTACT_GROUP {
+    int contact_id
+    int group_id
+  }
+
+  CONTACT_DEVICE {
+    int contact_id
+    int device_id
+  }
+
+  BROADCAST {
+    uuid id
+    int pkId
+    string name
+    text message
+    datetime schedule
+    boolean status
+    boolean isSent
+    int device_id
+    json recipients
+  }
+
+  OUTGOING_MESSAGE {
+    string id
+    string to
+    text message
+    string status
+    datetime createdAt
+    int contact_id
+    string session_id
+  }
+
+  INCOMING_MESSAGE {
+    string id
+    string from
+    text message
+    datetime createdAt
+    int contact_id
+    string session_id
+  }
+
+  COURSE_FEEDBACK {
+    int id
+    string courseName
+    int lesson
+    text message
+  }
+
+  COURSE_REMINDER {
+    int id
+    string courseName
+    int lesson
+    text message
+  }
+
+  USER ||--o{ DEVICE : owns
+  DEVICE ||--o{ SESSION : has
+  DEVICE ||--o{ BROADCAST : schedules
+  DEVICE ||--o{ CONTACT_DEVICE : links
+  CONTACT ||--o{ CONTACT_DEVICE : links
+  CONTACT ||--o{ CONTACT_LABEL : tagged
+  LABEL ||--o{ CONTACT_LABEL : tags
+  CONTACT ||--o{ CONTACT_GROUP : member
+  GROUP ||--o{ CONTACT_GROUP : has
+  SESSION ||--o{ OUTGOING_MESSAGE : sends
+  SESSION ||--o{ INCOMING_MESSAGE : receives
+  CONTACT ||--o{ OUTGOING_MESSAGE : optional
+  CONTACT ||--o{ INCOMING_MESSAGE : optional
+  BROADCAST ||--o{ OUTGOING_MESSAGE : generates
+  COURSE_FEEDBACK ||--o{ BROADCAST : templates_to
+  COURSE_REMINDER ||--o{ BROADCAST : templates_to

@@ -10,12 +10,11 @@ import { isUUID } from '../utils/uuidChecker';
 
 export const getDevices: RequestHandler = async (req, res) => {
     const pkId = req.authenticatedUser.pkId;
-    const privilegeId = req.privilege.pkId;
 
     try {
         const devices = await prisma.device.findMany({
             where: {
-                userId: privilegeId !== Number(process.env.SUPER_ADMIN_ID) ? pkId : undefined,
+                userId: pkId,
             },
             include: {
                 DeviceLabel: {
@@ -39,20 +38,6 @@ export const getDeviceLabels: RequestHandler = async (req, res) => {
     const pkId = req.authenticatedUser.pkId;
 
     try {
-        // const labels = await prisma.device.findMany({
-        //     where: { userId: pkId },
-        //     select: {
-        //         DeviceLabel: {
-        //             select: {
-        //                 label: {
-        //                     select: { name: true },
-        //                 },
-        //             },
-        //         },
-        //     },
-        // });
-
-        // const newLabels = labels.flatMap((item) => item.DeviceLabel.map((obj) => obj.label.name));
         const labels = await prisma.label.findMany({
             where: { DeviceLabel: { some: { device: { userId: pkId } } } },
         });
@@ -148,7 +133,6 @@ export const getDevice: RequestHandler = async (req, res) => {
             return res.status(400).json({ message: 'Invalid deviceId' });
         }
 
-        // !!!back here: get session logs
         const device = await prisma.device.findUnique({
             where: {
                 id: deviceId,
@@ -197,7 +181,6 @@ export const updateDevice: RequestHandler = async (req, res) => {
                 return res.status(404).json({ message: 'Device not found' });
             }
 
-            // update device
             const updatedDevice = await transaction.device.update({
                 where: {
                     pkId: existingDevice.pkId,
@@ -207,15 +190,7 @@ export const updateDevice: RequestHandler = async (req, res) => {
                     updatedAt: new Date(),
                 },
             });
-            // await transaction.label.update({
-            //     where: { slug: `device${existingDevice.name}` },
-            //     data: {
-            //         name: `device_${updatedDevice.name}`,
-            //         slug: generateSlug(`device_${updatedDevice.name}`),
-            //     },
-            // });
 
-            // update labels
             if (labels && labels.length > 0) {
                 const labelIds: number[] = [];
                 const slugs = labels.map((slug: string) => generateSlug(slug));
@@ -254,7 +229,6 @@ export const updateDevice: RequestHandler = async (req, res) => {
                     labelIds.push(existingLabel.pkId);
                 }
 
-                // update device-label
                 await transaction.deviceLabel.deleteMany({
                     where: {
                         deviceId: updatedDevice.pkId,
@@ -287,7 +261,6 @@ export const updateDevice: RequestHandler = async (req, res) => {
     }
 };
 
-// back here: handle error inside promise
 export const deleteDevices: RequestHandler = async (req, res) => {
     try {
         const deviceIds = req.body.deviceIds;
@@ -343,7 +316,6 @@ export const deleteDevices: RequestHandler = async (req, res) => {
             return { success: true };
         });
 
-        // wait for all the Promises to settle (either resolve or reject)
         const deviceResults = await Promise.all(devicePromises);
         const hasFailures = deviceResults.some((result) => !result.success);
         if (hasFailures) {
@@ -362,7 +334,6 @@ export const deleteDevices: RequestHandler = async (req, res) => {
     }
 };
 
-// back here: set a rule for running the job every day at midnight
 schedule.scheduleJob('*', async () => {
     try {
         const deviceLabels = await prisma.deviceLabel.findMany({ select: { labelId: true } });

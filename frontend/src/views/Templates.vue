@@ -3,7 +3,7 @@
     <h2>Template Feedback</h2>
 
     <section class="tpl">
-      <h3>Kelola Template Feedback</h3>
+      <!-- <h3>Kelola Template Feedback</h3> -->
       <div v-if="isAdmin" class="form card form-inline">
         <label class="field">
           <span>Course name</span>
