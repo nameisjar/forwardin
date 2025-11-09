@@ -5,6 +5,7 @@ import bcrypt from 'bcrypt';
 import logger from '../config/logger';
 import { createSSE as createSessionSSE } from './session';
 import { Prisma } from '@prisma/client';
+import fs from 'fs';
 
 const ADMIN_ID = Number(process.env.ADMIN_ID);
 const SUPER_ADMIN_ID = Number(process.env.SUPER_ADMIN_ID);
@@ -631,8 +632,34 @@ export const deleteOutgoingMessagesAll: RequestHandler = async (req, res) => {
             if (list.length) where.status = { in: list };
         }
 
+        // Collect media paths first (avoid losing the info after deletion)
+        const mediaMessages = await prisma.outgoingMessage.findMany({
+            where,
+            select: { mediaPath: true },
+        });
+        const mediaPaths = Array.from(
+            new Set(
+                mediaMessages
+                    .map((m) => m.mediaPath)
+                    .filter((p): p is string => !!p && typeof p === 'string'),
+            ),
+        );
+
+        // Delete DB rows
         const result = await prisma.outgoingMessage.deleteMany({ where });
-        res.status(200).json({ message: 'Deleted sent messages', deletedCount: result.count });
+
+        // Attempt to unlink files (ignore errors, continue)
+        for (const p of mediaPaths) {
+            try {
+                fs.unlinkSync(p);
+            } catch {}
+        }
+
+        res.status(200).json({
+            message: 'Deleted sent messages',
+            deletedCount: result.count,
+            mediaDeleted: mediaPaths.length,
+        });
     } catch (e) {
         logger.error(e);
         res.status(500).json({ message: 'Internal server error' });

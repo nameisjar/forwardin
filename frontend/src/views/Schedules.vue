@@ -38,6 +38,8 @@
             <th>Jadwal</th>
             <th>Status</th>
             <th>Penerima</th>
+            <th>Pesan</th>
+            <th>Media</th>
           </tr>
         </thead>
         <tbody>
@@ -68,9 +70,25 @@
                 <span v-for="num in phoneRecipients(selectedOf(g))" :key="'p-'+num" class="chip chip-num">{{ normalizeNumber(num) }}</span>
               </div>
             </td>
+            <td class="msg-cell">
+              <div class="msg-text" v-if="selectedOf(g)?.message">{{ selectedOf(g).message }}</div>
+              <div v-else class="dim">-</div>
+            </td>
+            <td class="media-cell">
+              <template v-if="selectedOf(g)?.mediaPath">
+                <a :href="mediaUrl(selectedOf(g).mediaPath)" target="_blank" rel="noopener" class="media-link">Lihat</a>
+                <img
+                  v-if="isImagePath(selectedOf(g).mediaPath)"
+                  :src="mediaUrl(selectedOf(g).mediaPath)"
+                  alt="media"
+                  class="thumb"
+                />
+              </template>
+              <span v-else class="dim">-</span>
+            </td>
           </tr>
           <tr v-if="!loading && visibleGroups.length === 0">
-            <td colspan="4" class="empty">Tidak ada data</td>
+            <td colspan="6" class="empty">Tidak ada data</td>
           </tr>
         </tbody>
       </table>
@@ -387,6 +405,14 @@ const visibleGroups = computed(() => {
   return sortedGroups.value.slice(start, end);
 });
 
+const mediaUrl = (p) => {
+  if (!p) return '';
+  // backend serves /media statically, path already includes 'media/'.
+  // Ensure leading slash for browser fetch.
+  return p.startsWith('/') ? p : `/${p}`;
+};
+const isImagePath = (p) => /\.(png|jpe?g|webp|gif)$/i.test(p || '');
+
 watch([q, statusFilter, sortBy, sortDir, pageSize], () => { page.value = 1; });
 
 const goPrev = () => { if (page.value > 1) page.value -= 1; };
@@ -427,4 +453,9 @@ onMounted(async () => {
 .chip-num { background: #f7fff2; border-color: #cfe9bf; color: #2f7a1f; }
 .chip-label { background: #fff7f0; border-color: #ffd8b5; color: #8a4b0f; }
 .pager { display:flex; gap:8px; align-items:center; margin-top:12px; justify-content: center; }
+.msg-cell { max-width: 280px; }
+.msg-text { white-space: pre-wrap; font-size: 13px; }
+.media-cell { min-width: 120px; }
+.media-link { display:inline-block; margin-right:6px; font-size:12px; }
+.thumb { max-height: 48px; max-width: 80px; border:1px solid #ddd; border-radius:4px; display:block; margin-top:4px; }
 </style>

@@ -10,6 +10,7 @@ import { replaceVariables } from '../utils/variableHelper';
 import { diskUpload } from '../config/multer';
 import { useBroadcast } from '../utils/quota';
 import { isUUID } from '../utils/uuidChecker';
+import fs from 'fs';
 
 // back here: add deviceId param checker
 export const createBroadcast: RequestHandler = async (req, res) => {
@@ -678,13 +679,11 @@ export const bulkDeleteBroadcasts: RequestHandler = async (req, res) => {
         if (isSentParam === 'true' || isSentParam === '1') isSentFilter = true;
         if (isSentParam === 'false' || isSentParam === '0') isSentFilter = false;
 
-        // If no filter provided, default to isSent=true for safety
         if (isSentFilter === undefined && olderThanDays === undefined) {
             isSentFilter = true;
         }
 
         const where: any = {
-            // user scoping (same as getAllBroadcasts)
             device: {
                 userId:
                     req.privilege.pkId !== Number(process.env.SUPER_ADMIN_ID)
@@ -699,24 +698,31 @@ export const bulkDeleteBroadcasts: RequestHandler = async (req, res) => {
             where.createdAt = { lt: threshold };
         }
 
-        // Find candidates
-        const candidates = await prisma.broadcast.findMany({ select: { pkId: true }, where });
-        if (!candidates.length) {
-            return res
-                .status(200)
-                .json({
-                    message: 'No broadcasts matched the criteria',
-                    broadcastsDeleted: 0,
-                    outgoingDeleted: 0,
-                });
+        // Fetch broadcasts with mediaPath for deletion later
+        const candidatesFull = await prisma.broadcast.findMany({
+            select: { pkId: true, mediaPath: true },
+            where,
+        });
+        if (!candidatesFull.length) {
+            return res.status(200).json({
+                message: 'No broadcasts matched the criteria',
+                broadcastsDeleted: 0,
+                outgoingDeleted: 0,
+                mediaDeleted: 0,
+            });
         }
-
-        const pkIds = candidates.map((c) => c.pkId);
+        const pkIds = candidatesFull.map((c) => c.pkId);
+        const mediaPaths = Array.from(
+            new Set(
+                candidatesFull
+                    .map((c) => c.mediaPath)
+                    .filter((p): p is string => !!p && typeof p === 'string'),
+            ),
+        );
         let outgoingDeleted = 0;
 
         await prisma.$transaction(async (tx) => {
             if (cascade) {
-                // Delete related outgoing messages in chunks to avoid huge OR clauses
                 const chunkSize = 50;
                 for (let i = 0; i < pkIds.length; i += chunkSize) {
                     const chunk = pkIds.slice(i, i + chunkSize);
@@ -728,10 +734,20 @@ export const bulkDeleteBroadcasts: RequestHandler = async (req, res) => {
             await tx.broadcast.deleteMany({ where: { pkId: { in: pkIds } } });
         });
 
+        // Remove physical media files
+        let mediaDeleted = 0;
+        for (const p of mediaPaths) {
+            try {
+                fs.unlinkSync(p);
+                mediaDeleted++;
+            } catch {}
+        }
+
         res.status(200).json({
             message: 'Bulk delete completed',
             broadcastsDeleted: pkIds.length,
             outgoingDeleted,
+            mediaDeleted,
         });
     } catch (error) {
         logger.error(error);
@@ -833,7 +849,7 @@ schedule.scheduleJob('* * * * *', async () => {
                     );
                 }
 
-                // Ensure an OutgoingMessage record exists for admin history
+                // Ensure an OutgoingMessage record exists for admin history (now including mediaPath)
                 try {
                     const contact = broadcast.device.contactDevices.find(
                         (cd) => cd.contact.phone == recipient,
@@ -849,6 +865,7 @@ schedule.scheduleJob('* * * * *', async () => {
                             status: 'pending',
                             sessionId,
                             contactId: contact?.pkId ?? null,
+                            mediaPath: broadcast.mediaPath || null,
                         },
                     });
                 } catch (e) {

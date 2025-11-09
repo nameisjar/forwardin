@@ -60,6 +60,7 @@
             <th>Nomor</th>
             <th>Kontak</th>
             <th>Pesan</th>
+            <th>Media</th>
             <th>Status</th>
             <th>Sumber</th>
             <th>Tutor</th>
@@ -71,6 +72,18 @@
             <td class="mono">{{ normalizeNumber(r.to) }}</td>
             <td>{{ r.contact ? (r.contact.firstName + ' ' + (r.contact.lastName||'')) : '-' }}</td>
             <td class="cell-msg">{{ r.message }}</td>
+            <td class="cell-media">
+              <template v-if="r.mediaPath">
+                <a :href="mediaUrl(r.mediaPath)" target="_blank" rel="noopener" class="m-link">Lihat</a>
+                <img
+                  v-if="isImagePath(r.mediaPath)"
+                  :src="mediaUrl(r.mediaPath)"
+                  alt="media"
+                  class="m-thumb"
+                />
+              </template>
+              <span v-else class="muted">-</span>
+            </td>
             <td>
               <span class="badge" :class="badgeClass(r.status)">{{ r.status }}</span>
             </td>
@@ -347,6 +360,9 @@ const deleteAllSent = async () => {
   }
 };
 
+const mediaUrl = (p) => p ? (p.startsWith('/') ? p : `/${p}`) : '';
+const isImagePath = (p) => /\.(png|jpe?g|webp|gif)$/i.test(p || '');
+
 watch([sortBy, sortDir, pageSize], () => {
   page.value = 1;
   load(1);
@@ -437,6 +453,9 @@ tbody tr:hover { background: #f6faff; }
 .empty { text-align: center; color: #777; padding: 28px; }
 .error { color: #c00; margin-top: 8px; }
 .cell-msg { max-width: 480px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cell-media { max-width: 140px; }
+.m-link { font-size: 12px; margin-right:4px; display:inline-block; }
+.m-thumb { max-height:42px; max-width:70px; border:1px solid #ddd; border-radius:4px; margin-top:4px; }
 
 @media (max-width: 1100px) {
   .toolbar .filters { grid-template-columns: repeat(4, minmax(120px, 1fr)); }
