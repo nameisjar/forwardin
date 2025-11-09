@@ -1,0 +1,96 @@
+---
+title: Frontend-only ERD
+---
+
+erDiagram
+  Privilege ||--o{ User : "grants"
+  User ||--o{ Device : "owns"
+  Device ||--o{ Broadcast : "schedules"
+  Contact ||--o{ OutgoingMessage : "has"
+  Contact ||--o{ ContactLabel : "has"
+  Label ||--o{ ContactLabel : "tagged"
+  Device ||--o{ ContactDevice : ""
+  Contact ||--o{ ContactDevice : ""
+
+  Privilege {
+    string id
+    string name
+  }
+
+  User {
+    string id
+    string firstName
+    string lastName
+    string email
+    string phone
+  }
+
+  Device {
+    string id
+    string name
+    string phone
+    string apiKey
+    string status
+  }
+
+  Contact {
+    string id
+    string firstName
+    string lastName
+    string phone
+    string email
+  }
+
+  Label {
+    string name
+    string slug
+  }
+
+  ContactLabel {
+    int id
+    // join: contactId, labelId
+  }
+
+  ContactDevice {
+    string id
+    // join: contactId, deviceId
+  }
+
+  Broadcast {
+    string id
+    string name
+    boolean status
+    string[] recipients
+    string message
+    datetime schedule
+    int delay
+    boolean isSent
+    string mediaPath
+  }
+
+  OutgoingMessage {
+    string id
+    string to
+    string message
+    string status
+    datetime schedule
+    datetime createdAt
+  }
+
+  CourseFeedback {
+    string id
+    string courseName
+    int lesson
+    string message
+  }
+
+  CourseReminder {
+    string id
+    string courseName
+    int lesson
+    string message
+  }
+
+%% Notes:
+%% - Broadcast.recipients berisi campuran: JID grup ("...@g.us"), "label_<name>", nomor telepon, atau "all" (tidak direlasikan ke tabel lain di FE/DB).
+%% - WhatsApp Group yang ditampilkan di FE berasal dari device API (eksternal), bukan entitas Group pada Prisma. 

@@ -5,7 +5,6 @@ import type {
     proto,
     WAMessageKey,
 } from '@whiskeysockets/baileys';
-// import { jidNormalizedUser, toNumber } from '@whiskeysockets/baileys';
 import { downloadMediaMessage, jidNormalizedUser } from '@whiskeysockets/baileys';
 import logger from '../config/logger';
 import prisma, { transformPrisma } from '../utils/db';
@@ -13,6 +12,7 @@ import { BaileysEventHandler } from '../types';
 import { sendCampaignReply } from '../controllers/campaign';
 import { sendOutsideBusinessHourMessage } from '../controllers/businessHour';
 import fs from 'fs';
+import path from 'path';
 import { getSocketIO } from '../socket';
 import { Server } from 'socket.io';
 
@@ -50,10 +50,11 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                 for (const message of messages) {
                     try {
                         // Skip only WhatsApp status broadcast channel
-                        if (message.key?.remoteJid === 'status@broadcast') {
+                        const remoteJidRaw = message.key?.remoteJid;
+                        if (!remoteJidRaw || remoteJidRaw === 'status@broadcast') {
                             continue;
                         }
-                        const jid = jidNormalizedUser(message.key.remoteJid!);
+                        const jid = jidNormalizedUser(remoteJidRaw);
                         const data = transformPrisma(message);
                         console.log(data);
 
@@ -87,9 +88,12 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                         });
 
                         if (data.message && !data.message.protocolMessage) {
-                            const dir = `media/S${sessionId}`;
-                            if (!fs.existsSync(dir)) {
-                                fs.mkdirSync(dir, { recursive: true });
+                            const dir = path.join('media', `S${sessionId}`);
+                            // non-blocking ensure directory exists
+                            try {
+                                await fs.promises.mkdir(dir, { recursive: true });
+                            } catch (mkdirErr) {
+                                logger.error({ mkdirErr, dir }, 'Failed to create media directory');
                             }
 
                             const io: Server = getSocketIO();
@@ -122,23 +126,43 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                             } else {
                                 logger.warn({ sessionId, data }, 'incoming messages');
                                 if (!jid.includes('@g.us')) {
-                                    sendOutsideBusinessHourMessage(sessionId, message);
+                                    // Run both replies but don't block the main flow; catch rejections
+                                    Promise.allSettled([
+                                        sendOutsideBusinessHourMessage(sessionId, message),
+                                        sendCampaignReply(sessionId, message),
+                                    ]).then((results) => {
+                                        results.forEach((r, idx) => {
+                                            if (r.status === 'rejected') {
+                                                logger.error(
+                                                    {
+                                                        idx,
+                                                        reason: (r as PromiseRejectedResult).reason,
+                                                    },
+                                                    'Aux handler failed',
+                                                );
+                                            }
+                                        });
+                                    });
+                                } else {
+                                    // For group messages, still trigger campaign reply (if desired)
+                                    Promise.allSettled([
+                                        sendCampaignReply(sessionId, message),
+                                    ]).catch(() => {});
                                 }
-                                sendCampaignReply(sessionId, message);
+                                // pesan masuk tidak disimpan untuk sementara waktu
+                                // const incomingMessage = await prisma.incomingMessage.create({
+                                //     data: {
+                                //         id: message.key.id!,
+                                //         from: jid,
+                                //         message: messageText,
+                                //         receivedAt: new Date(data.messageTimestamp * 1000),
+                                //         sessionId,
+                                //         contactId: contact?.pkId || null,
+                                //     },
+                                //     include: { contact: true },
+                                // });
 
-                                const incomingMessage = await prisma.incomingMessage.create({
-                                    data: {
-                                        id: message.key.id!,
-                                        from: jid,
-                                        message: messageText,
-                                        receivedAt: new Date(data.messageTimestamp * 1000),
-                                        sessionId,
-                                        contactId: contact?.pkId || null,
-                                    },
-                                    include: { contact: true },
-                                });
-
-                                io.emit(`message:${sessionId}`, incomingMessage);
+                                // io.emit(`message:${sessionId}`, incomingMessage);
                             }
                         }
                     } catch (e) {
@@ -259,10 +283,7 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                         where: { id: key.id!, remoteJid: key.remoteJid!, sessionId },
                     });
                     if (!message) {
-                        return logger.debug(
-                            { update },
-                            'Got receipt update for non existent message',
-                        );
+                        return logger.debug({ key }, 'Got receipt update for non existent message');
                     }
 
                     let userReceipt = (message.userReceipt ||
@@ -306,7 +327,7 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                     });
                     if (!message) {
                         return logger.debug(
-                            { update },
+                            { update: key },
                             'Got reaction update for non existent message',
                         );
                     }
@@ -316,8 +337,6 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                         (r) => getKeyAuthor(r.key) !== authorID,
                     );
 
-                    // back here: Invalid value for argument `toInt`: We could not serialize [object Function] value.
-                    // Serialize the object to JSON or implement a \".toJSON()\" method on it.
                     if (reaction.text) reactions.push(reaction);
                     await tx.message.update({
                         select: { pkId: true },
@@ -339,7 +358,7 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
 
     const deleteChats: BaileysEventHandler<'chats.delete'> = async (chatIds) => {
         try {
-            // Lakukan penghapusan percakapan menggunakan Prisma
+            // Hapus percakapan menggunakan Prisma
             await prisma.message.deleteMany({
                 where: {
                     id: {
@@ -356,6 +375,7 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
     const listen = () => {
         if (listening) return;
 
+        // Jika ingin mengaktifkan messaging-history.set, uncomment kedua baris ini (on & off)
         // event.on('messaging-history.set', set);
         event.on('messages.upsert', upsert);
         event.on('messages.update', update);
@@ -369,7 +389,7 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
     const unlisten = () => {
         if (!listening) return;
 
-        event.off('messaging-history.set', set);
+        // event.off('messaging-history.set', set);
         event.off('messages.upsert', upsert);
         event.off('messages.update', update);
         event.off('messages.delete', del);
