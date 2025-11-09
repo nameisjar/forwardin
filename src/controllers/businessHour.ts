@@ -3,8 +3,6 @@ import prisma from '../utils/db';
 import { getInstance, getJid } from '../whatsapp';
 import logger from '../config/logger';
 import { replaceVariables } from '../utils/variableHelper';
-import { format, parseISO } from 'date-fns';
-import { utcToZonedTime } from 'date-fns-tz';
 import { sendAutoReply } from './autoReply';
 import { isUUID } from '../utils/uuidChecker';
 
@@ -169,8 +167,33 @@ function getDayOfWeek(timestamp: number) {
 }
 
 function convertToBusinessTimeZone(timestamp: number, timeZone: string): Date {
-    const userTime = parseISO(format(new Date(timestamp * 1000), "yyyy-MM-dd'T'HH:mm:ssxxx"));
-    return utcToZonedTime(userTime, timeZone);
+    // Convert the given UNIX timestamp (seconds) to a Date representing the wall-clock time in the specified IANA time zone.
+    const date = new Date(timestamp * 1000);
+    const formatter = new Intl.DateTimeFormat('en-US', {
+        timeZone,
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: false,
+    });
+    const parts = formatter.formatToParts(date).reduce(
+        (acc, p) => {
+            if (p.type !== 'literal') acc[p.type] = p.value;
+            return acc;
+        },
+        {} as Record<string, string>,
+    );
+    const year = Number(parts.year);
+    const month = Number(parts.month); // 1-12
+    const day = Number(parts.day);
+    const hour = Number(parts.hour);
+    const minute = Number(parts.minute);
+    const second = Number(parts.second);
+    // Create a UTC date corresponding to the localized components
+    return new Date(Date.UTC(year, month - 1, day, hour, minute, second));
 }
 
 type BusinessHours = {
