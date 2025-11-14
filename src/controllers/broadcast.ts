@@ -77,14 +77,7 @@ export const createBroadcastFeedback: RequestHandler = async (req, res) => {
                 return res.status(400).json({ message: 'Error uploading file' });
             }
 
-            // Accept schedule (ISO string) and name from body
-            const {
-                courseName,
-                startLesson = 1,
-                recipients,
-                deviceId,
-                schedule: scheduleInput,
-            } = req.body;
+            const { courseName, startLesson = 1, recipients, deviceId } = req.body;
             const delay = Number(req.body.delay) ?? 5000;
 
             if (!courseName || !recipients || !deviceId) {
@@ -115,7 +108,6 @@ export const createBroadcastFeedback: RequestHandler = async (req, res) => {
                 return res.status(404).json({ message: 'Session not found' });
             }
 
-            // Fetch feedback templates starting from startLesson
             const courseFeedbacks = await prisma.courseFeedback.findMany({
                 where: {
                     courseName,
@@ -130,30 +122,19 @@ export const createBroadcastFeedback: RequestHandler = async (req, res) => {
                     .json({ message: 'No lessons found for the specified course' });
             }
 
-            // Determine base schedule (keep time-of-day)
-            let baseSchedule: Date;
-            if (scheduleInput) {
-                const parsed = new Date(scheduleInput);
-                if (isNaN(parsed.getTime())) {
-                    return res.status(400).json({ message: 'Invalid schedule datetime' });
-                }
-                baseSchedule = parsed; // already respects timezone (ISO expected)
-            } else {
-                baseSchedule = new Date(); // default: now
-            }
+            const now = new Date();
 
             await prisma.$transaction(async (transaction) => {
                 for (let i = 0; i < courseFeedbacks.length; i++) {
                     const feedback = courseFeedbacks[i];
-                    // Clone base schedule and add i * 7 days (weekly interval)
-                    const scheduleDate = new Date(baseSchedule);
-                    scheduleDate.setDate(scheduleDate.getDate() + i * 7);
+                    const schedule = new Date(now);
+                    schedule.setDate(schedule.getDate() + i * 7);
 
                     await transaction.broadcast.create({
                         data: {
                             name: `${courseName} - Recipients ${recipients}`,
                             message: feedback.message,
-                            schedule: scheduleDate,
+                            schedule,
                             deviceId: device.pkId,
                             delay,
                             recipients: { set: recipients },
@@ -163,11 +144,7 @@ export const createBroadcastFeedback: RequestHandler = async (req, res) => {
                 }
             });
 
-            return res.status(201).json({
-                message: 'Broadcasts created successfully',
-                totalBroadcasts: courseFeedbacks.length,
-                firstSchedule: baseSchedule,
-            });
+            res.status(201).json({ message: 'Broadcasts created successfully' });
         });
     } catch (error) {
         logger.error(error);

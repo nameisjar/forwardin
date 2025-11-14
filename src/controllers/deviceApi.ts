@@ -1959,20 +1959,45 @@ export const createBroadcastFeedback: RequestHandler = async (req, res) => {
             }
 
             const { deviceId } = req.authenticatedDevice;
-            const { name, courseName, startLesson = 1, recipients } = req.body;
+            const {
+                name,
+                courseName,
+                startLesson = 1,
+            } = req.body as {
+                name?: string;
+                courseName?: string;
+                startLesson?: number | string;
+            };
             const delay = Number(req.body.delay) ?? 5000;
 
-            if (!name || !courseName || !recipients) {
+            // Normalize recipients from body (allow string or array)
+            const rawRecipients = (req.body as any).recipients;
+            const recipients: string[] = Array.isArray(rawRecipients)
+                ? rawRecipients
+                : typeof rawRecipients === 'string' && rawRecipients.length
+                ? [rawRecipients]
+                : [];
+
+            // Parse base schedule provided by client; if invalid, error
+            const scheduleInput = (req.body as any).schedule as string | undefined;
+            let baseSchedule: Date | null = null;
+            if (scheduleInput) {
+                const parsed = new Date(scheduleInput);
+                if (!isNaN(parsed.getTime())) baseSchedule = parsed;
+            }
+
+            if (!name || !courseName || !recipients.length) {
                 return res
                     .status(400)
                     .json({ message: 'Missing required fields: name, courseName, recipients' });
             }
+            if (!baseSchedule) {
+                return res.status(400).json({ message: 'Invalid or missing schedule datetime' });
+            }
 
             if (
                 recipients.includes('all') &&
-                recipients.some((recipient: { startsWith: (arg0: string) => string }) =>
-                    recipient.startsWith('label'),
-                )
+                recipients.some((recipient: string) => recipient.startsWith('label'))
             ) {
                 return res.status(400).json({
                     message:
@@ -2006,24 +2031,20 @@ export const createBroadcastFeedback: RequestHandler = async (req, res) => {
                     .json({ message: 'No lessons found for the specified course' });
             }
 
-            const now = new Date();
-
             await prisma.$transaction(async (transaction) => {
                 for (let i = 0; i < courseFeedbacks.length; i++) {
                     const feedback = courseFeedbacks[i];
-                    const schedule = new Date(now);
-                    schedule.setDate(schedule.getDate() + i * 7); // Tambahkan 1 minggu untuk setiap lesson
+                    const scheduleDate = new Date(baseSchedule!);
+                    scheduleDate.setDate(scheduleDate.getDate() + i * 7); // weekly cadence
 
                     await transaction.broadcast.create({
                         data: {
-                            name: `${name} - ${courseName}`, // Store as "feedbackName - courseName"
+                            name: `${name} - ${courseName}`,
                             message: feedback.message,
-                            schedule,
+                            schedule: scheduleDate,
                             deviceId: device.pkId,
                             delay,
-                            recipients: {
-                                set: recipients,
-                            },
+                            recipients: { set: recipients },
                             mediaPath: req.file?.path,
                         },
                     });
@@ -2033,6 +2054,8 @@ export const createBroadcastFeedback: RequestHandler = async (req, res) => {
             res.status(201).json({
                 message: 'Feedback broadcasts created successfully',
                 broadcastName: `${name} - ${courseName}`,
+                firstSchedule: baseSchedule,
+                totalBroadcasts: courseFeedbacks.length,
             });
         });
     } catch (error) {
