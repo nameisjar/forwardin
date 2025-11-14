@@ -1960,6 +1960,8 @@ export const createBroadcastFeedback: RequestHandler = async (req, res) => {
 
             const { deviceId } = req.authenticatedDevice;
             const { name, courseName, startLesson = 1, recipients } = req.body;
+            // Terima juga startDate dari frontend (ISO string)
+            const startDateRaw = req.body.startDate || req.body.schedule || '';
             const delay = Number(req.body.delay) ?? 5000;
 
             if (!name || !courseName || !recipients) {
@@ -1968,9 +1970,12 @@ export const createBroadcastFeedback: RequestHandler = async (req, res) => {
                     .json({ message: 'Missing required fields: name, courseName, recipients' });
             }
 
+            // pastikan recipients array
+            const recipientArray = Array.isArray(recipients) ? recipients : [recipients];
+
             if (
-                recipients.includes('all') &&
-                recipients.some((recipient: { startsWith: (arg0: string) => string }) =>
+                recipientArray.includes('all') &&
+                recipientArray.some((recipient: { startsWith: (arg0: string) => string }) =>
                     recipient.startsWith('label'),
                 )
             ) {
@@ -2006,13 +2011,30 @@ export const createBroadcastFeedback: RequestHandler = async (req, res) => {
                     .json({ message: 'No lessons found for the specified course' });
             }
 
-            const now = new Date();
+            // Validasi dan gunakan startDate yang dikirim client (fallback ke now jika kosong)
+            let baseDate: Date;
+            if (startDateRaw) {
+                const parsed = new Date(startDateRaw);
+                if (isNaN(parsed.getTime())) {
+                    return res.status(400).json({ message: 'Invalid startDate format' });
+                }
+                baseDate = parsed;
+            } else {
+                baseDate = new Date(); // fallback
+            }
+
+            // Opsional: jika baseDate < sekarang, bisa kembalikan error atau izinkan.
+            // Contoh: blokir jika startDate di masa lalu
+            // if (baseDate.getTime() < Date.now()) {
+            //   return res.status(400).json({ message: 'startDate must be in the future' });
+            // }
 
             await prisma.$transaction(async (transaction) => {
                 for (let i = 0; i < courseFeedbacks.length; i++) {
                     const feedback = courseFeedbacks[i];
-                    const schedule = new Date(now);
-                    schedule.setDate(schedule.getDate() + i * 7); // Tambahkan 1 minggu untuk setiap lesson
+                    // buat salinan baseDate untuk tiap broadcast supaya tidak mutasi baseDate asli
+                    const schedule = new Date(baseDate);
+                    schedule.setDate(schedule.getDate() + i * 7); // + i minggu
 
                     await transaction.broadcast.create({
                         data: {
@@ -2022,7 +2044,7 @@ export const createBroadcastFeedback: RequestHandler = async (req, res) => {
                             deviceId: device.pkId,
                             delay,
                             recipients: {
-                                set: recipients,
+                                set: recipientArray,
                             },
                             mediaPath: req.file?.path,
                         },
@@ -2040,6 +2062,96 @@ export const createBroadcastFeedback: RequestHandler = async (req, res) => {
         res.status(500).json({ message: 'Internal server error' });
     }
 };
+
+// export const createBroadcastFeedback: RequestHandler = async (req, res) => {
+//     try {
+//         diskUpload.single('media')(req, res, async (err: any) => {
+//             if (err) {
+//                 return res.status(400).json({ message: 'Error uploading file' });
+//             }
+
+//             const { deviceId } = req.authenticatedDevice;
+//             const { name, courseName, startLesson = 1, recipients } = req.body;
+//             const delay = Number(req.body.delay) ?? 5000;
+
+//             if (!name || !courseName || !recipients) {
+//                 return res
+//                     .status(400)
+//                     .json({ message: 'Missing required fields: name, courseName, recipients' });
+//             }
+
+//             if (
+//                 recipients.includes('all') &&
+//                 recipients.some((recipient: { startsWith: (arg0: string) => string }) =>
+//                     recipient.startsWith('label'),
+//                 )
+//             ) {
+//                 return res.status(400).json({
+//                     message:
+//                         "Recipients can't contain both all contacts and contact labels at the same input",
+//                 });
+//             }
+
+//             const device = await prisma.device.findUnique({
+//                 where: { pkId: deviceId },
+//                 include: { sessions: { select: { sessionId: true } } },
+//             });
+
+//             if (!device) {
+//                 return res.status(404).json({ message: 'Device not found' });
+//             }
+//             if (!device.sessions[0]) {
+//                 return res.status(404).json({ message: 'Session not found' });
+//             }
+
+//             const courseFeedbacks = await prisma.courseFeedback.findMany({
+//                 where: {
+//                     courseName,
+//                     lesson: { gte: Number(startLesson) },
+//                 },
+//                 orderBy: { lesson: 'asc' },
+//             });
+
+//             if (courseFeedbacks.length === 0) {
+//                 return res
+//                     .status(404)
+//                     .json({ message: 'No lessons found for the specified course' });
+//             }
+
+//             const now = new Date();
+
+//             await prisma.$transaction(async (transaction) => {
+//                 for (let i = 0; i < courseFeedbacks.length; i++) {
+//                     const feedback = courseFeedbacks[i];
+//                     const schedule = new Date(now);
+//                     schedule.setDate(schedule.getDate() + i * 7); // Tambahkan 1 minggu untuk setiap lesson
+
+//                     await transaction.broadcast.create({
+//                         data: {
+//                             name: `${name} - ${courseName}`, // Store as "feedbackName - courseName"
+//                             message: feedback.message,
+//                             schedule,
+//                             deviceId: device.pkId,
+//                             delay,
+//                             recipients: {
+//                                 set: recipients,
+//                             },
+//                             mediaPath: req.file?.path,
+//                         },
+//                     });
+//                 }
+//             });
+
+//             res.status(201).json({
+//                 message: 'Feedback broadcasts created successfully',
+//                 broadcastName: `${name} - ${courseName}`,
+//             });
+//         });
+//     } catch (error) {
+//         logger.error(error);
+//         res.status(500).json({ message: 'Internal server error' });
+//     }
+// };
 
 export const createBroadcastReminder: RequestHandler = async (req, res) => {
     try {
