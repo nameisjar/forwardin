@@ -84,7 +84,6 @@ export const createBroadcastFeedback: RequestHandler = async (req, res) => {
                 recipients,
                 deviceId,
                 schedule: scheduleInput,
-                name,
             } = req.body;
             const delay = Number(req.body.delay) ?? 5000;
 
@@ -152,7 +151,7 @@ export const createBroadcastFeedback: RequestHandler = async (req, res) => {
 
                     await transaction.broadcast.create({
                         data: {
-                            name: name ? String(name) : `${courseName} - Lesson ${feedback.lesson}`,
+                            name: `${courseName} - Recipients ${recipients}`,
                             message: feedback.message,
                             schedule: scheduleDate,
                             deviceId: device.pkId,
