@@ -2311,7 +2311,7 @@ export const createBroadcastScheduled: RequestHandler = async (req, res) => {
             // Hitung dan buat pesan broadcast berdasarkan interval dan durasi
             while (current <= end) {
                 broadcasts.push({
-                    name: name.includes('[Reminder]') ? name : `${name} [Reminder]`,
+                    name: name.includes('[Recurrence]') ? name : `${name} [Recurrence]`,
                     message,
                     schedule: new Date(current),
                     deviceId: device.pkId,
@@ -2453,11 +2453,9 @@ export const createBroadcastReminderAlgo: RequestHandler = async (req, res) => {
             const delay = Number(req.body.delay) ?? 5000;
 
             if (!name || !message || !lessons || !recipients) {
-                return res
-                    .status(400)
-                    .json({
-                        message: 'Missing required fields: name, message, lessons, recipients',
-                    });
+                return res.status(400).json({
+                    message: 'Missing required fields: name, message, lessons, recipients',
+                });
             }
 
             // Validasi lessons harus berupa angka positif
@@ -2511,7 +2509,8 @@ export const createBroadcastReminderAlgo: RequestHandler = async (req, res) => {
 
                     await transaction.broadcast.create({
                         data: {
-                            name: `${name} - Lesson ${i + 1}`, // Store as "reminderName - Lesson 1, 2, 3, etc"
+                            // name: `${name} - [Reminder]`, // Store as "reminderName - Lesson 1, 2, 3, etc"
+                            name: name.includes('[Reminder]') ? name : `${name} [Reminder]`,
                             message,
                             schedule,
                             deviceId: device.pkId,
