@@ -13,6 +13,7 @@ router.post('/messages/broadcasts', controller.createBroadcast);
 router.post('/messages/broadcasts/scheduled', controller.createBroadcastScheduled);
 router.post('/messages/broadcasts/reminder', controller.createBroadcastReminder);
 router.post('/messages/broadcasts/feedback', controller.createBroadcastFeedback);
+router.post('/messages/broadcasts/reminder-algo', controller.createBroadcastReminderAlgo);
 // router.post('/messages/broadcasts/recurring', controller.createBroadcastRecurring);  //testing
 router.post('/messages/auto-replies', controller.createAutoReplies);
 router.get('/messages', controller.getConversationMessages);

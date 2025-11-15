@@ -2438,3 +2438,101 @@ export const createBroadcastScheduled: RequestHandler = async (req, res) => {
 //         res.status(500).json({ message: 'Internal server error' });
 //     }
 // };
+
+export const createBroadcastReminderAlgo: RequestHandler = async (req, res) => {
+    try {
+        diskUpload.single('media')(req, res, async (err: any) => {
+            if (err) {
+                return res.status(400).json({ message: 'Error uploading file' });
+            }
+
+            const { deviceId } = req.authenticatedDevice;
+            const { name, message, lessons, recipients } = req.body;
+            // Terima juga schedule dari frontend (ISO string)
+            const scheduleRaw = req.body.schedule || '';
+            const delay = Number(req.body.delay) ?? 5000;
+
+            if (!name || !message || !lessons || !recipients) {
+                return res
+                    .status(400)
+                    .json({
+                        message: 'Missing required fields: name, message, lessons, recipients',
+                    });
+            }
+
+            // Validasi lessons harus berupa angka positif
+            const lessonCount = Number(lessons);
+            if (isNaN(lessonCount) || lessonCount <= 0) {
+                return res.status(400).json({ message: 'Lessons must be a positive number' });
+            }
+
+            // pastikan recipients array
+            const recipientArray = Array.isArray(recipients) ? recipients : [recipients];
+
+            if (
+                recipientArray.includes('all') &&
+                recipientArray.some((recipient: string) => recipient.startsWith('label'))
+            ) {
+                return res.status(400).json({
+                    message:
+                        "Recipients can't contain both all contacts and contact labels at the same input",
+                });
+            }
+
+            const device = await prisma.device.findUnique({
+                where: { pkId: deviceId },
+                include: { sessions: { select: { sessionId: true } } },
+            });
+
+            if (!device) {
+                return res.status(404).json({ message: 'Device not found' });
+            }
+            if (!device.sessions[0]) {
+                return res.status(404).json({ message: 'Session not found' });
+            }
+
+            // Validasi dan gunakan schedule yang dikirim client (fallback ke now jika kosong)
+            let baseDate: Date;
+            if (scheduleRaw) {
+                const parsed = new Date(scheduleRaw);
+                if (isNaN(parsed.getTime())) {
+                    return res.status(400).json({ message: 'Invalid schedule format' });
+                }
+                baseDate = parsed;
+            } else {
+                baseDate = new Date(); // fallback
+            }
+
+            await prisma.$transaction(async (transaction) => {
+                for (let i = 0; i < lessonCount; i++) {
+                    // buat salinan baseDate untuk tiap broadcast supaya tidak mutasi baseDate asli
+                    const schedule = new Date(baseDate);
+                    schedule.setDate(schedule.getDate() + i * 7); // + i minggu
+
+                    await transaction.broadcast.create({
+                        data: {
+                            name: `${name} - Lesson ${i + 1}`, // Store as "reminderName - Lesson 1, 2, 3, etc"
+                            message,
+                            schedule,
+                            deviceId: device.pkId,
+                            delay,
+                            recipients: {
+                                set: recipientArray,
+                            },
+                            mediaPath: req.file?.path,
+                        },
+                    });
+                }
+            });
+
+            res.status(201).json({
+                message: 'Reminder broadcasts created successfully',
+                broadcastName: name,
+                totalLessons: lessonCount,
+            });
+        });
+    } catch (error) {
+        logger.error(error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};
