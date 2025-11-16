@@ -378,7 +378,7 @@ export const getAllBroadcasts: RequestHandler = async (req, res) => {
                 status: true,
                 recipients: true,
                 deviceId: true,
-                device: { select: { name: true } },
+                device: { select: { name: true, sessions: { select: { sessionId: true } } } },
                 createdAt: true,
                 updatedAt: true,
             },
@@ -386,17 +386,53 @@ export const getAllBroadcasts: RequestHandler = async (req, res) => {
 
         const newBroadcasts = [];
         for (const bc of broadcasts) {
-            const sentCount = await prisma.outgoingMessage.count({
-                where: { id: { contains: `BC_${bc.pkId}` }, status: 'server_ack' },
-            });
-            const receivedCount = await prisma.outgoingMessage.count({
-                where: { id: { contains: `BC_${bc.pkId}` }, status: 'delivery_ack' },
-            });
-            const readCount = await prisma.outgoingMessage.count({
-                where: { id: { contains: `BC_${bc.pkId}` }, status: 'read' },
-            });
+            // Since we're now using real WhatsApp message IDs, we need a different approach
+            // to track broadcast messages. We'll look for messages sent within the broadcast's
+            // time window and to the broadcast's recipients
 
             const recipients = await getRecipients(bc);
+            const recipientJids = recipients.map((r) => getJid(r));
+
+            // Look for messages sent to broadcast recipients within a reasonable time window
+            // after the broadcast was marked as sent
+            const timeWindow = new Date(bc.updatedAt);
+            timeWindow.setMinutes(timeWindow.getMinutes() + 30); // 30 minute window
+
+            const sentCount = await prisma.outgoingMessage.count({
+                where: {
+                    sessionId: { in: bc.device.sessions?.map((s) => s.sessionId) || [] },
+                    to: { in: recipientJids },
+                    createdAt: {
+                        gte: bc.createdAt,
+                        lte: timeWindow,
+                    },
+                    status: 'server_ack',
+                },
+            });
+
+            const receivedCount = await prisma.outgoingMessage.count({
+                where: {
+                    sessionId: { in: bc.device.sessions?.map((s) => s.sessionId) || [] },
+                    to: { in: recipientJids },
+                    createdAt: {
+                        gte: bc.createdAt,
+                        lte: timeWindow,
+                    },
+                    status: 'delivery_ack',
+                },
+            });
+
+            const readCount = await prisma.outgoingMessage.count({
+                where: {
+                    sessionId: { in: bc.device.sessions?.map((s) => s.sessionId) || [] },
+                    to: { in: recipientJids },
+                    createdAt: {
+                        gte: bc.createdAt,
+                        lte: timeWindow,
+                    },
+                    status: 'read',
+                },
+            });
 
             const uniqueRecipients = new Set();
             for (const recipient of recipients) {
@@ -474,18 +510,43 @@ export const getOutgoingBroadcasts: RequestHandler = async (req, res) => {
 
         const broadcast = await prisma.broadcast.findUnique({
             where: { id: broadcastId },
-            select: { pkId: true },
+            select: {
+                pkId: true,
+                recipients: true,
+                createdAt: true,
+                updatedAt: true,
+                device: { select: { sessions: { select: { sessionId: true } } } },
+            },
         });
 
         if (!broadcast) {
             return res.status(404).json('Broadcast not found');
         }
 
-        const outgoingBroadcasts = await prisma.outgoingMessage.findMany({
-            where: {
-                id: { contains: `BC_${broadcast.pkId}` },
-                status,
+        // Get broadcast recipients and convert to JIDs
+        const recipients = await getRecipients(broadcast);
+        const recipientJids = recipients.map((r) => getJid(r));
+
+        // Look for messages sent to broadcast recipients within a reasonable time window
+        const timeWindow = new Date(broadcast.updatedAt);
+        timeWindow.setMinutes(timeWindow.getMinutes() + 30); // 30 minute window
+
+        const whereClause: any = {
+            sessionId: { in: broadcast.device.sessions?.map((s) => s.sessionId) || [] },
+            to: { in: recipientJids },
+            createdAt: {
+                gte: broadcast.createdAt,
+                lte: timeWindow,
             },
+        };
+
+        // Add status filter if provided
+        if (status) {
+            whereClause.status = status;
+        }
+
+        const outgoingBroadcasts = await prisma.outgoingMessage.findMany({
+            where: whereClause,
             include: {
                 contact: {
                     select: {
@@ -497,6 +558,7 @@ export const getOutgoingBroadcasts: RequestHandler = async (req, res) => {
                     },
                 },
             },
+            orderBy: { createdAt: 'desc' },
         });
 
         res.status(200).json({ outgoingBroadcasts });
@@ -823,11 +885,12 @@ schedule.scheduleJob('* * * * *', async () => {
                 };
 
                 // Generate deterministic outgoing message id and text
-                const outgoingId = `BC_${broadcast.pkId}_${Date.now()}_${i}`;
+                // Don't generate custom BC_ ID - let WhatsApp generate the real ID
                 const textPayload = replaceVariables(broadcast.message, variables);
 
+                let sentMessage;
                 if (broadcast.mediaPath) {
-                    await sendMediaFile(
+                    const result = await sendMediaFile(
                         session,
                         [jid],
                         {
@@ -839,26 +902,42 @@ schedule.scheduleJob('* * * * *', async () => {
                             : 'document',
                         textPayload,
                         null,
-                        outgoingId,
+                        undefined, // Don't pass custom messageId
                     );
+                    sentMessage = result.results?.[0]?.result;
                 } else {
-                    await session.sendMessage(
+                    sentMessage = await session.sendMessage(
                         jid,
                         { text: textPayload },
-                        { messageId: outgoingId },
+                        // Remove custom messageId to let WhatsApp generate real ID
                     );
                 }
 
-                // Ensure an OutgoingMessage record exists for admin history (now including mediaPath)
+                // Use the real WhatsApp message ID from the sent message
+                const realMessageId = sentMessage?.key?.id;
+                if (!realMessageId) {
+                    logger.warn(
+                        { recipient },
+                        'No message ID returned from WhatsApp, skipping outgoing message record',
+                    );
+                    processedRecipients.push(recipient);
+                    await delayMs(isLastRecipient ? 0 : broadcast.delay);
+                    continue;
+                }
+
+                // Store additional broadcast metadata in the message ID for tracking
+                const outgoingId = `BC_${broadcast.pkId}_${realMessageId}`;
+
+                // Ensure an OutgoingMessage record exists for admin history using real message ID
                 try {
                     const contact = broadcast.device.contactDevices.find(
                         (cd) => cd.contact.phone == recipient,
                     )?.contact;
                     await prisma.outgoingMessage.upsert({
-                        where: { id: outgoingId },
+                        where: { id: realMessageId },
                         update: { updatedAt: new Date() },
                         create: {
-                            id: outgoingId,
+                            id: realMessageId, // Use real WhatsApp message ID
                             to: jid,
                             message: textPayload,
                             schedule: new Date(),
