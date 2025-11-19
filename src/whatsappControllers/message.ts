@@ -65,6 +65,17 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                             data.message?.documentMessage?.caption ||
                             '';
 
+                        // CEK: Jika pesan outgoing (fromMe), pastikan hanya simpan jika ada di outgoingMessage
+                        if (message.key.fromMe) {
+                            const outgoingExists = await prisma.outgoingMessage.findFirst({
+                                where: { id: message.key.id! },
+                            });
+                            if (!outgoingExists) {
+                                // Pesan outgoing dari luar sistem, jangan simpan
+                                continue;
+                            }
+                        }
+
                         await prisma.message.upsert({
                             select: { pkId: true },
                             create: { ...data, remoteJid: jid, id: message.key.id!, sessionId },
