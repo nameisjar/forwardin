@@ -11,6 +11,9 @@ import http from 'http';
 import { error } from 'console';
 import { internalServerErrorHandler, notFoundHandler } from './middleware/errorHandler';
 
+// Import scheduler untuk memastikan broadcast scheduler berjalan
+import './controllers/broadcast';
+
 const app = express();
 app.use(pinoHttp({ logger }));
 app.use(cors());

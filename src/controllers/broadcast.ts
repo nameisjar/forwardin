@@ -12,7 +12,162 @@ import { useBroadcast } from '../utils/quota';
 import { isUUID } from '../utils/uuidChecker';
 import fs from 'fs';
 
-// back here: add deviceId param checker
+// Constants untuk retry mechanism
+const MAX_ATTEMPTS = 5;
+const COOLDOWN_SECONDS = 60;
+const BASE_RETRY_DELAY = 2000; // 2 seconds
+const MAX_RETRY_DELAY = 16000; // 16 seconds
+
+// Helper: Extract messageId dari berbagai bentuk response WhatsApp
+function extractMessageId(sentMessage: any): string | undefined {
+    try {
+        // Format 1: sentMessage.key.id
+        if (sentMessage?.key?.id) return sentMessage.key.id;
+        
+        // Format 2: sentMessage.message.key.id
+        if (sentMessage?.message?.key?.id) return sentMessage.message.key.id;
+        
+        // Format 3: Array response dari sendMediaFile
+        if (Array.isArray(sentMessage)) {
+            const first = sentMessage[0];
+            if (first?.key?.id) return first.key.id;
+            if (first?.result?.key?.id) return first.result.key.id;
+        }
+        
+        // Format 4: Wrapped result
+        if (sentMessage?.result?.key?.id) return sentMessage.result.key.id;
+        
+        return undefined;
+    } catch (e) {
+        logger.error({ error: e }, 'Failed to extract messageId');
+        return undefined;
+    }
+}
+
+// Helper: Check if error is transient (bisa di-retry)
+function isTransientError(error: any): boolean {
+    if (!error) return false;
+    
+    const errorString = String(error.message || error).toLowerCase();
+    const transientKeywords = [
+        'timeout',
+        'econnreset',
+        'econnrefused',
+        'etimedout',
+        'socket hang up',
+        'network',
+        'temporary',
+    ];
+    
+    return transientKeywords.some(keyword => errorString.includes(keyword));
+}
+
+// Helper: Check if error is rate limit
+function isRateLimitError(error: any): boolean {
+    if (!error) return false;
+    
+    return (
+        error?.data === 429 ||
+        error?.output?.statusCode === 429 ||
+        String(error.message || '').toLowerCase().includes('rate-overlimit') ||
+        String(error.message || '').toLowerCase().includes('rate limit')
+    );
+}
+
+// Helper: Generate jitter untuk exponential backoff
+function getRetryDelay(attempt: number, baseDelay: number): number {
+    const exponentialDelay = Math.min(baseDelay * Math.pow(2, attempt - 1), MAX_RETRY_DELAY);
+    const jitter = Math.random() * 1000; // 0-1000ms jitter
+    return Math.floor(exponentialDelay + jitter);
+}
+
+// Helper function untuk retry dengan exponential backoff + jitter
+async function sendMessageWithRetry(
+    session: any,
+    jid: string,
+    textPayload: string,
+    mediaPath: string | null,
+    maxRetries = 3
+): Promise<{ success: boolean; messageId?: string; error?: any; isRateLimit?: boolean }> {
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+        try {
+            let sentMessage;
+            
+            if (mediaPath) {
+                const result = await sendMediaFile(
+                    session,
+                    [jid],
+                    {
+                        url: mediaPath,
+                        newName: mediaPath.split('/').pop(),
+                    },
+                    ['jpg', 'png', 'jpeg'].includes(mediaPath.split('.').pop() || '')
+                        ? 'image'
+                        : 'document',
+                    textPayload,
+                    null,
+                    undefined,
+                );
+                sentMessage = result.results?.[0]?.result || result;
+            } else {
+                sentMessage = await session.sendMessage(jid, { text: textPayload });
+            }
+
+            // Extract messageId dengan robust handling
+            const messageId = extractMessageId(sentMessage);
+            
+            if (!messageId) {
+                logger.warn({ jid, attempt }, 'No message ID returned from WhatsApp');
+                return { success: false, error: 'No message ID returned' };
+            }
+
+            return { success: true, messageId };
+            
+        } catch (error: any) {
+            const isRateLimit = isRateLimitError(error);
+            const isTransient = isTransientError(error);
+            const isLastAttempt = attempt === maxRetries;
+
+            logger.error(
+                { 
+                    jid, 
+                    attempt, 
+                    maxRetries,
+                    isRateLimit, 
+                    isTransient,
+                    errorMessage: error?.message,
+                    errorData: error?.data 
+                },
+                'Send message attempt failed'
+            );
+
+            // Retry logic
+            if (!isLastAttempt && (isRateLimit || isTransient)) {
+                const waitTime = getRetryDelay(attempt, BASE_RETRY_DELAY);
+                logger.warn(
+                    { jid, attempt, waitTime, isRateLimit, isTransient },
+                    `Retrying in ${waitTime}ms...`
+                );
+                await delayMs(waitTime);
+                continue;
+            }
+
+            // Final failure
+            return { 
+                success: false, 
+                error, 
+                isRateLimit 
+            };
+        }
+    }
+
+    return { success: false, error: 'Max retries exceeded' };
+}
+
+// ============================================================================
+// HTTP REQUEST HANDLERS
+// ============================================================================
+
 export const createBroadcast: RequestHandler = async (req, res) => {
     try {
         const subscription = req.subscription;
@@ -46,6 +201,7 @@ export const createBroadcast: RequestHandler = async (req, res) => {
             if (!device.sessions[0]) {
                 return res.status(404).json({ message: 'Session not found' });
             }
+
             await prisma.$transaction(async (transaction) => {
                 await transaction.broadcast.create({
                     data: {
@@ -72,79 +228,70 @@ export const createBroadcast: RequestHandler = async (req, res) => {
 
 export const createBroadcastFeedback: RequestHandler = async (req, res) => {
     try {
-        diskUpload.single('media')(req, res, async (err: any) => {
-            if (err) {
-                return res.status(400).json({ message: 'Error uploading file' });
-            }
+        const { name, courseName, startLesson = 1, schedule, recipients, deviceId } = req.body;
+        const delay = Number(req.body.delay) ?? 5000;
 
-            const { courseName, startLesson = 1, recipients, deviceId } = req.body;
-            const delay = Number(req.body.delay) ?? 5000;
+        if (!name || !courseName || !schedule || !recipients || !deviceId) {
+            return res.status(400).json({ message: 'Missing required fields: name, courseName, schedule, recipients, deviceId' });
+        }
 
-            if (!courseName || !recipients || !deviceId) {
-                return res.status(400).json({ message: 'Missing required fields' });
-            }
+        if (
+            recipients.includes('all') &&
+            recipients.some((recipient: string) => recipient.startsWith('label'))
+        ) {
+            return res.status(400).json({
+                message: "Recipients can't contain both all contacts and contact labels",
+            });
+        }
 
-            if (
-                recipients.includes('all') &&
-                recipients.some((recipient: { startsWith: (arg0: string) => string }) =>
-                    recipient.startsWith('label'),
-                )
-            ) {
-                return res.status(400).json({
-                    message:
-                        "Recipients can't contain both all contacts and contact labels at the same input",
+        const device = await prisma.device.findUnique({
+            where: { id: deviceId },
+            include: { sessions: { select: { sessionId: true } } },
+        });
+
+        if (!device) {
+            return res.status(404).json({ message: 'Device not found' });
+        }
+        if (!device.sessions[0]) {
+            return res.status(404).json({ message: 'Session not found' });
+        }
+
+        const courseFeedbacks = await prisma.courseFeedback.findMany({
+            where: {
+                courseName,
+                lesson: { gte: Number(startLesson) },
+            },
+            orderBy: { lesson: 'asc' },
+        });
+
+        if (courseFeedbacks.length === 0) {
+            return res.status(404).json({ 
+                message: 'No feedback lessons found for the specified course and start lesson' 
+            });
+        }
+
+        await prisma.$transaction(async (transaction) => {
+            for (let i = 0; i < courseFeedbacks.length; i++) {
+                const feedback = courseFeedbacks[i];
+                const broadcastSchedule = new Date(schedule);
+                broadcastSchedule.setDate(broadcastSchedule.getDate() + i * 7); // Weekly interval
+
+                await transaction.broadcast.create({
+                    data: {
+                        name: `${name} - Lesson ${feedback.lesson}`,
+                        message: feedback.message,
+                        schedule: broadcastSchedule,
+                        deviceId: device.pkId,
+                        delay,
+                        recipients: { set: recipients },
+                    },
                 });
             }
+        });
 
-            const device = await prisma.device.findUnique({
-                where: { id: deviceId },
-                include: { sessions: { select: { sessionId: true } } },
-            });
-
-            if (!device) {
-                return res.status(404).json({ message: 'Device not found' });
-            }
-            if (!device.sessions[0]) {
-                return res.status(404).json({ message: 'Session not found' });
-            }
-
-            const courseFeedbacks = await prisma.courseFeedback.findMany({
-                where: {
-                    courseName,
-                    lesson: { gte: Number(startLesson) },
-                },
-                orderBy: { lesson: 'asc' },
-            });
-
-            if (courseFeedbacks.length === 0) {
-                return res
-                    .status(404)
-                    .json({ message: 'No lessons found for the specified course' });
-            }
-
-            const now = new Date();
-
-            await prisma.$transaction(async (transaction) => {
-                for (let i = 0; i < courseFeedbacks.length; i++) {
-                    const feedback = courseFeedbacks[i];
-                    const schedule = new Date(now);
-                    schedule.setDate(schedule.getDate() + i * 7);
-
-                    await transaction.broadcast.create({
-                        data: {
-                            name: `${courseName} - Recipients ${recipients}`,
-                            message: feedback.message,
-                            schedule,
-                            deviceId: device.pkId,
-                            delay,
-                            recipients: { set: recipients },
-                            mediaPath: req.file?.path,
-                        },
-                    });
-                }
-            });
-
-            res.status(201).json({ message: 'Broadcasts created successfully' });
+        res.status(201).json({ 
+            message: 'Feedback broadcasts created successfully',
+            totalBroadcasts: courseFeedbacks.length
         });
     } catch (error) {
         logger.error(error);
@@ -159,22 +306,19 @@ export const createBroadcastReminder: RequestHandler = async (req, res) => {
                 return res.status(400).json({ message: 'Error uploading file' });
             }
 
-            const { courseName, startLesson = 1, recipients, deviceId } = req.body;
+            const { name, message, lessons, schedule, recipients, deviceId } = req.body;
             const delay = Number(req.body.delay) ?? 5000;
 
-            if (!courseName || !recipients || !deviceId) {
-                return res.status(400).json({ message: 'Missing required fields' });
+            if (!name || !message || !lessons || !schedule || !recipients || !deviceId) {
+                return res.status(400).json({ message: 'Missing required fields: name, message, lessons, schedule, recipients, deviceId' });
             }
 
             if (
                 recipients.includes('all') &&
-                recipients.some((recipient: { startsWith: (arg0: string) => string }) =>
-                    recipient.startsWith('label'),
-                )
+                recipients.some((recipient: string) => recipient.startsWith('label'))
             ) {
                 return res.status(400).json({
-                    message:
-                        "Recipients can't contain both all contacts and contact labels at the same input",
+                    message: "Recipients can't contain both all contacts and contact labels",
                 });
             }
 
@@ -190,33 +334,18 @@ export const createBroadcastReminder: RequestHandler = async (req, res) => {
                 return res.status(404).json({ message: 'Session not found' });
             }
 
-            const courseReminders = await prisma.courseReminder.findMany({
-                where: {
-                    courseName,
-                    lesson: { gte: Number(startLesson) },
-                },
-                orderBy: { lesson: 'asc' },
-            });
-
-            if (courseReminders.length === 0) {
-                return res
-                    .status(404)
-                    .json({ message: 'No lessons found for the specified course' });
-            }
-
-            const now = new Date();
+            const totalLessons = Number(lessons);
 
             await prisma.$transaction(async (transaction) => {
-                for (let i = 0; i < courseReminders.length; i++) {
-                    const reminder = courseReminders[i];
-                    const schedule = new Date(now);
-                    schedule.setDate(schedule.getDate() + i * 7);
+                for (let i = 0; i < totalLessons; i++) {
+                    const broadcastSchedule = new Date(schedule);
+                    broadcastSchedule.setDate(broadcastSchedule.getDate() + i * 7); // Weekly interval
 
                     await transaction.broadcast.create({
                         data: {
-                            name: `${courseName} - Recipients ${recipients}`,
-                            message: reminder.message,
-                            schedule,
+                            name: `${name} - Week ${i + 1}`,
+                            message,
+                            schedule: broadcastSchedule,
                             deviceId: device.pkId,
                             delay,
                             recipients: { set: recipients },
@@ -226,7 +355,10 @@ export const createBroadcastReminder: RequestHandler = async (req, res) => {
                 }
             });
 
-            res.status(201).json({ message: 'Broadcasts created successfully' });
+            res.status(201).json({ 
+                message: 'Reminder broadcasts created successfully',
+                totalBroadcasts: totalLessons
+            });
         });
     } catch (error) {
         logger.error(error);
@@ -264,15 +396,10 @@ export const createBroadcastScheduled: RequestHandler = async (req, res) => {
                 return res.status(400).json({ message: 'Interval must be a positive number' });
             }
 
-            if (!startDate || isNaN(new Date(startDate).getTime())) {
-                return res.status(400).json({ message: 'Invalid or missing start date' });
-            }
+            const normalizedStartDate = new Date(startDate);
+            const normalizedEndDate = new Date(endDate);
 
-            if (!endDate || isNaN(new Date(endDate).getTime())) {
-                return res.status(400).json({ message: 'Invalid or missing end date' });
-            }
-
-            if (new Date(startDate) > new Date(endDate)) {
+            if (normalizedStartDate > normalizedEndDate) {
                 return res.status(400).json({ message: 'Start date must be before end date' });
             }
 
@@ -304,12 +431,10 @@ export const createBroadcastScheduled: RequestHandler = async (req, res) => {
                 return res.status(404).json({ message: 'Session not found' });
             }
 
-            const start = new Date(startDate);
-            const end = new Date(endDate);
             const broadcasts = [] as any[];
-            let current = new Date(start);
+            let current = new Date(normalizedStartDate);
 
-            while (current <= end) {
+            while (current <= normalizedEndDate) {
                 broadcasts.push({
                     name,
                     message,
@@ -349,7 +474,7 @@ export const createBroadcastScheduled: RequestHandler = async (req, res) => {
 
             res.status(201).json({
                 message: 'Broadcasts created successfully',
-                totalBroadcasts: broadcasts.length,
+                totalBroadcasts: broadcasts.length
             });
         });
     } catch (error) {
@@ -379,6 +504,12 @@ export const getAllBroadcasts: RequestHandler = async (req, res) => {
                 recipients: true,
                 deviceId: true,
                 device: { select: { name: true, sessions: { select: { sessionId: true } } } },
+                sentCount: true,
+                failedCount: true,
+                attemptCount: true,
+                lastAttemptAt: true,
+                lastError: true,
+                isSent: true,
                 createdAt: true,
                 updatedAt: true,
             },
@@ -386,17 +517,11 @@ export const getAllBroadcasts: RequestHandler = async (req, res) => {
 
         const newBroadcasts = [];
         for (const bc of broadcasts) {
-            // Since we're now using real WhatsApp message IDs, we need a different approach
-            // to track broadcast messages. We'll look for messages sent within the broadcast's
-            // time window and to the broadcast's recipients
-
             const recipients = await getRecipients(bc);
             const recipientJids = recipients.map((r) => getJid(r));
 
-            // Look for messages sent to broadcast recipients within a reasonable time window
-            // after the broadcast was marked as sent
             const timeWindow = new Date(bc.updatedAt);
-            timeWindow.setMinutes(timeWindow.getMinutes() + 30); // 30 minute window
+            timeWindow.setMinutes(timeWindow.getMinutes() + 30);
 
             const sentCount = await prisma.outgoingMessage.count({
                 where: {
@@ -486,6 +611,11 @@ export const getBroadcast: RequestHandler = async (req, res) => {
                 schedule: true,
                 mediaPath: true,
                 message: true,
+                sentCount: true,
+                failedCount: true,
+                attemptCount: true,
+                lastAttemptAt: true,
+                lastError: true,
             },
         });
 
@@ -523,13 +653,11 @@ export const getOutgoingBroadcasts: RequestHandler = async (req, res) => {
             return res.status(404).json('Broadcast not found');
         }
 
-        // Get broadcast recipients and convert to JIDs
         const recipients = await getRecipients(broadcast);
         const recipientJids = recipients.map((r) => getJid(r));
 
-        // Look for messages sent to broadcast recipients within a reasonable time window
         const timeWindow = new Date(broadcast.updatedAt);
-        timeWindow.setMinutes(timeWindow.getMinutes() + 30); // 30 minute window
+        timeWindow.setMinutes(timeWindow.getMinutes() + 30);
 
         const whereClause: any = {
             sessionId: { in: broadcast.device.sessions?.map((s) => s.sessionId) || [] },
@@ -540,7 +668,6 @@ export const getOutgoingBroadcasts: RequestHandler = async (req, res) => {
             },
         };
 
-        // Add status filter if provided
         if (status) {
             whereClause.status = status;
         }
@@ -585,7 +712,6 @@ export const getBrodcastReplies: RequestHandler = async (req, res) => {
         }
 
         const broadcastReplies = [];
-
         const recipients = await getRecipients(broadcast);
 
         for (const recipient of recipients) {
@@ -673,6 +799,12 @@ export const updateBroadcast: RequestHandler = async (req, res) => {
                     isSent: new Date(schedule).getTime() < new Date().getTime() ? true : false,
                     mediaPath: req.file?.path,
                     updatedAt: new Date(),
+                    // Reset retry fields saat update
+                    attemptCount: 0,
+                    lastAttemptAt: null,
+                    sentCount: 0,
+                    failedCount: 0,
+                    lastError: null,
                 },
             });
             res.status(201).json({ message: 'Broadcast updated successfully' });
@@ -716,9 +848,7 @@ export const deleteBroadcasts: RequestHandler = async (req, res) => {
             });
         });
 
-        // wait for all the Promises to settle (either resolve or reject)
         await Promise.all(groupPromises);
-
         res.status(200).json({ message: 'Broadcast(s) deleted successfully' });
     } catch (error) {
         logger.error(error);
@@ -760,7 +890,6 @@ export const bulkDeleteBroadcasts: RequestHandler = async (req, res) => {
             where.createdAt = { lt: threshold };
         }
 
-        // Fetch broadcasts with mediaPath for deletion later
         const candidatesFull = await prisma.broadcast.findMany({
             select: { pkId: true, mediaPath: true },
             where,
@@ -796,7 +925,6 @@ export const bulkDeleteBroadcasts: RequestHandler = async (req, res) => {
             await tx.broadcast.deleteMany({ where: { pkId: { in: pkIds } } });
         });
 
-        // Remove physical media files
         let mediaDeleted = 0;
         for (const p of mediaPaths) {
             try {
@@ -817,16 +945,27 @@ export const bulkDeleteBroadcasts: RequestHandler = async (req, res) => {
     }
 };
 
-// run scheduler every minute instead of invalid pattern
+// ============================================================================
+// SCHEDULER JOB - Runs every 10 seconds
+// ============================================================================
+
+// Scheduler job setiap 10 detik
+// '*/10 * * * * *',
 schedule.scheduleJob('* * * * *', async () => {
     try {
+        const now = new Date();
+        const cooldownThreshold = new Date(now.getTime() - COOLDOWN_SECONDS * 1000);
+
         const pendingBroadcasts = await prisma.broadcast.findMany({
             where: {
-                schedule: {
-                    lte: new Date(),
-                },
+                schedule: { lte: now },
                 status: true,
                 isSent: false,
+                attemptCount: { lt: MAX_ATTEMPTS },
+                OR: [
+                    { lastAttemptAt: null },
+                    { lastAttemptAt: { lt: cooldownThreshold } }
+                ]
             },
             include: {
                 device: {
@@ -838,106 +977,124 @@ schedule.scheduleJob('* * * * *', async () => {
             },
         });
 
-        // back here: fix processedRecipients
+        if (pendingBroadcasts.length === 0) {
+            logger.debug('No pending broadcasts to process');
+            return;
+        }
+
+        logger.info(`Found ${pendingBroadcasts.length} pending broadcasts to process`);
+
         for (const broadcast of pendingBroadcasts) {
-            const processedRecipients: (string | number)[] = [];
             const sessionId = broadcast.device.sessions[0]?.sessionId;
             const session = sessionId ? getInstance(sessionId) : null;
+            
+            // CRITICAL: Jangan proses jika session tidak ada
             if (!session) {
-                logger.warn({ broadcastId: broadcast.id }, 'Session not found, will retry later');
+                logger.warn(
+                    { broadcastId: broadcast.id, attemptCount: broadcast.attemptCount },
+                    'Session not found, skipping (will NOT increment attempt or mark sent)'
+                );
                 continue;
             }
 
-            // get recipients util
-            const recipients = await getRecipients(broadcast);
+            // Increment attemptCount & update lastAttemptAt SEBELUM proses
+            await prisma.broadcast.update({
+                where: { id: broadcast.id },
+                data: {
+                    attemptCount: { increment: 1 },
+                    lastAttemptAt: new Date(),
+                },
+            });
 
-            for (let i = 0; i < recipients.length; i++) {
-                const recipient = recipients[i];
-                const isLastRecipient = i === recipients.length - 1;
+            const currentAttempt = (broadcast.attemptCount || 0) + 1;
+            logger.info(
+                { broadcastId: broadcast.id, attempt: currentAttempt, maxAttempts: MAX_ATTEMPTS },
+                `Processing broadcast attempt ${currentAttempt}/${MAX_ATTEMPTS}`
+            );
 
-                if (processedRecipients.includes(recipient)) {
-                    logger.info(
-                        { message: 'Broadcast recipient has already been processed', recipient },
-                        'skip broadcast',
-                    );
-                    continue;
-                }
+            let successCount = 0;
+            let failCount = 0;
+            let rateLimitCount = 0;
+            const errors: string[] = [];
 
+            // Get & de-duplicate recipients
+            const rawRecipients = await getRecipients(broadcast);
+            const uniqueRecipients = Array.from(new Set(rawRecipients));
+            
+            if (uniqueRecipients.length !== rawRecipients.length) {
+                logger.info(
+                    { 
+                        broadcastId: broadcast.id, 
+                        original: rawRecipients.length, 
+                        deduped: uniqueRecipients.length 
+                    },
+                    'Recipients de-duplicated'
+                );
+            }
+
+            logger.info(
+                { broadcastId: broadcast.id, recipientCount: uniqueRecipients.length },
+                `Processing ${uniqueRecipients.length} unique recipients`
+            );
+
+            for (let i = 0; i < uniqueRecipients.length; i++) {
+                const recipient = uniqueRecipients[i];
+                const isLastRecipient = i === uniqueRecipients.length - 1;
                 const jid = getJid(recipient);
 
                 const variables = {
                     firstName:
-                        broadcast.device.contactDevices.filter(
-                            (cd) => cd.contact.phone == recipient,
-                        )[0]?.contact.firstName ?? undefined,
+                        broadcast.device.contactDevices.find((cd: any) => cd.contact.phone == recipient)
+                            ?.contact.firstName ?? undefined,
                     lastName:
-                        broadcast.device.contactDevices.filter(
-                            (cd) => cd.contact.phone == recipient,
-                        )[0]?.contact.lastName ?? undefined,
+                        broadcast.device.contactDevices.find((cd: any) => cd.contact.phone == recipient)
+                            ?.contact.lastName ?? undefined,
                     phoneNumber:
-                        broadcast.device.contactDevices.filter(
-                            (cd) => cd.contact.phone == recipient,
-                        )[0]?.contact.phone ?? undefined,
+                        broadcast.device.contactDevices.find((cd: any) => cd.contact.phone == recipient)
+                            ?.contact.phone ?? undefined,
                     email:
-                        broadcast.device.contactDevices.filter(
-                            (cd) => cd.contact.phone == recipient,
-                        )[0]?.contact.email ?? undefined,
+                        broadcast.device.contactDevices.find((cd: any) => cd.contact.phone == recipient)
+                            ?.contact.email ?? undefined,
                 };
 
-                // Generate deterministic outgoing message id and text
-                // Don't generate custom BC_ ID - let WhatsApp generate the real ID
                 const textPayload = replaceVariables(broadcast.message, variables);
 
-                let sentMessage;
-                if (broadcast.mediaPath) {
-                    const result = await sendMediaFile(
-                        session,
-                        [jid],
-                        {
-                            url: broadcast.mediaPath,
-                            newName: broadcast.mediaPath.split('/').pop(),
-                        },
-                        ['jpg', 'png', 'jpeg'].includes(broadcast.mediaPath.split('.').pop() || '')
-                            ? 'image'
-                            : 'document',
-                        textPayload,
-                        null,
-                        undefined, // Don't pass custom messageId
-                    );
-                    sentMessage = result.results?.[0]?.result;
-                } else {
-                    sentMessage = await session.sendMessage(
-                        jid,
-                        { text: textPayload },
-                        // Remove custom messageId to let WhatsApp generate real ID
-                    );
-                }
+                // Send dengan retry mechanism
+                const result = await sendMessageWithRetry(
+                    session,
+                    jid,
+                    textPayload,
+                    broadcast.mediaPath,
+                    3 // max retries per message
+                );
 
-                // Use the real WhatsApp message ID from the sent message
-                const realMessageId = sentMessage?.key?.id;
-                if (!realMessageId) {
-                    logger.warn(
-                        { recipient },
-                        'No message ID returned from WhatsApp, skipping outgoing message record',
-                    );
-                    processedRecipients.push(recipient);
+                if (!result.success) {
+                    if (result.isRateLimit) {
+                        rateLimitCount++;
+                        errors.push(`Rate limit: ${jid}`);
+                    } else {
+                        errors.push(`Failed: ${jid} - ${result.error?.message || 'Unknown'}`);
+                    }
+                    
+                    failCount++;
                     await delayMs(isLastRecipient ? 0 : broadcast.delay);
                     continue;
                 }
 
-                // Store additional broadcast metadata in the message ID for tracking
-                const outgoingId = `BC_${broadcast.pkId}_${realMessageId}`;
+                const messageId = result.messageId!;
+                logger.info({ broadcastId: broadcast.id, messageId, recipient: jid }, 'Message sent successfully');
 
-                // Ensure an OutgoingMessage record exists for admin history using real message ID
+                // Save to OutgoingMessage
                 try {
                     const contact = broadcast.device.contactDevices.find(
-                        (cd) => cd.contact.phone == recipient,
+                        (cd: any) => cd.contact.phone == recipient
                     )?.contact;
+
                     await prisma.outgoingMessage.upsert({
-                        where: { id: realMessageId },
+                        where: { id: messageId },
                         update: { updatedAt: new Date() },
                         create: {
-                            id: realMessageId, // Use real WhatsApp message ID
+                            id: messageId,
                             to: jid,
                             message: textPayload,
                             schedule: new Date(),
@@ -945,30 +1102,88 @@ schedule.scheduleJob('* * * * *', async () => {
                             sessionId,
                             contactId: contact?.pkId ?? null,
                             mediaPath: broadcast.mediaPath || null,
+                            broadcastId: broadcast.pkId,
+                            isGroup: jid.includes('@g.us'),
                         },
                     });
-                } catch (e) {
-                    logger.warn(e, 'Failed to upsert OutgoingMessage for broadcast');
-                }
 
-                processedRecipients.push(recipient);
-                logger.info(
-                    { message: 'Broadcast has just been processed', recipient },
-                    'broadcast sent',
-                );
+                    successCount++;
+                } catch (dbError) {
+                    logger.error(
+                        { error: dbError, messageId, recipient: jid },
+                        'Failed to save OutgoingMessage'
+                    );
+                    failCount++;
+                }
 
                 await delayMs(isLastRecipient ? 0 : broadcast.delay);
             }
+
+            // Decision logic
+            const allFailed = successCount === 0;
+            const hasRateLimit = rateLimitCount > 0;
+            const reachedMaxAttempts = currentAttempt >= MAX_ATTEMPTS;
+
+            logger.info(
+                {
+                    broadcastId: broadcast.id,
+                    successCount,
+                    failCount,
+                    rateLimitCount,
+                    attempt: currentAttempt,
+                    maxAttempts: MAX_ATTEMPTS,
+                },
+                'Broadcast processing completed'
+            );
+
+            // Update broadcast status
+            const updateData: any = {
+                sentCount: successCount,
+                failedCount: failCount,
+                lastError: errors.length > 0 ? errors.slice(0, 5).join('; ') : null,
+                updatedAt: new Date(),
+            };
+
+            // Mark isSent=true hanya jika ADA yang berhasil
+            if (successCount > 0) {
+                updateData.isSent = true;
+                logger.info(
+                    { broadcastId: broadcast.id, successCount, failCount },
+                    '✅ Broadcast marked as SENT (at least 1 success)'
+                );
+            } 
+            // Jika semua gagal & bukan rate limit & sudah max attempts → mark sent untuk stop retry
+            else if (allFailed && !hasRateLimit && reachedMaxAttempts) {
+                updateData.isSent = true;
+                logger.error(
+                    { broadcastId: broadcast.id, attemptCount: currentAttempt },
+                    '❌ Broadcast marked as SENT (failed after max attempts, no rate limit)'
+                );
+            }
+            // Jika ada rate limit dan belum max attempts → JANGAN mark sent, biarkan retry
+            else if (hasRateLimit && !reachedMaxAttempts) {
+                logger.warn(
+                    { broadcastId: broadcast.id, rateLimitCount, attemptCount: currentAttempt },
+                    '⏳ Broadcast will retry (rate limit detected, not at max attempts yet)'
+                );
+            }
+            // Semua gagal & rate limit & max attempts → mark sent
+            else if (allFailed && hasRateLimit && reachedMaxAttempts) {
+                updateData.isSent = true;
+                logger.error(
+                    { broadcastId: broadcast.id, rateLimitCount, attemptCount: currentAttempt },
+                    '❌ Broadcast marked as SENT (rate limit persists after max attempts)'
+                );
+            }
+
             await prisma.broadcast.update({
                 where: { id: broadcast.id },
-                data: {
-                    isSent: true,
-                    updatedAt: new Date(),
-                },
+                data: updateData,
             });
         }
-        logger.debug('Broadcast job is running...');
+
+        logger.debug('Broadcast job cycle completed');
     } catch (error) {
-        logger.error(error, 'Error processing scheduled broadcasts');
+        logger.error(error, 'Error in broadcast scheduler job');
     }
 });

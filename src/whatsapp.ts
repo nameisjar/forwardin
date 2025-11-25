@@ -15,15 +15,11 @@ import type { Response } from 'express';
 import { Boom } from '@hapi/boom';
 import { delay } from './utils/delay';
 import { useSession } from './utils/useSession';
-// import { writeFile } from 'fs/promises';
-// import { join } from 'path';
 import { Store } from './store';
-import { processButton } from './utils/processBtn';
 import { getSocketIO } from './socket';
 import { Server } from 'socket.io';
 import fs from 'fs';
-import { connect } from 'http2';
-import { de } from 'date-fns/locale';
+import { WhatsAppGroupService } from './services/whatsappGroup';
 
 type Instance = WASocket & {
     destroy: () => Promise<void>;
@@ -88,17 +84,25 @@ export async function createInstance(options: createInstanceOptions) {
         try {
             const subDirectoryPath = `media/S${sessionId}`;
 
+            // Clear WhatsApp groups saat destroy session
+            try {
+                await WhatsAppGroupService.clearWhatsAppGroups(deviceId, sessionId);
+                logger.info({ sessionId, deviceId }, 'WhatsApp groups cleared on session destroy');
+            } catch (groupError) {
+                logger.error(
+                    { error: groupError, sessionId, deviceId },
+                    'Failed to clear WhatsApp groups on destroy'
+                );
+            }
+
             await Promise.all([
-                logout && sock.logout(),
-
-                // prisma.chat.deleteMany({ where: { sessionId } }),
-                // prisma.groupMetadata.deleteMany({ where: { sessionId } }),
-
-                // prisma.contact.deleteMany({
-                //     where: {
-                //         contactDevices: { some: { device: { sessions: { some: { sessionId } } } } },
-                //     },
-                // }),
+                // Logout dengan error handling untuk koneksi yang sudah terputus
+                logout && sock.logout().catch((err) => {
+                    // Ignore "Connection Closed" error karena memang expected saat destroy
+                    if (err?.message !== 'Connection Closed') {
+                        logger.error({ error: err, sessionId }, 'Error during logout');
+                    }
+                }),
 
                 prisma.message.updateMany({ where: { sessionId }, data: { sessionId: null } }),
                 prisma.incomingMessage.updateMany({
@@ -115,12 +119,21 @@ export async function createInstance(options: createInstanceOptions) {
                 }),
                 prisma.session.deleteMany({ where: { sessionId } }),
 
-                fs.rm(subDirectoryPath, { recursive: true }, (err) => {
-                    if (err) {
-                        console.error(`Error deleting sub-directory: ${err}`);
-                    } else {
-                        console.log(`Sub-directory ${subDirectoryPath} is deleted successfully.`);
-                    }
+                // Delete media folder dengan proper error handling untuk ENOENT
+                new Promise<void>((resolve) => {
+                    fs.rm(subDirectoryPath, { recursive: true }, (err) => {
+                        if (err) {
+                            // Hanya log error jika bukan ENOENT (file not found)
+                            if (err.code !== 'ENOENT') {
+                                logger.error({ error: err, path: subDirectoryPath }, 'Error deleting media directory');
+                            } else {
+                                logger.debug({ path: subDirectoryPath }, 'Media directory does not exist, skipping deletion');
+                            }
+                        } else {
+                            logger.info({ path: subDirectoryPath }, 'Media directory deleted successfully');
+                        }
+                        resolve();
+                    });
                 }),
             ]);
         } catch (e) {
@@ -288,8 +301,53 @@ export async function createInstance(options: createInstanceOptions) {
                 where: { pkId: deviceId },
                 data: { phone, updatedAt: new Date() },
             });
+
+            // Auto-sync WhatsApp groups saat koneksi berhasil
+            try {
+                logger.info({ sessionId, deviceId }, 'Fetching WhatsApp groups...');
+                const groups = await sock.groupFetchAllParticipating();
+                const groupsArray = Object.values(groups).map((group: any) => ({
+                    id: group.id,
+                    subject: group.subject,
+                    name: group.subject,
+                    participants: group.participants || [],
+                }));
+
+                if (groupsArray.length > 0) {
+                    await WhatsAppGroupService.saveWhatsAppGroups(
+                        deviceId,
+                        sessionId,
+                        groupsArray
+                    );
+                    logger.info(
+                        { sessionId, deviceId, count: groupsArray.length },
+                        'WhatsApp groups synced successfully'
+                    );
+                } else {
+                    logger.info({ sessionId, deviceId }, 'No WhatsApp groups found');
+                }
+            } catch (error) {
+                logger.error(
+                    { error, sessionId, deviceId },
+                    'Failed to sync WhatsApp groups'
+                );
+            }
         }
-        if (connection === 'close') handleConnectionClose();
+        
+        // Clear WhatsApp groups saat koneksi terputus
+        if (connection === 'close') {
+            try {
+                await WhatsAppGroupService.clearWhatsAppGroups(deviceId, sessionId);
+                logger.info({ sessionId, deviceId }, 'WhatsApp groups cleared on connection close');
+            } catch (error) {
+                logger.error(
+                    { error, sessionId, deviceId },
+                    'Failed to clear WhatsApp groups on connection close'
+                );
+            }
+            handleConnectionClose();
+        }
+        
         handleConnectionUpdate();
 
         // back here: Record to update not found
@@ -358,7 +416,6 @@ export function getInstanceStatus(session: Instance) {
     const state = ['CONNECTING', 'CONNECTED', 'DISCONNECTING', 'DISCONNECTED'];
     let status = 'DISCONNECTED';
 
-    // back here: fix ws
     if (session && session.ws instanceof WebSocket) {
         status = state[session.ws.readyState];
     }
@@ -450,7 +507,6 @@ export async function sendMediaFile(
     return { results, errors };
 }
 
-// back here: only show on wa web [deprecated: https://github.com/WhiskeySockets/Baileys/issues/56]
 export async function sendButtonMessage(
     session: Instance,
     to: string,
@@ -471,10 +527,3 @@ export async function sendButtonMessage(
         throw error;
     }
 }
-
-// to do: send list messages
-
-// export async function dump(fileName: string, data: any) {
-//     const path = join(__dirname, '..', 'debug', `${fileName}.json`);
-//     await writeFile(path, JSON.stringify(data, null, 2));
-// }

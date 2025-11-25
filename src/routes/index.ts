@@ -23,6 +23,7 @@ import superAdminRoutes from './superAdmin';
 import deviceApi from './deviceApi';
 import courseRoutes from './course';
 import tutorsRoutes from './tutors';
+import whatsappGroupRoutes from './whatsappGroups';
 
 const router = Router();
 
@@ -53,6 +54,7 @@ router.use('/super-admin', superAdminRoutes);
 router.use('/api', apiKeyDevice, deviceApi);
 router.use('/algorithmics', courseRoutes);
 router.use('/tutors', tutorsRoutes);
+router.use('/whatsapp-groups', whatsappGroupRoutes);
 router.use('/media', express.static('media'));
 
 export default router;

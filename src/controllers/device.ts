@@ -269,6 +269,9 @@ export const deleteDevices: RequestHandler = async (req, res) => {
             return res.status(400).json({ message: 'Invalid deviceIds' });
         }
 
+        // Import WhatsApp functions for cleanup
+        const { deleteInstance, verifyInstance } = require('../whatsapp');
+
         const devicePromises = deviceIds.map(async (deviceId: string) => {
             const device = await prisma.device.findUnique({
                 where: {
@@ -280,18 +283,32 @@ export const deleteDevices: RequestHandler = async (req, res) => {
                 return { success: false, deviceId };
             }
 
+            try {
+                // Clean up WhatsApp instance if exists
+                if (verifyInstance(deviceId)) {
+                    console.log(`Cleaning up WhatsApp instance for device: ${deviceId}`);
+                    await deleteInstance(deviceId);
+                }
+            } catch (error) {
+                console.warn(`Warning: Could not cleanup WhatsApp instance for device ${deviceId}:`, error);
+                // Continue with deletion even if instance cleanup fails
+            }
+
+            // Delete device (cascade delete will handle WhatsApp groups automatically)
             const deletedDevice = await prisma.device.delete({
                 where: {
                     id: deviceId,
                 },
             });
 
-            await prisma.contact.deleteMany({
-                where: {
-                    contactDevices: { some: { device: { id: deviceId } } },
-                },
-            }),
-                await prisma.label.deleteMany({
+            // Clean up related data
+            await Promise.all([
+                prisma.contact.deleteMany({
+                    where: {
+                        contactDevices: { some: { device: { id: deviceId } } },
+                    },
+                }),
+                prisma.label.deleteMany({
                     where: {
                         NOT: {
                             DeviceLabel: {
@@ -301,10 +318,11 @@ export const deleteDevices: RequestHandler = async (req, res) => {
                             },
                         },
                     },
-                });
+                })
+            ]);
 
+            // Clean up media directory
             const subDirectoryPath = `media/D${deviceId}`;
-
             fs.rm(subDirectoryPath, { recursive: true }, (err) => {
                 if (err) {
                     console.error(`Error deleting sub-directory: ${err}`);
@@ -313,11 +331,13 @@ export const deleteDevices: RequestHandler = async (req, res) => {
                 }
             });
 
+            console.log(`Successfully deleted device: ${deviceId}`);
             return { success: true };
         });
 
         const deviceResults = await Promise.all(devicePromises);
         const hasFailures = deviceResults.some((result) => !result.success);
+        
         if (hasFailures) {
             const failedDeviceIds = deviceResults
                 .filter((result) => !result.success)
@@ -329,7 +349,7 @@ export const deleteDevices: RequestHandler = async (req, res) => {
 
         res.status(200).json({ message: 'Device(s) deleted successfully' });
     } catch (error) {
-        logger.error(error);
+        logger.error('Error in deleteDevices:', error);
         res.status(500).json({ message: 'Internal server error' });
     }
 };

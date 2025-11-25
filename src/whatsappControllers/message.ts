@@ -76,18 +76,18 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                             }
                         }
 
-                        await prisma.message.upsert({
-                            select: { pkId: true },
-                            create: { ...data, remoteJid: jid, id: message.key.id!, sessionId },
-                            update: { ...data },
-                            where: {
-                                sessionId_remoteJid_id: {
-                                    remoteJid: jid,
-                                    id: message.key.id!,
-                                    sessionId,
-                                },
-                            },
-                        });
+                        // await prisma.message.upsert({
+                        //     select: { pkId: true },
+                        //     create: { ...data, remoteJid: jid, id: message.key.id!, sessionId },
+                        //     update: { ...data },
+                        //     where: {
+                        //         sessionId_remoteJid_id: {
+                        //             remoteJid: jid,
+                        //             id: message.key.id!,
+                        //             sessionId,
+                        //         },
+                        //     },
+                        // });
 
                         const contact = await prisma.contact.findFirst({
                             where: {

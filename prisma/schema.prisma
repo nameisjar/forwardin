@@ -182,6 +182,7 @@ model Device {
   BusinessHour    BusinessHour[]
   CustomerService CustomerService?
   DeviceLog       DeviceLog[]
+  whatsappGroups  WhatsAppGroup[]
 }
 
 model DeviceLog {
@@ -294,18 +295,20 @@ model Group {
 }
 
 model OutgoingMessage {
-  pkId      Int      @id @default(autoincrement())
-  id        String   @unique
-  to        String
-  message   String?
-  mediaPath String?
-  schedule  DateTime
-  status    String   @db.VarChar(20)
-  createdAt DateTime @default(now()) @map("created_at")
-  updatedAt DateTime @default(now()) @map("updated_at")
-  sessionId String?
-  contactId Int?
-  contact   Contact? @relation(fields: [contactId], references: [pkId], onDelete: Cascade)
+  pkId        Int      @id @default(autoincrement())
+  id          String   @unique
+  to          String
+  message     String?
+  mediaPath   String?
+  schedule    DateTime
+  status      String   @db.VarChar(20)
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @default(now()) @map("updated_at")
+  sessionId   String?
+  contactId   Int?
+  broadcastId Int?     // Add reference to broadcast
+  isGroup     Boolean? @default(false) // Track if message is for group
+  contact     Contact? @relation(fields: [contactId], references: [pkId], onDelete: Cascade)
 
   @@unique([sessionId, to, id], map: "unique_outgoing_message_key_per_session_id")
 }
@@ -325,20 +328,28 @@ model IncomingMessage {
 }
 
 model Broadcast {
-  pkId       Int      @id @default(autoincrement())
-  id         String   @unique @default(uuid()) @db.Uuid
-  name       String   @db.VarChar(128)
-  status     Boolean  @default(true)
-  recipients String[]
-  message    String   @db.Text
-  schedule   DateTime
-  delay      Int
-  isSent     Boolean  @default(false)
-  mediaPath  String?
-  deviceId   Int
-  device     Device   @relation(fields: [deviceId], references: [pkId], onDelete: Cascade)
-  createdAt  DateTime @default(now()) @map("created_at")
-  updatedAt  DateTime @default(now()) @map("updated_at")
+  pkId          Int      @id @default(autoincrement())
+  id            String   @unique @default(uuid()) @db.Uuid
+  name          String   @db.VarChar(128)
+  status        Boolean  @default(true)
+  recipients    String[]
+  message       String   @db.Text
+  schedule      DateTime
+  delay         Int
+  isSent        Boolean  @default(false)
+  mediaPath     String?
+  deviceId      Int
+  device        Device   @relation(fields: [deviceId], references: [pkId], onDelete: Cascade)
+  
+  // Retry tracking fields
+  lastAttemptAt DateTime? @map("last_attempt_at")
+  attemptCount  Int       @default(0) @map("attempt_count")
+  sentCount     Int?      @default(0) @map("sent_count")
+  failedCount   Int?      @default(0) @map("failed_count")
+  lastError     String?   @map("last_error") @db.Text
+  
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @default(now()) @map("updated_at")
 }
 
 model AutoReply {
@@ -531,7 +542,6 @@ model Notification {
   updatedAt DateTime @default(now()) @map("updated_at")
 }
 
-
 model CourseReminder {
     pkId        Int      @id @default(autoincrement())
     id          String   @unique @default(uuid()) @db.Uuid
@@ -550,5 +560,23 @@ model CourseFeedback {
     message     String   @db.Text   
     createdAt   DateTime @default(now())
     updatedAt   DateTime @updatedAt
+}
+
+model WhatsAppGroup {
+  pkId          Int      @id @default(autoincrement())
+  id            String   @unique @default(uuid()) @db.Uuid
+  groupId       String   @map("group_id") @db.VarChar(255)
+  groupName     String   @map("group_name") @db.VarChar(255)
+  participants  Int?     @default(0)
+  isActive      Boolean  @default(true) @map("is_active")
+  sessionId     String?  @map("session_id") @db.VarChar(255)
+  deviceId      Int      @map("device_id")
+  device        Device   @relation(fields: [deviceId], references: [pkId], onDelete: Cascade)
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @default(now()) @map("updated_at")
+
+  @@unique([groupId, deviceId])
+  @@index([sessionId])
+  @@index([deviceId, isActive])
 }
 
