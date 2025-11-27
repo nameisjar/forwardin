@@ -847,8 +847,24 @@ export const getProfilePictureUrl: RequestHandler = async (req, res) => {
         const { recipient, resolution } = req.query as { recipient?: string; resolution?: string };
         if (!recipient) return res.status(400).json({ message: 'Recipient is required' });
 
-        const jid = getJid(recipient);
-        await verifyJid(session, jid, 'number');
+        // Support untuk 'me' - ambil nomor phone dari database
+        let jid: string;
+        if (recipient.toLowerCase() === 'me') {
+            // Ambil nomor phone dari database Session -> Device
+            const sessionData = await prisma.session.findFirst({
+                where: { sessionId },
+                include: { device: { select: { phone: true } } },
+            });
+            
+            if (!sessionData?.device?.phone) {
+                return res.status(400).json({ message: 'Phone number not found for this session' });
+            }
+            
+            jid = getJid(sessionData.device.phone);
+        } else {
+            jid = getJid(recipient);
+            await verifyJid(session, jid, 'number');
+        }
 
         const ppUrl = await session.profilePictureUrl(
             jid,
