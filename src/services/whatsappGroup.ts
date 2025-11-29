@@ -12,22 +12,31 @@ export interface WhatsAppGroupData {
 export class WhatsAppGroupService {
   /**
    * Menyimpan atau update grup WhatsApp saat device terhubung
+   * @param deviceId - ID device
+   * @param sessionId - Session ID
+   * @param groups - Array of groups to save/update
+   * @param replaceAll - Jika true, nonaktifkan semua grup lama sebelum save. Jika false, hanya update/tambah grup yang di-pass
    */
   static async saveWhatsAppGroups(
     deviceId: number,
     sessionId: string,
-    groups: WhatsAppGroupData[]
+    groups: WhatsAppGroupData[],
+    replaceAll: boolean = false
   ) {
     try {
-      // Nonaktifkan semua grup lama untuk device ini
-      await prisma.whatsAppGroup.updateMany({
-        where: {
-          deviceId: deviceId,
-        },
-        data: {
-          isActive: false,
-        },
-      });
+      // ✅ HANYA nonaktifkan grup lama jika replaceAll = true (saat full sync)
+      // ❌ JANGAN nonaktifkan jika hanya menambah grup baru (saat groups.upsert event)
+      if (replaceAll) {
+        await prisma.whatsAppGroup.updateMany({
+          where: {
+            deviceId: deviceId,
+          },
+          data: {
+            isActive: false,
+          },
+        });
+        console.log(`[saveWhatsAppGroups] Replace mode: deactivated all old groups for device ${deviceId}`);
+      }
 
       // Simpan atau update grup baru
       for (const group of groups) {
@@ -56,7 +65,8 @@ export class WhatsAppGroupService {
         });
       }
 
-      console.log(`Saved ${groups.length} groups for device ${deviceId}`);
+      const mode = replaceAll ? 'replaced' : 'added/updated';
+      console.log(`[saveWhatsAppGroups] ${mode} ${groups.length} groups for device ${deviceId}`);
       return { success: true, count: groups.length };
     } catch (error) {
       console.error('Error saving WhatsApp groups:', error);

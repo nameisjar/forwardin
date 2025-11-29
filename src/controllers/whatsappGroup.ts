@@ -254,10 +254,12 @@ export const syncGroups = async (req: Request, res: Response) => {
       console.log(`Found ${groupsArray.length} groups for device ${deviceId}`);
 
       // Save groups to database using device pkId
+      // ✅ replaceAll = true karena ini adalah MANUAL SYNC (user klik tombol sync)
       const result = await WhatsAppGroupService.saveWhatsAppGroups(
         device.pkId, // Use device.pkId for database operations
         deviceId, // Use deviceId (UUID) as sessionId
-        groupsArray
+        groupsArray,
+        true // Replace all existing groups
       );
 
       console.log('Groups saved to database successfully');

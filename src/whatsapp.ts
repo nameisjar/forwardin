@@ -314,10 +314,12 @@ export async function createInstance(options: createInstanceOptions) {
                 }));
 
                 if (groupsArray.length > 0) {
+                    // ✅ replaceAll = true karena ini adalah FULL SYNC saat koneksi pertama kali
                     await WhatsAppGroupService.saveWhatsAppGroups(
                         deviceId,
                         sessionId,
-                        groupsArray
+                        groupsArray,
+                        true // Replace all existing groups
                     );
                     logger.info(
                         { sessionId, deviceId, count: groupsArray.length },
@@ -382,11 +384,311 @@ export async function createInstance(options: createInstanceOptions) {
         });
     }
 
+    // 🆕 Listen untuk grup baru yang di-join
+    sock.ev.on('groups.upsert', async (groups) => {
+        try {
+            logger.info({ sessionId, deviceId, count: groups.length }, 'New groups joined detected');
+            
+            for (const group of groups) {
+                try {
+                    // Fetch group metadata untuk mendapatkan info lengkap
+                    const groupMetadata = await sock.groupMetadata(group.id);
+                    
+                    const groupData = {
+                        id: group.id,
+                        subject: groupMetadata.subject || group.subject,
+                        participants: groupMetadata.participants || [],
+                    };
+
+                    // Save grup baru ke database
+                    await WhatsAppGroupService.saveWhatsAppGroups(
+                        deviceId,
+                        sessionId,
+                        [groupData]
+                    );
+                    
+                    logger.info(
+                        { sessionId, deviceId, groupId: group.id, groupName: groupData.subject },
+                        'New group saved to database'
+                    );
+
+                    // 🆕 Emit Socket.IO event ke frontend
+                    const io: Server = getSocketIO();
+                    const device = await prisma.device.findUnique({
+                        where: { pkId: deviceId }
+                    });
+                    
+                    if (device) {
+                        // Emit event untuk grup spesifik yang baru join
+                        io.emit(`device:${device.id}:group-joined`, {
+                            groupId: group.id,
+                            groupName: groupData.subject,
+                            participants: groupMetadata.participants?.length || 0,
+                            isActive: true,
+                            sessionId: sessionId,
+                        });
+                        
+                        // Emit event umum bahwa ada update di daftar grup
+                        io.emit(`device:${device.id}:groups-updated`, {
+                            action: 'group-joined',
+                            groupId: group.id,
+                            timestamp: new Date().toISOString(),
+                        });
+                        
+                        logger.info(
+                            { deviceId: device.id, groupId: group.id },
+                            'Socket.IO events emitted for new group'
+                        );
+                    }
+                } catch (groupError) {
+                    logger.error(
+                        { error: groupError, sessionId, deviceId, groupId: group.id },
+                        'Failed to process new group'
+                    );
+                }
+            }
+        } catch (error) {
+            logger.error(
+                { error, sessionId, deviceId },
+                'Failed to handle groups.upsert event'
+            );
+        }
+    });
+
+    // 🆕 Listen untuk update grup (nama berubah, participant berubah, dll)
+    sock.ev.on('groups.update', async (updates) => {
+        try {
+            logger.info({ sessionId, deviceId, count: updates.length }, 'Group updates detected');
+            
+            for (const update of updates) {
+                try {
+                    // Skip jika tidak ada ID
+                    if (!update.id) continue;
+                    
+                    // Fetch latest group metadata
+                    const groupMetadata = await sock.groupMetadata(update.id);
+                    
+                    // Update di database
+                    await prisma.whatsAppGroup.updateMany({
+                        where: {
+                            groupId: update.id,
+                            deviceId: deviceId,
+                        },
+                        data: {
+                            groupName: groupMetadata.subject,
+                            participants: groupMetadata.participants?.length || 0,
+                            updatedAt: new Date(),
+                        },
+                    });
+                    
+                    logger.info(
+                        { sessionId, deviceId, groupId: update.id },
+                        'Group updated in database'
+                    );
+
+                    // Emit Socket.IO event
+                    const io: Server = getSocketIO();
+                    const device = await prisma.device.findUnique({
+                        where: { pkId: deviceId }
+                    });
+                    
+                    if (device) {
+                        io.emit(`device:${device.id}:groups-updated`, {
+                            action: 'group-updated',
+                            groupId: update.id,
+                            timestamp: new Date().toISOString(),
+                        });
+                    }
+                } catch (updateError) {
+                    logger.error(
+                        { error: updateError, sessionId, deviceId, groupId: update.id },
+                        'Failed to process group update'
+                    );
+                }
+            }
+        } catch (error) {
+            logger.error(
+                { error, sessionId, deviceId },
+                'Failed to handle groups.update event'
+            );
+        }
+    });
+
+    // 🆕 Listen untuk participant changes (termasuk ketika device keluar/dikick dari grup)
+    sock.ev.on('group-participants.update', async (update) => {
+        try {
+            const { id: groupId, participants, action } = update;
+            const myNumber = sock.user?.id.split(':')[0] + '@s.whatsapp.net';
+            
+            logger.info(
+                { sessionId, deviceId, groupId, action, participantsCount: participants.length },
+                'Group participants update detected'
+            );
+            
+            // Check apakah device sendiri yang keluar/dikick dari grup
+            // participants adalah array of strings (JID)
+            const participantIds = participants.map((p: any) => typeof p === 'string' ? p : p.id);
+            const isDeviceAffected = participantIds.includes(myNumber);
+            
+            if (isDeviceAffected && action === 'remove') {
+                logger.info(
+                    { sessionId, deviceId, groupId, action },
+                    'Device left/removed from group'
+                );
+                
+                // Update status grup menjadi tidak aktif di database
+                await WhatsAppGroupService.updateGroupStatus(groupId, deviceId, false);
+                
+                logger.info(
+                    { sessionId, deviceId, groupId },
+                    'Group marked as inactive in database'
+                );
+
+                // Emit Socket.IO event ke frontend
+                const io: Server = getSocketIO();
+                const device = await prisma.device.findUnique({
+                    where: { pkId: deviceId }
+                });
+                
+                if (device) {
+                    io.emit(`device:${device.id}:group-left`, {
+                        groupId: groupId,
+                        action: action,
+                        timestamp: new Date().toISOString(),
+                    });
+                    
+                    io.emit(`device:${device.id}:groups-updated`, {
+                        action: 'group-left',
+                        groupId: groupId,
+                        timestamp: new Date().toISOString(),
+                    });
+                    
+                    logger.info(
+                        { deviceId: device.id, groupId },
+                        'Socket.IO events emitted for group leave'
+                    );
+                }
+            } else if (action === 'add' || action === 'promote' || action === 'demote' || action === 'remove') {
+                // Update jumlah participants untuk perubahan lainnya
+                try {
+                    const groupMetadata = await sock.groupMetadata(groupId);
+                    await prisma.whatsAppGroup.updateMany({
+                        where: {
+                            groupId: groupId,
+                            deviceId: deviceId,
+                        },
+                        data: {
+                            participants: groupMetadata.participants?.length || 0,
+                            updatedAt: new Date(),
+                        },
+                    });
+                    
+                    // Emit update event
+                    const io: Server = getSocketIO();
+                    const device = await prisma.device.findUnique({
+                        where: { pkId: deviceId }
+                    });
+                    
+                    if (device) {
+                        io.emit(`device:${device.id}:groups-updated`, {
+                            action: 'participants-updated',
+                            groupId: groupId,
+                            timestamp: new Date().toISOString(),
+                        });
+                    }
+                } catch (metadataError) {
+                    logger.error(
+                        { error: metadataError, sessionId, deviceId, groupId },
+                        'Failed to update group metadata after participant change'
+                    );
+                }
+            }
+        } catch (error) {
+            logger.error(
+                { error, sessionId, deviceId },
+                'Failed to handle group-participants.update event'
+            );
+        }
+    });
+
+    // 🆕 Listen untuk chats.update - mendeteksi ketika keluar dari grup
+    sock.ev.on('chats.update', async (chats) => {
+        try {
+            for (const chat of chats) {
+                // Check jika ini adalah grup chat yang berubah
+                if (chat.id && chat.id.endsWith('@g.us')) {
+                    const groupId = chat.id;
+                    
+                    // Log semua perubahan untuk debugging
+                    logger.info(
+                        { sessionId, deviceId, groupId, chatUpdate: chat },
+                        'Chat update detected for group'
+                    );
+                    
+                    // Jika ada property yang menandakan kita keluar dari grup
+                    // Baileys bisa memberikan berbagai property seperti:
+                    // - participant (array kosong jika kita keluar)
+                    // - readOnly: true
+                    // - ephemeralExpiration, dll
+                    
+                    // Coba fetch metadata untuk validasi apakah kita masih member
+                    try {
+                        await sock.groupMetadata(groupId);
+                        // Jika berhasil, kita masih member, tidak perlu action
+                    } catch (metadataError: any) {
+                        // Jika gagal fetch metadata, kemungkinan kita sudah tidak di grup
+                        if (metadataError?.output?.statusCode === 404 || 
+                            metadataError?.message?.includes('not-authorized') ||
+                            metadataError?.message?.includes('forbidden')) {
+                            
+                            logger.info(
+                                { sessionId, deviceId, groupId },
+                                'Device no longer in group (detected via chats.update)'
+                            );
+                            
+                            // Update status grup menjadi tidak aktif di database
+                            await WhatsAppGroupService.updateGroupStatus(groupId, deviceId, false);
+                            
+                            // Emit Socket.IO event ke frontend
+                            const io: Server = getSocketIO();
+                            const device = await prisma.device.findUnique({
+                                where: { pkId: deviceId }
+                            });
+                            
+                            if (device) {
+                                io.emit(`device:${device.id}:group-left`, {
+                                    groupId: groupId,
+                                    action: 'leave',
+                                    timestamp: new Date().toISOString(),
+                                });
+                                
+                                io.emit(`device:${device.id}:groups-updated`, {
+                                    action: 'group-left',
+                                    groupId: groupId,
+                                    timestamp: new Date().toISOString(),
+                                });
+                                
+                                logger.info(
+                                    { deviceId: device.id, groupId },
+                                    'Socket.IO events emitted for group leave (chats.update)'
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        } catch (error) {
+            logger.error(
+                { error, sessionId, deviceId },
+                'Failed to handle chats.update event'
+            );
+        }
+    });
+
     // Debug events
     // sock.ev.on('messaging-history.set', (data) => dump('messaging-history.set', data));
     // sock.ev.on('chats.upsert', (data) => dump('chats.upsert', data));
     // sock.ev.on('contacts.update', (data) => dump('contacts.update', data));
-    // sock.ev.on('groups.upsert', (data) => dump('groups.upsert', data));
 
     await prisma.session.upsert({
         create: {
