@@ -11,6 +11,7 @@ router.get('/:broadcastId/replies', controller.getBrodcastReplies);
 router.put('/:id', controller.updateBroadcast);
 router.patch('/:id/status', controller.updateBroadcastStatus);
 router.delete('/bulk', controller.bulkDeleteBroadcasts);
+router.delete('/by-name', controller.deleteBroadcastsByName); // Route baru untuk hapus berdasarkan nama (hanya yang belum terkirim)
 router.delete('/', controller.deleteBroadcasts);
 
 // Added alias routes for reminder and scheduled broadcasts to avoid 404 in UI menus

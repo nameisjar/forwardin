@@ -856,6 +856,48 @@ export const deleteBroadcasts: RequestHandler = async (req, res) => {
     }
 };
 
+export const deleteBroadcastsByName: RequestHandler = async (req, res) => {
+    try {
+        const { name } = req.body;
+        const userId = req.authenticatedUser.pkId;
+        const privilegeId = req.privilege.pkId;
+
+        if (!name) {
+            return res.status(400).json({ message: 'Broadcast name is required' });
+        }
+
+        // Hanya hapus broadcast yang belum terkirim (isSent=false)
+        const deletedBroadcasts = await prisma.broadcast.deleteMany({
+            where: {
+                name,
+                isSent: false, // PENTING: Hanya hapus yang belum terkirim
+                device: {
+                    userId: privilegeId !== Number(process.env.SUPER_ADMIN_ID) ? userId : undefined,
+                },
+            },
+        });
+
+        if (deletedBroadcasts.count === 0) {
+            return res.status(404).json({ 
+                message: 'Tidak ada jadwal yang dapat dihapus. Semua jadwal dengan nama ini sudah terkirim.' 
+            });
+        }
+
+        logger.info(
+            { name, deletedCount: deletedBroadcasts.count },
+            `Deleted ${deletedBroadcasts.count} unsent broadcasts with name: ${name}`
+        );
+
+        res.status(200).json({ 
+            message: `Berhasil menghapus ${deletedBroadcasts.count} jadwal yang belum terkirim`,
+            deletedCount: deletedBroadcasts.count
+        });
+    } catch (error) {
+        logger.error(error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};
+
 export const bulkDeleteBroadcasts: RequestHandler = async (req, res) => {
     try {
         const isSentParam = (req.query.isSent as string | undefined)?.toLowerCase();
