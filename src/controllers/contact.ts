@@ -232,7 +232,7 @@ export const importContacts: RequestHandler = async (req, res) => {
             const workbook = new ExcelJS.Workbook();
             const buffer = req.file.buffer;
             const deviceId = req.body.deviceId;
-            const groupName = req.body.groupName;
+            const groupName = req.body.groupName || new Date().toISOString().slice(0, 10);
 
             await workbook.xlsx.load(buffer);
             const worksheet = workbook.getWorksheet(1);
@@ -243,6 +243,11 @@ export const importContacts: RequestHandler = async (req, res) => {
             const contacts: any[] = [];
 
             worksheet.eachRow((row, rowNumber) => {
+                // Skip header row (row 1)
+                if (rowNumber === 1) {
+                    return;
+                }
+
                 const firstName = row.getCell(1).value;
                 const lastName = row.getCell(2).value;
                 const phone = row.getCell(3).value?.toString();
@@ -250,34 +255,37 @@ export const importContacts: RequestHandler = async (req, res) => {
                 const gender = row.getCell(5).value;
                 const dob = row.getCell(6).value?.toString();
                 const labels = row.getCell(7).value;
+                
+                // Validate required fields for data rows
                 if (!firstName || !phone) {
-                    return res
-                        .status(400)
-                        .json({ message: 'firstName and phone values are required.' });
+                    errors.push({ 
+                        row: rowNumber, 
+                        error: 'firstName and phone values are required',
+                        data: { firstName, phone }
+                    });
+                    return;
                 }
-                if (rowNumber !== 1) {
-                    const contact = {
-                        firstName,
-                        lastName,
-                        phone,
-                        email,
-                        gender,
-                        dob,
-                        labels,
-                        colorCode: getRandomColor(),
-                    };
-                    contacts.push(contact);
-                }
+
+                const contact = {
+                    firstName,
+                    lastName,
+                    phone,
+                    email,
+                    gender,
+                    dob,
+                    labels,
+                    colorCode: getRandomColor(),
+                };
+                contacts.push(contact);
             });
 
-            // Hapus pengecekan quota - biarkan unlimited
-            // if (subscription.contactUsed + contacts.length > subscription.contactMax) {
-            //     return res.status(404).json({
-            //         message: `Need more ${
-            //             subscription.contactUsed + contacts.length - subscription.contactMax
-            //         } contact quota to perform this action`,
-            //     });
-            // }
+            // If no valid contacts found, return error
+            if (contacts.length === 0) {
+                return res.status(400).json({ 
+                    message: 'No valid contacts found in the file',
+                    errors 
+                });
+            }
 
             const pkId = req.authenticatedUser.pkId;
             let group: {
@@ -289,6 +297,7 @@ export const importContacts: RequestHandler = async (req, res) => {
                 createdAt?: Date;
                 updatedAt?: Date;
             };
+            
             for (let index = 0; index < contacts.length; index++) {
                 const email = contacts[index].email?.text ?? contacts[index].email;
                 try {
@@ -313,9 +322,10 @@ export const importContacts: RequestHandler = async (req, res) => {
 
                     if (existingContact) {
                         throw new Error(
-                            'Contact with this email or phone number already exists in your contact',
+                            `Contact with phone ${contacts[index].phone} already exists`,
                         );
                     }
+                    
                     await prisma.$transaction(async (transaction) => {
                         // step 1: create contact
                         const createdContact = await transaction.contact.create({
@@ -436,7 +446,7 @@ export const importContacts: RequestHandler = async (req, res) => {
                         error instanceof Error
                             ? error.message
                             : 'An error occurred during import contacts';
-                    errors.push({ index, error: message });
+                    errors.push({ index, phone: contacts[index].phone, error: message });
                 }
             }
             res.status(200).json({ results, errors });

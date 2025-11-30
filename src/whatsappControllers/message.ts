@@ -56,7 +56,6 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                         }
                         const jid = jidNormalizedUser(remoteJidRaw);
                         const data = transformPrisma(message);
-                        console.log(data);
 
                         const messageText =
                             data.message?.conversation ||
