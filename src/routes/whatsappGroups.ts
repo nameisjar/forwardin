@@ -6,6 +6,8 @@ import {
   updateGroupStatus,
   deleteGroup,
   syncGroups,
+  joinGroup,
+  leaveGroup,
 } from '../controllers/whatsappGroup';
 import { authMiddleware } from '../middleware/auth';
 
@@ -28,5 +30,11 @@ router.delete('/device/:deviceId/group/:groupId', authMiddleware, deleteGroup);
 
 // Sync groups manually
 router.post('/device/:deviceId/sync', authMiddleware, syncGroups);
+
+// Join group via invite link
+router.post('/device/:deviceId/join', authMiddleware, joinGroup);
+
+// Leave group
+router.post('/device/:deviceId/leave/:groupJid', authMiddleware, leaveGroup);
 
 export default router;
