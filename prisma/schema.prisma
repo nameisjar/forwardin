@@ -580,3 +580,36 @@ model WhatsAppGroup {
   @@index([deviceId, isActive])
 }
 
+model MonthlyTemplate {
+  pkId            Int      @id @default(autoincrement())
+  id              String   @unique @default(uuid()) @db.Uuid
+  courseName      String   @map("course_name") @db.VarChar(255)
+  code            String   @db.VarChar(50)
+  month           Int
+  level           String   @db.VarChar(100)
+  topicModule     String   @map("topic_module") @db.Text
+  result          String   @db.Text
+  skillsAcquired  String   @map("skills_acquired") @db.Text
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @default(now()) @map("updated_at")
+
+  @@unique([courseName, month], name: "courseName_month")
+  @@index([courseName])
+}
+
+model MonthlyFeedbackLog {
+  pkId           Int      @id @default(autoincrement())
+  id             String   @unique @default(uuid()) @db.Uuid
+  studentName    String   @map("student_name") @db.VarChar(255)
+  courseName     String   @map("course_name") @db.VarChar(255)
+  month          Int
+  recipientPhone String   @map("recipient_phone") @db.VarChar(20)
+  sentBy         String   @map("sent_by") @db.Uuid
+  sentAt         DateTime @map("sent_at")
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  @@index([sentBy])
+  @@index([courseName])
+  @@index([sentAt])
+}
+

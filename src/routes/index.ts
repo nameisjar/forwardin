@@ -24,6 +24,7 @@ import deviceApi from './deviceApi';
 import courseRoutes from './course';
 import tutorsRoutes from './tutors';
 import whatsappGroupRoutes from './whatsappGroups';
+import algorithmicsRoutes from './algorithmics';
 
 const router = Router();
 
@@ -52,7 +53,8 @@ router.use('/customer-services', customerServiceRoutes);
 router.use('/analytics', authMiddleware, analyticsRoutes);
 router.use('/super-admin', superAdminRoutes);
 router.use('/api', apiKeyDevice, deviceApi);
-router.use('/algorithmics', courseRoutes);
+router.use('/algorithmics', authMiddleware, algorithmicsRoutes);
+router.use('/course', authMiddleware, courseRoutes); // 🔥 Tambahkan ini!
 router.use('/tutors', tutorsRoutes);
 router.use('/whatsapp-groups', whatsappGroupRoutes);
 router.use('/media', express.static('media'));
