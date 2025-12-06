@@ -13,32 +13,32 @@ import fs from 'fs';
 
 export const createContact: RequestHandler = async (req, res) => {
     try {
-        console.log('🚀 CREATE CONTACT REQUEST RECEIVED');
-        console.log('📝 Request body:', req.body);
-        console.log(
-            '👤 Authenticated user:',
-            req.authenticatedUser?.firstName,
-            req.authenticatedUser?.email,
-        );
-        console.log('🔐 Privilege:', req.privilege?.name);
+        // console.log('🚀 CREATE CONTACT REQUEST RECEIVED');
+        // console.log('📝 Request body:', req.body);
+        // console.log(
+        //     '👤 Authenticated user:',
+        //     req.authenticatedUser?.firstName,
+        //     req.authenticatedUser?.email,
+        // );
+        // console.log('🔐 Privilege:', req.privilege?.name);
 
         const { firstName, lastName, phone, email, gender, dob, labels, deviceId } = req.body;
 
         if (!firstName || !phone || !deviceId) {
-            console.log('❌ Missing required fields:', {
-                firstName: !!firstName,
-                phone: !!phone,
-                deviceId: !!deviceId,
-            });
+            // console.log('❌ Missing required fields:', {
+            //     firstName: !!firstName,
+            //     phone: !!phone,
+            //     deviceId: !!deviceId,
+            // });
             return res.status(400).json({ message: 'firstName, phone, and deviceId are required' });
         }
 
         const pkId = req.authenticatedUser.pkId;
         const privilegeId = req.privilege.pkId;
-        console.log('🆔 User PKId:', pkId, 'Privilege PKId:', privilegeId);
+        // console.log('🆔 User PKId:', pkId, 'Privilege PKId:', privilegeId);
 
         // Check if contact already exists
-        console.log('🔍 Checking for existing contact with phone:', phone, 'deviceId:', deviceId);
+        // console.log('🔍 Checking for existing contact with phone:', phone, 'deviceId:', deviceId);
 
         const existingContact = await prisma.contact.findFirst({
             where: {
@@ -60,20 +60,20 @@ export const createContact: RequestHandler = async (req, res) => {
         });
 
         if (existingContact) {
-            console.log(
-                '❌ Contact already exists:',
-                existingContact.firstName,
-                existingContact.phone,
-            );
+            // console.log(
+            //     '❌ Contact already exists:',
+            //     existingContact.firstName,
+            //     existingContact.phone,
+            // );
             return res.status(400).json({
                 message: 'Contact with this phone number already exists in your device',
             });
         }
 
-        console.log('✅ No existing contact found, proceeding with creation...');
+        // console.log('✅ No existing contact found, proceeding with creation...');
 
         // Validate device exists and get session before transaction
-        console.log('🔍 Finding device with ID:', deviceId);
+        // console.log('🔍 Finding device with ID:', deviceId);
         const existingDevice = await prisma.device.findUnique({
             where: {
                 id: deviceId,
@@ -82,16 +82,16 @@ export const createContact: RequestHandler = async (req, res) => {
         });
 
         if (!existingDevice) {
-            console.log('❌ Device not found with ID:', deviceId);
+            // console.log('❌ Device not found with ID:', deviceId);
             return res.status(404).json({ message: 'Device not found' });
         }
 
-        console.log(
-            '✅ Device found:',
-            existingDevice.name,
-            'Sessions:',
-            existingDevice.sessions.length,
-        );
+        // console.log(
+        //     '✅ Device found:',
+        //     existingDevice.name,
+        //     'Sessions:',
+        //     existingDevice.sessions.length,
+        // );
 
         const sessionId = existingDevice.sessions[0]?.sessionId;
 
@@ -117,7 +117,7 @@ export const createContact: RequestHandler = async (req, res) => {
                     colorCode: getRandomColor(),
                 },
             });
-            console.log('✅ Contact created with ID:', createdContact.id);
+            // console.log('✅ Contact created with ID:', createdContact.id);
 
             // step 2: create labels (only if provided by user). Do NOT auto-append device label
             const inputLabels: string[] = Array.isArray(labels)
@@ -143,12 +143,12 @@ export const createContact: RequestHandler = async (req, res) => {
                     })),
                     skipDuplicates: true,
                 });
-                console.log('✅ Labels created and linked');
+                // console.log('✅ Labels created and linked');
             }
 
             // step 3: update message history
             if (sessionId) {
-                console.log('🔄 Updating message history...');
+                // console.log('🔄 Updating message history...');
                 await transaction.outgoingMessage.updateMany({
                     where: {
                         to: phone + '@s.whatsapp.net',
@@ -167,7 +167,7 @@ export const createContact: RequestHandler = async (req, res) => {
             }
 
             // step 4: create contact-device relationship
-            console.log('🔗 Creating contact-device relationship...');
+            // console.log('🔗 Creating contact-device relationship...');
             await transaction.contactDevice.create({
                 data: {
                     contactId: createdContact.pkId,
@@ -175,7 +175,7 @@ export const createContact: RequestHandler = async (req, res) => {
                 },
             });
 
-            console.log('✅ Contact creation completed successfully');
+            // console.log('✅ Contact creation completed successfully');
 
             return { contactId: createdContact.id, contactName: createdContact.firstName };
         });
@@ -187,7 +187,7 @@ export const createContact: RequestHandler = async (req, res) => {
             contactName: created.contactName,
         });
     } catch (error: unknown) {
-        console.error('❌ ERROR in createContact:', error);
+        // console.error('❌ ERROR in createContact:', error);
         logger.error(error);
 
         // Handle specific database errors

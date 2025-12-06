@@ -35,7 +35,7 @@ async function seedAdminAccount(prisma: PrismaClient, logger: Logger) {
 
         logger.info('Admin account created');
     } catch (error) {
-        console.error('Error creating admin account:', error);
+        // console.error('Error creating admin account:', error);
     } finally {
         await prisma.$disconnect();
     }

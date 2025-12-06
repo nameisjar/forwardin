@@ -13,7 +13,7 @@ export const getActiveGroups = async (req: Request, res: Response) => {
       });
     }
 
-    console.log('Getting active groups for device UUID:', deviceId);
+    // console.log('Getting active groups for device UUID:', deviceId);
 
     // Get device info using UUID to get pkId and sessionId
     const device = await prisma.device.findUnique({
@@ -27,7 +27,7 @@ export const getActiveGroups = async (req: Request, res: Response) => {
     });
 
     if (!device) {
-      console.error(`Device not found with UUID: ${deviceId}`);
+      // console.error(`Device not found with UUID: ${deviceId}`);
       return res.status(404).json({
         status: false,
         message: 'Device not found',
@@ -37,7 +37,7 @@ export const getActiveGroups = async (req: Request, res: Response) => {
     // Use device.pkId for database operations
     const groups = await WhatsAppGroupService.getActiveGroups(device.pkId);
     
-    console.log(`Found ${groups.length} active groups for device: ${device.name}`);
+    // console.log(`Found ${groups.length} active groups for device: ${device.name}`);
     
     // Get WhatsApp instance to fetch profile pictures
     let instance: any = null;
@@ -47,13 +47,13 @@ export const getActiveGroups = async (req: Request, res: Response) => {
         const { getInstance, verifyInstance } = require('../whatsapp');
         if (verifyInstance(sessionId)) {
           instance = getInstance(sessionId);
-          console.log('WhatsApp instance available, will fetch group profile pictures');
+          // console.log('WhatsApp instance available, will fetch group profile pictures');
         } else {
-          console.log('WhatsApp instance not available, returning groups without profile pictures');
+          // console.log('WhatsApp instance not available, returning groups without profile pictures');
         }
       }
     } catch (error) {
-      console.log('Could not get WhatsApp instance:', error);
+      // console.log('Could not get WhatsApp instance:', error);
     }
     
     // Transform data and fetch profile pictures if instance is available
@@ -64,10 +64,10 @@ export const getActiveGroups = async (req: Request, res: Response) => {
       if (instance) {
         try {
           profilePicUrl = await instance.profilePictureUrl(group.groupId, 'image');
-          console.log(`Fetched profile picture for group: ${group.groupName}`);
+          // console.log(`Fetched profile picture for group: ${group.groupName}`);
         } catch (error) {
           // Group might not have a profile picture, or other error - just skip
-          console.log(`No profile picture for group ${group.groupName}:`, (error as any)?.message || 'Unknown error');
+          // console.log(`No profile picture for group ${group.groupName}:`, (error as any)?.message || 'Unknown error');
         }
       }
       
@@ -91,7 +91,7 @@ export const getActiveGroups = async (req: Request, res: Response) => {
       data: transformedGroups,
     });
   } catch (error) {
-    console.error('Error getting active groups:', error);
+    // console.error('Error getting active groups:', error);
     res.status(500).json({
       status: false,
       message: 'Internal server error',
@@ -130,7 +130,7 @@ export const getAllGroups = async (req: Request, res: Response) => {
       data: groups,
     });
   } catch (error) {
-    console.error('Error getting all groups:', error);
+    // console.error('Error getting all groups:', error);
     res.status(500).json({
       status: false,
       message: 'Internal server error',
@@ -176,7 +176,7 @@ export const searchGroups = async (req: Request, res: Response) => {
       data: groups,
     });
   } catch (error) {
-    console.error('Error searching groups:', error);
+    // console.error('Error searching groups:', error);
     res.status(500).json({
       status: false,
       message: 'Internal server error',
@@ -210,7 +210,7 @@ export const updateGroupStatus = async (req: Request, res: Response) => {
       message: 'Group status updated successfully',
     });
   } catch (error) {
-    console.error('Error updating group status:', error);
+    // console.error('Error updating group status:', error);
     res.status(500).json({
       status: false,
       message: 'Internal server error',
@@ -236,7 +236,7 @@ export const deleteGroup = async (req: Request, res: Response) => {
       message: 'Group deleted successfully',
     });
   } catch (error) {
-    console.error('Error deleting group:', error);
+    // console.error('Error deleting group:', error);
     res.status(500).json({
       status: false,
       message: 'Internal server error',
@@ -255,7 +255,7 @@ export const syncGroups = async (req: Request, res: Response) => {
       });
     }
 
-    console.log('Syncing groups for device UUID:', deviceId);
+    // console.log('Syncing groups for device UUID:', deviceId);
     
     // Get device info using UUID (not pkId) and include sessions
     const device = await prisma.device.findUnique({
@@ -269,14 +269,14 @@ export const syncGroups = async (req: Request, res: Response) => {
     });
 
     if (!device) {
-      console.error(`Device not found with UUID: ${deviceId}`);
+      // console.error(`Device not found with UUID: ${deviceId}`);
       return res.status(404).json({
         status: false,
         message: 'Device not found',
       });
     }
 
-    console.log('Found device:', device.name, 'Status:', device.status);
+    // console.log('Found device:', device.name, 'Status:', device.status);
 
     if (device.status !== 'open') {
       return res.status(400).json({
@@ -288,21 +288,21 @@ export const syncGroups = async (req: Request, res: Response) => {
     // Get sessionId from device
     const sessionId = device.sessions[0]?.sessionId;
     if (!sessionId) {
-      console.error('No session found for device:', deviceId);
+      // console.error('No session found for device:', deviceId);
       return res.status(400).json({
         status: false,
         message: 'No active session found. Please reconnect WhatsApp.',
       });
     }
 
-    console.log('Session ID found:', sessionId);
+    // console.log('Session ID found:', sessionId);
 
     // Use existing WhatsApp instance functions
     const { getInstance, verifyInstance } = require('../whatsapp');
     
     // Verify instance using sessionId (not deviceId)
     if (!verifyInstance(sessionId)) {
-      console.error(`WhatsApp session not found for sessionId: ${sessionId}`);
+      // console.error(`WhatsApp session not found for sessionId: ${sessionId}`);
       return res.status(400).json({
         status: false,
         message: 'WhatsApp session not found. Please reconnect WhatsApp.',
@@ -312,7 +312,7 @@ export const syncGroups = async (req: Request, res: Response) => {
     const instance = getInstance(sessionId);
     
     try {
-      console.log('Fetching groups from WhatsApp...');
+      // console.log('Fetching groups from WhatsApp...');
       
       // Get groups from WhatsApp
       const groupsData = await instance.groupFetchAllParticipating();
@@ -322,7 +322,7 @@ export const syncGroups = async (req: Request, res: Response) => {
         participants: group.participants || [], // Send as array instead of count
       }));
 
-      console.log(`Found ${groupsArray.length} groups for device ${deviceId}`);
+      // console.log(`Found ${groupsArray.length} groups for device ${deviceId}`);
 
       // Save groups to database using device pkId
       // ✅ replaceAll = true karena ini adalah MANUAL SYNC (user klik tombol sync)
@@ -333,7 +333,7 @@ export const syncGroups = async (req: Request, res: Response) => {
         true // Replace all existing groups
       );
 
-      console.log('Groups saved to database successfully');
+      // console.log('Groups saved to database successfully');
 
       res.json({
         status: true,
@@ -346,7 +346,7 @@ export const syncGroups = async (req: Request, res: Response) => {
       });
 
     } catch (whatsappError) {
-      console.error('Error fetching groups from WhatsApp:', whatsappError);
+      // console.error('Error fetching groups from WhatsApp:', whatsappError);
       res.status(500).json({
         status: false,
         message: 'Failed to fetch groups from WhatsApp. Make sure WhatsApp is properly connected.',
@@ -355,7 +355,7 @@ export const syncGroups = async (req: Request, res: Response) => {
     }
 
   } catch (error) {
-    console.error('Error syncing groups:', error);
+    // console.error('Error syncing groups:', error);
     res.status(500).json({
       status: false,
       message: 'Internal server error',
@@ -369,10 +369,10 @@ export const joinGroup = async (req: Request, res: Response) => {
     const { deviceId } = req.params;
     const { inviteLink } = req.body;
     
-    console.log('=== JOIN GROUP REQUEST ===');
-    console.log('Device UUID:', deviceId);
-    console.log('Invite Link:', inviteLink);
-    console.log('Request body:', req.body);
+    // console.log('=== JOIN GROUP REQUEST ===');
+    // console.log('Device UUID:', deviceId);
+    // console.log('Invite Link:', inviteLink);
+    // console.log('Request body:', req.body);
     
     if (!deviceId) {
       return res.status(400).json({
@@ -388,7 +388,7 @@ export const joinGroup = async (req: Request, res: Response) => {
       });
     }
 
-    console.log('Step 1: Finding device in database...');
+    // console.log('Step 1: Finding device in database...');
     const device = await prisma.device.findUnique({
       where: { id: deviceId },
       include: {
@@ -400,23 +400,23 @@ export const joinGroup = async (req: Request, res: Response) => {
     });
 
     if (!device) {
-      console.error('Device not found with UUID:', deviceId);
+      // console.error('Device not found with UUID:', deviceId);
       return res.status(404).json({
         status: false,
         message: 'Device not found',
       });
     }
 
-    console.log('Device found:', {
-      id: device.id,
-      name: device.name,
-      status: device.status,
-      pkId: device.pkId,
-      sessions: device.sessions
-    });
+    // console.log('Device found:', {
+    //   id: device.id,
+    //   name: device.name,
+    //   status: device.status,
+    //   pkId: device.pkId,
+    //   sessions: device.sessions
+    // });
 
     if (device.status !== 'open') {
-      console.error('Device status is not open:', device.status);
+      // console.error('Device status is not open:', device.status);
       return res.status(400).json({
         status: false,
         message: `WhatsApp is not connected. Current status: ${device.status}. Please connect WhatsApp first.`,
@@ -426,23 +426,23 @@ export const joinGroup = async (req: Request, res: Response) => {
     // Get sessionId from device
     const sessionId = device.sessions[0]?.sessionId;
     if (!sessionId) {
-      console.error('No session found for device:', deviceId);
+      // console.error('No session found for device:', deviceId);
       return res.status(400).json({
         status: false,
         message: 'No active session found. Please reconnect WhatsApp.',
       });
     }
 
-    console.log('Session ID found:', sessionId);
+    // console.log('Session ID found:', sessionId);
 
-    console.log('Step 2: Verifying WhatsApp instance...');
+    // console.log('Step 2: Verifying WhatsApp instance...');
     const { getInstance, verifyInstance } = require('../whatsapp');
     
     const isInstanceValid = verifyInstance(sessionId);
-    console.log('Instance verification result:', isInstanceValid);
+    // console.log('Instance verification result:', isInstanceValid);
     
     if (!isInstanceValid) {
-      console.error('WhatsApp session not found for sessionId:', sessionId);
+      // console.error('WhatsApp session not found for sessionId:', sessionId);
       
       return res.status(400).json({
         status: false,
@@ -450,32 +450,32 @@ export const joinGroup = async (req: Request, res: Response) => {
       });
     }
 
-    console.log('Step 3: Getting WhatsApp instance...');
+    // console.log('Step 3: Getting WhatsApp instance...');
     const instance = getInstance(sessionId);
-    console.log('Instance retrieved successfully');
+    // console.log('Instance retrieved successfully');
     
     try {
       // Extract invite code from link
-      console.log('Step 4: Extracting invite code...');
+      // console.log('Step 4: Extracting invite code...');
       const inviteCode = inviteLink.split('/').pop()?.replace(/\?.*$/, '') || '';
       
       if (!inviteCode) {
-        console.error('Invalid invite code extracted from link:', inviteLink);
+        // console.error('Invalid invite code extracted from link:', inviteLink);
         return res.status(400).json({
           status: false,
           message: 'Invalid invite link format',
         });
       }
 
-      console.log('Invite code extracted:', inviteCode);
-      console.log('Step 5: Attempting to join group...');
+      // console.log('Invite code extracted:', inviteCode);
+      // console.log('Step 5: Attempting to join group...');
       
       // Join group using Baileys
       const result = await instance.groupAcceptInvite(inviteCode);
       
-      console.log('Successfully joined group! Result:', result);
+      // console.log('Successfully joined group! Result:', result);
 
-      console.log('Step 6: Syncing groups to database...');
+      // console.log('Step 6: Syncing groups to database...');
       // Sync groups to update database
       const groupsData = await instance.groupFetchAllParticipating();
       const groupsArray = Object.values(groupsData).map((group: any) => ({
@@ -484,7 +484,7 @@ export const joinGroup = async (req: Request, res: Response) => {
         participants: group.participants || [],
       }));
 
-      console.log(`Fetched ${groupsArray.length} groups from WhatsApp`);
+      // console.log(`Fetched ${groupsArray.length} groups from WhatsApp`);
 
       await WhatsAppGroupService.saveWhatsAppGroups(
         device.pkId,
@@ -493,8 +493,8 @@ export const joinGroup = async (req: Request, res: Response) => {
         true
       );
 
-      console.log('Groups synced successfully');
-      console.log('=== JOIN GROUP SUCCESS ===');
+      // console.log('Groups synced successfully');
+      // console.log('=== JOIN GROUP SUCCESS ===');
 
       res.json({
         status: true,
@@ -503,10 +503,10 @@ export const joinGroup = async (req: Request, res: Response) => {
       });
 
     } catch (whatsappError: any) {
-      console.error('=== WHATSAPP ERROR ===');
-      console.error('Error joining group:', whatsappError);
-      console.error('Error message:', whatsappError?.message);
-      console.error('Error stack:', whatsappError?.stack);
+      // console.error('=== WHATSAPP ERROR ===');
+      // console.error('Error joining group:', whatsappError);
+      // console.error('Error message:', whatsappError?.message);
+      // console.error('Error stack:', whatsappError?.stack);
       
       res.status(500).json({
         status: false,
@@ -515,10 +515,10 @@ export const joinGroup = async (req: Request, res: Response) => {
     }
 
   } catch (error: any) {
-    console.error('=== GENERAL ERROR ===');
-    console.error('Error joining group:', error);
-    console.error('Error message:', error?.message);
-    console.error('Error stack:', error?.stack);
+    // console.error('=== GENERAL ERROR ===');
+    // console.error('Error joining group:', error);
+    // console.error('Error message:', error?.message);
+    // console.error('Error stack:', error?.stack);
     
     res.status(500).json({
       status: false,
@@ -532,9 +532,9 @@ export const leaveGroup = async (req: Request, res: Response) => {
   try {
     const { deviceId, groupJid } = req.params;
     
-    console.log('=== LEAVE GROUP REQUEST ===');
-    console.log('Device UUID:', deviceId);
-    console.log('Group JID:', groupJid);
+    // console.log('=== LEAVE GROUP REQUEST ===');
+    // console.log('Device UUID:', deviceId);
+    // console.log('Group JID:', groupJid);
     
     if (!deviceId || !groupJid) {
       return res.status(400).json({
@@ -543,7 +543,7 @@ export const leaveGroup = async (req: Request, res: Response) => {
       });
     }
     
-    console.log('Step 1: Finding device in database...');
+    // console.log('Step 1: Finding device in database...');
     const device = await prisma.device.findUnique({
       where: { id: deviceId },
       include: {
@@ -555,23 +555,23 @@ export const leaveGroup = async (req: Request, res: Response) => {
     });
 
     if (!device) {
-      console.error('Device not found with UUID:', deviceId);
+      // console.error('Device not found with UUID:', deviceId);
       return res.status(404).json({
         status: false,
         message: 'Device not found',
       });
     }
 
-    console.log('Device found:', {
-      id: device.id,
-      name: device.name,
-      status: device.status,
-      pkId: device.pkId,
-      sessions: device.sessions
-    });
+    // console.log('Device found:', {
+    //   id: device.id,
+    //   name: device.name,
+    //   status: device.status,
+    //   pkId: device.pkId,
+    //   sessions: device.sessions
+    // });
 
     if (device.status !== 'open') {
-      console.error('Device status is not open:', device.status);
+      // console.error('Device status is not open:', device.status);
       return res.status(400).json({
         status: false,
         message: `WhatsApp is not connected. Current status: ${device.status}. Please connect WhatsApp first.`,
@@ -581,48 +581,48 @@ export const leaveGroup = async (req: Request, res: Response) => {
     // Get sessionId from device
     const sessionId = device.sessions[0]?.sessionId;
     if (!sessionId) {
-      console.error('No session found for device:', deviceId);
+      // console.error('No session found for device:', deviceId);
       return res.status(400).json({
         status: false,
         message: 'No active session found. Please reconnect WhatsApp.',
       });
     }
 
-    console.log('Session ID found:', sessionId);
+    // console.log('Session ID found:', sessionId);
 
-    console.log('Step 2: Verifying WhatsApp instance...');
+    // console.log('Step 2: Verifying WhatsApp instance...');
     const { getInstance, verifyInstance } = require('../whatsapp');
     
     if (!verifyInstance(sessionId)) {
-      console.error('WhatsApp session not found for sessionId:', sessionId);
+      // console.error('WhatsApp session not found for sessionId:', sessionId);
       return res.status(400).json({
         status: false,
         message: 'WhatsApp session not found. Please reconnect WhatsApp.',
       });
     }
 
-    console.log('Step 3: Getting WhatsApp instance...');
+    // console.log('Step 3: Getting WhatsApp instance...');
     const instance = getInstance(sessionId);
-    console.log('Instance retrieved successfully');
+    // console.log('Instance retrieved successfully');
     
     try {
-      console.log('Step 4: Checking if group exists...');
+      // console.log('Step 4: Checking if group exists...');
       // Verify we're still in the group before trying to leave
       try {
         const groupMetadata = await instance.groupMetadata(groupJid);
-        console.log('Group metadata:', {
-          id: groupMetadata.id,
-          subject: groupMetadata.subject,
-          participants: groupMetadata.participants?.length || 0
-        });
+        // console.log('Group metadata:', {
+        //   id: groupMetadata.id,
+        //   subject: groupMetadata.subject,
+        //   participants: groupMetadata.participants?.length || 0
+        // });
       } catch (metadataError: any) {
-        console.error('Cannot fetch group metadata:', metadataError.message);
+        // console.error('Cannot fetch group metadata:', metadataError.message);
         
         // If we can't fetch metadata, we're probably not in the group anymore
         if (metadataError?.output?.statusCode === 404 || 
             metadataError?.message?.includes('not-authorized') ||
             metadataError?.message?.includes('forbidden')) {
-          console.log('Already not in group, cleaning up database...');
+          // console.log('Already not in group, cleaning up database...');
           
           await prisma.whatsAppGroup.deleteMany({
             where: {
@@ -638,33 +638,33 @@ export const leaveGroup = async (req: Request, res: Response) => {
         }
       }
       
-      console.log('Step 5: Leaving group via WhatsApp...');
+      // console.log('Step 5: Leaving group via WhatsApp...');
       
       // Leave group using Baileys
       await instance.groupLeave(groupJid);
       
-      console.log('Successfully sent leave request to WhatsApp');
+      // console.log('Successfully sent leave request to WhatsApp');
       
       // Wait a bit for WhatsApp to process
       await new Promise(resolve => setTimeout(resolve, 1500));
       
-      console.log('Step 6: Verifying we left the group...');
+      // console.log('Step 6: Verifying we left the group...');
       // Verify we actually left
       try {
         await instance.groupMetadata(groupJid);
         // If we can still fetch metadata, we might not have left successfully
-        console.warn('Warning: Still able to fetch group metadata after leave. Might still be in group.');
+        // console.warn('Warning: Still able to fetch group metadata after leave. Might still be in group.');
       } catch (verifyError: any) {
         if (verifyError?.output?.statusCode === 404 || 
             verifyError?.message?.includes('not-authorized') ||
             verifyError?.message?.includes('forbidden')) {
-          console.log('Verified: Successfully left the group (cannot access metadata anymore)');
+          // console.log('Verified: Successfully left the group (cannot access metadata anymore)');
         } else {
-          console.error('Unexpected error verifying leave:', verifyError.message);
+          // console.error('Unexpected error verifying leave:', verifyError.message);
         }
       }
 
-      console.log('Step 7: Removing from database...');
+      // console.log('Step 7: Removing from database...');
       // Remove from database
       const deleteResult = await prisma.whatsAppGroup.deleteMany({
         where: {
@@ -673,9 +673,9 @@ export const leaveGroup = async (req: Request, res: Response) => {
         }
       });
 
-      console.log(`Deleted ${deleteResult.count} group record(s) from database`);
+      // console.log(`Deleted ${deleteResult.count} group record(s) from database`);
 
-      console.log('Step 8: Syncing remaining groups...');
+      // console.log('Step 8: Syncing remaining groups...');
       // Sync groups to ensure database is up to date
       try {
         const groupsData = await instance.groupFetchAllParticipating();
@@ -685,7 +685,7 @@ export const leaveGroup = async (req: Request, res: Response) => {
           participants: group.participants || [],
         }));
 
-        console.log(`Fetched ${groupsArray.length} remaining groups from WhatsApp`);
+        // console.log(`Fetched ${groupsArray.length} remaining groups from WhatsApp`);
 
         await WhatsAppGroupService.saveWhatsAppGroups(
           device.pkId,
@@ -694,13 +694,13 @@ export const leaveGroup = async (req: Request, res: Response) => {
           true // Replace all to ensure sync
         );
 
-        console.log('Groups synced successfully after leave');
+        // console.log('Groups synced successfully after leave');
       } catch (syncError) {
-        console.error('Error syncing groups after leave:', syncError);
+        // console.error('Error syncing groups after leave:', syncError);
         // Don't fail the request if sync fails
       }
 
-      console.log('=== LEAVE GROUP SUCCESS ===');
+      // console.log('=== LEAVE GROUP SUCCESS ===');
 
       res.json({
         status: true,
@@ -708,11 +708,11 @@ export const leaveGroup = async (req: Request, res: Response) => {
       });
 
     } catch (whatsappError: any) {
-      console.error('=== WHATSAPP ERROR ===');
-      console.error('Error leaving group:', whatsappError);
-      console.error('Error message:', whatsappError?.message);
-      console.error('Error stack:', whatsappError?.stack);
-      console.error('Error output:', whatsappError?.output);
+      // console.error('=== WHATSAPP ERROR ===');
+      // console.error('Error leaving group:', whatsappError);
+      // console.error('Error message:', whatsappError?.message);
+      // console.error('Error stack:', whatsappError?.stack);
+      // console.error('Error output:', whatsappError?.output);
       
       // Check if error is because we're not in the group
       if (whatsappError?.output?.statusCode === 403 ||
@@ -720,7 +720,7 @@ export const leaveGroup = async (req: Request, res: Response) => {
           whatsappError?.message?.includes('forbidden') ||
           whatsappError?.message?.includes('not a participant')) {
         
-        console.log('Not in group, cleaning up database...');
+        // console.log('Not in group, cleaning up database...');
         
         await prisma.whatsAppGroup.deleteMany({
           where: {
@@ -742,10 +742,10 @@ export const leaveGroup = async (req: Request, res: Response) => {
     }
 
   } catch (error: any) {
-    console.error('=== GENERAL ERROR ===');
-    console.error('Error leaving group:', error);
-    console.error('Error message:', error?.message);
-    console.error('Error stack:', error?.stack);
+    // console.error('=== GENERAL ERROR ===');
+    // console.error('Error leaving group:', error);
+    // console.error('Error message:', error?.message);
+    // console.error('Error stack:', error?.stack);
     
     res.status(500).json({
       status: false,

@@ -7,8 +7,8 @@ const wb = XLSX.readFile(excelPath);
 const ws = wb.Sheets[wb.SheetNames[0]];
 const data = XLSX.utils.sheet_to_json(ws, { header: 1 });
 
-console.log('Total rows:', data.length);
-console.log('Header:', data[0]);
+// console.log('Total rows:', data.length);
+// console.log('Header:', data[0]);
 
 // Generate seeder data
 const seederData = [];
@@ -27,11 +27,11 @@ for(let i = 1; i < data.length; i++) {
   }
 }
 
-console.log();
+// console.log();
 
 // Create seeder file
-const seederCode = ;
+const seederCode = `module.exports = ${JSON.stringify(seederData, null, 2)};`;
 
 fs.writeFileSync(path.join(__dirname, '..', 'prisma', 'seed', 'monthly-templates.seed.ts'), seederCode);
-console.log('\nSeeder file created at: prisma/seed/monthly-templates.seed.ts');
-console.log('Run with: npx ts-node prisma/seed/monthly-templates.seed.ts');
+// console.log('\nSeeder file created at: prisma/seed/monthly-templates.seed.ts');
+// console.log('Run with: npx ts-node prisma/seed/monthly-templates.seed.ts');

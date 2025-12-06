@@ -30,11 +30,11 @@ imageFiles.forEach(fileName => {
     const key = fileName.replace(/\.[^/.]+$/, '').replace(/[^a-zA-Z0-9]/g, '_');
     images[key] = `data:${mimeType};base64,${base64}`;
     
-    console.log(`✓ Converted ${fileName}`);
+    // console.log(`✓ Converted ${fileName}`);
   } else {
-    console.log(`✗ File not found: ${fileName}`);
+    // console.log(`✗ File not found: ${fileName}`);
   }
 });
 
 fs.writeFileSync(outputPath, JSON.stringify(images, null, 2));
-console.log(`\n✓ Images saved to ${outputPath}`);
+// console.log(`\n✓ Images saved to ${outputPath}`);

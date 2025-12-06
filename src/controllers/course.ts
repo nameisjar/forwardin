@@ -26,7 +26,7 @@ export const createReminder: RequestHandler = async (req, res) => {
 
         return res.status(201).json({ message: 'Reminder created successfully.', reminder });
     } catch (error: any) {
-        console.error('Error creating reminder:', error.message || error);
+        // console.error('Error creating reminder:', error.message || error);
         res.status(500).json({ message: 'Internal server error.', error: error.message || error });
     }
 };
@@ -37,7 +37,7 @@ export const getReminders: RequestHandler = async (req, res) => {
 
         return res.status(200).json({ reminders });
     } catch (error: any) {
-        console.error('Error getting reminders:', error.message || error);
+        // console.error('Error getting reminders:', error.message || error);
         res.status(500).json({ message: 'Internal server error.', error: error.message || error });
     }
 };
@@ -54,7 +54,7 @@ export const getReminderByCourseName: RequestHandler = async (req, res) => {
 
         return res.status(200).json({ reminders });
     } catch (error: any) {
-        console.error('Error getting reminders:', error.message || error);
+        // console.error('Error getting reminders:', error.message || error);
         res.status(500).json({ message: 'Internal server error.', error: error.message || error });
     }
 };
@@ -83,7 +83,7 @@ export const updateReminder: RequestHandler = async (req, res) => {
 
         return res.status(200).json({ message: 'Reminder updated successfully.', reminder });
     } catch (error: any) {
-        console.error('Error updating reminder:', error.message || error);
+        // console.error('Error updating reminder:', error.message || error);
         res.status(500).json({ message: 'Internal server error.', error: error.message || error });
     }
 };
@@ -94,7 +94,7 @@ export const deleteReminders: RequestHandler = async (req, res) => {
 
         return res.status(200).json({ message: 'All reminders deleted successfully.' });
     } catch (error: any) {
-        console.error('Error deleting all reminders:', error.message || error);
+        // console.error('Error deleting all reminders:', error.message || error);
         res.status(500).json({ message: 'Internal server error.', error: error.message || error });
     }
 };
@@ -109,7 +109,7 @@ export const deleteReminder: RequestHandler = async (req, res) => {
 
         return res.status(200).json({ message: 'Reminder deleted successfully.' });
     } catch (error: any) {
-        console.error('Error deleting reminder:', error.message || error);
+        // console.error('Error deleting reminder:', error.message || error);
         res.status(500).json({ message: 'Internal server error.', error: error.message || error });
     }
 };
@@ -137,7 +137,7 @@ export const createFeedback: RequestHandler = async (req, res) => {
 
         return res.status(201).json({ message: 'Feedback created successfully.', feedback });
     } catch (error: any) {
-        console.error('Error creating feedback:', error.message || error);
+        // console.error('Error creating feedback:', error.message || error);
         res.status(500).json({ message: 'Internal server error.', error: error.message || error });
     }
 };
@@ -148,7 +148,7 @@ export const getFeedbacks: RequestHandler = async (req, res) => {
 
         return res.status(200).json({ feedbacks });
     } catch (error: any) {
-        console.error('Error getting feedbacks:', error.message || error);
+        // console.error('Error getting feedbacks:', error.message || error);
         res.status(500).json({ message: 'Internal server error.', error: error.message || error });
     }
 };
@@ -165,7 +165,7 @@ export const getFeedbackByCourseName: RequestHandler = async (req, res) => {
 
         return res.status(200).json({ feedbacks });
     } catch (error: any) {
-        console.error('Error getting feedbacks:', error.message || error);
+        // console.error('Error getting feedbacks:', error.message || error);
         res.status(500).json({ message: 'Internal server error.', error: error.message || error });
     }
 };
@@ -194,7 +194,7 @@ export const updateFeedback: RequestHandler = async (req, res) => {
 
         return res.status(200).json({ message: 'Feedback updated successfully.', feedback });
     } catch (error: any) {
-        console.error('Error updating feedback:', error.message || error);
+        // console.error('Error updating feedback:', error.message || error);
         res.status(500).json({ message: 'Internal server error.', error: error.message || error });
     }
 };
@@ -205,7 +205,7 @@ export const deleteFeedbacks: RequestHandler = async (req, res) => {
 
         return res.status(200).json({ message: 'All feedbacks deleted successfully.' });
     } catch (error: any) {
-        console.error('Error deleting all feedbacks:', error.message || error);
+        // console.error('Error deleting all feedbacks:', error.message || error);
         res.status(500).json({ message: 'Internal server error.', error: error.message || error });
     }
 };
@@ -220,7 +220,7 @@ export const deleteFeedback: RequestHandler = async (req, res) => {
 
         return res.status(200).json({ message: 'Feedback deleted successfully.' });
     } catch (error: any) {
-        console.error('Error deleting feedback:', error.message || error);
+        // console.error('Error deleting feedback:', error.message || error);
         res.status(500).json({ message: 'Internal server error.', error: error.message || error });
     }
 };
@@ -358,12 +358,12 @@ export const importFeedbacks: RequestHandler = async (req, res) => {
                     .status(200)
                     .json({ message: 'Import completed', inserted, replaced: replace });
             } catch (e: any) {
-                console.error('Error processing file:', e);
+                // console.error('Error processing file:', e);
                 return res.status(500).json({ message: 'Failed to process file', error: e.message });
             }
         });
     } catch (error: any) {
-        console.error('Error in importFeedbacks:', error);
+        // console.error('Error in importFeedbacks:', error);
         return res.status(500).json({ message: 'Internal server error', error: error.message });
     }
 };

@@ -185,7 +185,7 @@ export async function sendCampaignReply(sessionId: any, data: any) {
             data.message?.imageMessage?.caption ||
             '';
 
-        console.log(phoneNumber);
+        // console.log(phoneNumber);
         // !!!back here: handle send campaign to group, label
         const matchingCampaign = await prisma.campaign.findFirst({
             where: {
@@ -245,7 +245,7 @@ export async function sendCampaignReply(sessionId: any, data: any) {
             },
         });
 
-        console.log(matchingCampaign);
+        // console.log(matchingCampaign);
 
         const isMember = matchingCampaign?.group.contactGroups.some(
             (contactGroup) => contactGroup.contact.phone === phoneNumber,

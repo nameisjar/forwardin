@@ -286,11 +286,11 @@ export const deleteDevices: RequestHandler = async (req, res) => {
             try {
                 // Clean up WhatsApp instance if exists
                 if (verifyInstance(deviceId)) {
-                    console.log(`Cleaning up WhatsApp instance for device: ${deviceId}`);
+                    // console.log(`Cleaning up WhatsApp instance for device: ${deviceId}`);
                     await deleteInstance(deviceId);
                 }
             } catch (error) {
-                console.warn(`Warning: Could not cleanup WhatsApp instance for device ${deviceId}:`, error);
+                // console.warn(`Warning: Could not cleanup WhatsApp instance for device ${deviceId}:`, error);
                 // Continue with deletion even if instance cleanup fails
             }
 
@@ -327,11 +327,11 @@ export const deleteDevices: RequestHandler = async (req, res) => {
                 if (err) {
                     console.error(`Error deleting sub-directory: ${err}`);
                 } else {
-                    console.log(`Sub-directory ${subDirectoryPath} is deleted successfully.`);
+                    // console.log(`Sub-directory ${subDirectoryPath} is deleted successfully.`);
                 }
             });
 
-            console.log(`Successfully deleted device: ${deviceId}`);
+            // console.log(`Successfully deleted device: ${deviceId}`);
             return { success: true };
         });
 

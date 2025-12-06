@@ -46,7 +46,7 @@ async function seedUserAccount(prisma: PrismaClient, logger: Logger) {
 
         logger.info('User account created');
     } catch (error) {
-        console.error('Error creating user account:', error);
+        // console.error('Error creating user account:', error);
     } finally {
         await prisma.$disconnect();
     }

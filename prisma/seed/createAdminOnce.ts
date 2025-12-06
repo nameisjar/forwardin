@@ -22,7 +22,7 @@ async function main() {
         const username = 'admin';
         const existing = await prisma.user.findFirst({ where: { OR: [{ email }, { username }] } });
         if (existing) {
-            console.log(`Admin account already exists. Email: ${existing.email}`);
+            // console.log(`Admin account already exists. Email: ${existing.email}`);
             return;
         }
 
@@ -44,12 +44,12 @@ async function main() {
             select: { id: true, email: true },
         });
 
-        console.log('Admin account created successfully');
-        console.log('Login credential:');
-        console.log(`Email/Username: ${email} or ${username}`);
-        console.log(`Password: ${password}`);
+        // console.log('Admin account created successfully');
+        // console.log('Login credential:');
+        // console.log(`Email/Username: ${email} or ${username}`);
+        // console.log(`Password: ${password}`);
     } catch (e) {
-        console.error(e);
+        // console.error(e);
         process.exitCode = 1;
     }
 }

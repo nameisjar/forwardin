@@ -24,7 +24,7 @@ export function initSocketServer(app: Express.Application): http.Server {
         // });
 
         socket.on('close', () => {
-            console.log('WebSocket client disconnected');
+            // console.log('WebSocket client disconnected');
         });
     });
     return server;

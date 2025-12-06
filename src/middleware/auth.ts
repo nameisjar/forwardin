@@ -218,8 +218,8 @@ export const apiKeyDevice: RequestHandler = async (req, res, next) => {
         },
     });
 
-    console.log(existingSession);
-    console.log('==============================================');
+    // console.log(existingSession);
+    // console.log('==============================================');
 
     if (!existingSession) {
         return res.status(401).json({ message: 'Authentication failed: Session not found' });

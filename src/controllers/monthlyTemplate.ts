@@ -157,7 +157,7 @@ export const importMonthlyTemplates: RequestHandler = async (req, res) => {
         }
 
         // Log untuk debugging
-        console.log('📥 Received templates:', JSON.stringify(templates.slice(0, 1), null, 2));
+        // console.log('📥 Received templates:', JSON.stringify(templates.slice(0, 1), null, 2));
 
         // Transform Excel data to match database schema
         // Frontend mengirim: courseName, code, month, level, topicModule, result, skillsAcquired
@@ -182,7 +182,7 @@ export const importMonthlyTemplates: RequestHandler = async (req, res) => {
         });
 
         // Log transformed data
-        console.log('🔄 Transformed template:', JSON.stringify(transformedTemplates.slice(0, 1), null, 2));
+        // console.log('🔄 Transformed template:', JSON.stringify(transformedTemplates.slice(0, 1), null, 2));
 
         // Validate each template
         const invalidTemplates = transformedTemplates.filter(t => 

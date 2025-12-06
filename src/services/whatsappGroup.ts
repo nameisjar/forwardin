@@ -35,7 +35,7 @@ export class WhatsAppGroupService {
             isActive: false,
           },
         });
-        console.log(`[saveWhatsAppGroups] Replace mode: deactivated all old groups for device ${deviceId}`);
+        // console.log(`[saveWhatsAppGroups] Replace mode: deactivated all old groups for device ${deviceId}`);
       }
 
       // Simpan atau update grup baru
@@ -66,10 +66,10 @@ export class WhatsAppGroupService {
       }
 
       const mode = replaceAll ? 'replaced' : 'added/updated';
-      console.log(`[saveWhatsAppGroups] ${mode} ${groups.length} groups for device ${deviceId}`);
+      // console.log(`[saveWhatsAppGroups] ${mode} ${groups.length} groups for device ${deviceId}`);
       return { success: true, count: groups.length };
     } catch (error) {
-      console.error('Error saving WhatsApp groups:', error);
+      // console.error('Error saving WhatsApp groups:', error);
       throw error;
     }
   }
@@ -91,10 +91,10 @@ export class WhatsAppGroupService {
         },
       });
 
-      console.log(`Cleared groups for device ${deviceId}${sessionId ? `, session ${sessionId}` : ''}`);
+      // console.log(`Cleared groups for device ${deviceId}${sessionId ? `, session ${sessionId}` : ''}`);
       return { success: true };
     } catch (error) {
-      console.error('Error clearing WhatsApp groups:', error);
+      // console.error('Error clearing WhatsApp groups:', error);
       throw error;
     }
   }
@@ -116,7 +116,7 @@ export class WhatsAppGroupService {
 
       return groups;
     } catch (error) {
-      console.error('Error fetching active groups:', error);
+      // console.error('Error fetching active groups:', error);
       return [];
     }
   }
@@ -138,7 +138,7 @@ export class WhatsAppGroupService {
 
       return groups;
     } catch (error) {
-      console.error('Error fetching all groups:', error);
+      // console.error('Error fetching all groups:', error);
       return [];
     }
   }
@@ -161,7 +161,7 @@ export class WhatsAppGroupService {
 
       return { success: true };
     } catch (error) {
-      console.error('Error updating group status:', error);
+      // console.error('Error updating group status:', error);
       throw error;
     }
   }
@@ -180,7 +180,7 @@ export class WhatsAppGroupService {
 
       return { success: true };
     } catch (error) {
-      console.error('Error deleting group:', error);
+      // console.error('Error deleting group:', error);
       throw error;
     }
   }
@@ -206,7 +206,7 @@ export class WhatsAppGroupService {
 
       return groups;
     } catch (error) {
-      console.error('Error searching groups:', error);
+      // console.error('Error searching groups:', error);
       return [];
     }
   }

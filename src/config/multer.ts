@@ -33,7 +33,7 @@ const diskStorage = multer.diskStorage({
             }
             cb(null, dir);
         } catch (err) {
-            console.error('Error creating media directory:', err);
+            // console.error('Error creating media directory:', err);
             cb(null, 'media');
         }
     },

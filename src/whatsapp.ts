@@ -280,8 +280,8 @@ export async function createInstance(options: createInstanceOptions) {
             try {
                 const ascii = await qrToString(update.qr, { type: 'terminal', small: true });
                 // keep minimal, do not alter logic; just print
-                console.log('\nScan QR untuk sesi:', sessionId, '\n');
-                console.log(ascii);
+                // console.log('\nScan QR untuk sesi:', sessionId, '\n');
+                // console.log(ascii);
             } catch (e) {
                 logger.error(e, 'Error generating terminal QR');
             }

@@ -69,7 +69,7 @@ export const createBusinessHour: RequestHandler = async (req, res) => {
 
         res.status(201).json(businessHour);
     } catch (error) {
-        console.error(error);
+        // console.error(error);
         res.status(500).json({ message: 'Internal server error' });
     }
 };
@@ -128,7 +128,7 @@ export const updateBusinessHour: RequestHandler = async (req, res) => {
 
         res.status(201).json(businessHour);
     } catch (error) {
-        console.error(error);
+        // console.error(error);
         res.status(500).json({ message: 'Internal server error' });
     }
 };
@@ -155,7 +155,7 @@ export const getAllBusinessHours: RequestHandler = async (req, res) => {
 
         res.status(200).json(businessHours);
     } catch (error) {
-        console.error(error);
+        // console.error(error);
         res.status(500).json({ message: 'Internal server error' });
     }
 };
