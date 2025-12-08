@@ -6,6 +6,7 @@
     "scripts": {
         "start": "node .",
         "dev": "nodemon .",
+        "prebuild": "node scripts/convert-images-to-base64.js",
         "build": "node --max_old_space_size=4096 ./node_modules/typescript/bin/tsc",
         "lint:check": "eslint .",
         "lint:fix": "eslint --fix .",
