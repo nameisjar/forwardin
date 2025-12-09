@@ -291,37 +291,12 @@ export async function createInstance(options: createInstanceOptions) {
         const { connection } = update;
 
         if (connection === 'open') {
-            // ✅ CRITICAL FIX: Validasi bahwa session benar-benar authenticated
-            // Cek apakah sock.user ada (artinya WhatsApp sudah login)
-            if (!sock.user || !sock.user.id) {
-                logger.warn(
-                    { sessionId, deviceId, connection },
-                    '⚠️ Connection open but user not authenticated yet. Waiting for authentication...'
-                );
-                // JANGAN set status ke "open" jika belum authenticated
-                // Status akan tetap di state sebelumnya sampai benar-benar login
-                return;
-            }
-
-            // ✅ Pastikan phone number valid sebelum update
-            const phone = sock.user.id.split(':')[0];
-            if (!phone || phone.length < 10) {
-                logger.warn(
-                    { sessionId, deviceId, userId: sock.user.id },
-                    '⚠️ Invalid phone number format. Waiting for proper authentication...'
-                );
-                return;
-            }
-
-            logger.info(
-                { sessionId, deviceId, phone },
-                '✅ WhatsApp session fully authenticated!'
-            );
-
             retries.delete(sessionId);
             SSEQRGenerations.delete(sessionId);
 
-            // Update device dengan phone number
+            // ?back here: forbid duplicate phone numbers
+            const phone = sock.user?.id.split(':')[0];
+
             await prisma.device.update({
                 where: { pkId: deviceId },
                 data: { phone, updatedAt: new Date() },
@@ -377,39 +352,24 @@ export async function createInstance(options: createInstanceOptions) {
         
         handleConnectionUpdate();
 
-        // ✅ CRITICAL FIX: Hanya update status jika connection valid
-        // Jangan update status jika connection === 'open' tapi user belum authenticated
-        let statusToSave: string = connection || 'close'; // ✅ Default ke 'close' jika undefined
-        
-        if (connection === 'open' && (!sock.user || !sock.user.id)) {
-            // Tetap gunakan status sebelumnya atau 'connecting'
-            statusToSave = 'connecting';
-            logger.warn(
-                { sessionId, deviceId },
-                '⚠️ Keeping status as "connecting" until full authentication'
-            );
-        }
-
         // back here: Record to update not found
         const device = await prisma.device.update({
             where: { pkId: deviceId },
-            data: { status: statusToSave, updatedAt: new Date() },
+            data: { status: connection, updatedAt: new Date() },
         });
 
-        // ✅ Hanya create log jika connection ada (tidak undefined)
         if (connection) {
             await prisma.deviceLog.create({
                 data: {
                     sessionId,
                     deviceId,
-                    status: statusToSave,
+                    status: connection,
                 },
             });
         }
 
         const io: Server = getSocketIO();
-        // ✅ Emit status yang benar ke frontend
-        io.emit(`device:${device.id}:status`, statusToSave);
+        io.emit(`device:${device.id}:status`, connection);
     });
 
     if (readIncomingMessages) {
