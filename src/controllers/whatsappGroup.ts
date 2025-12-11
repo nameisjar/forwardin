@@ -281,7 +281,7 @@ export const syncGroups = async (req: Request, res: Response) => {
     if (device.status !== 'open') {
       return res.status(400).json({
         status: false,
-        message: 'WhatsApp is not connected. Please connect WhatsApp first.',
+        message: 'WhatsApp tidak terhubung. Silakan hubungkan WhatsApp terlebih dahulu.',
       });
     }
 

@@ -6,6 +6,8 @@ import {
     getInstanceStatus,
     getJid,
     verifyInstance,
+    markSSEAborted,
+    getActiveSSEConnections, // 🆕 Import untuk akses Map
 } from '../whatsapp';
 import prisma from '../utils/db';
 import { generateUuid } from '../utils/keyGenerator';
@@ -53,6 +55,52 @@ export const createSSE: RequestHandler = async (req, res) => {
         Connection: 'keep-alive',
         'Access-Control-Allow-Origin': '*',
         'Access-Control-Allow-Headers': 'Cache-Control',
+        'X-Accel-Buffering': 'no', // Disable nginx buffering
+    });
+
+    // Send initial heartbeat
+    res.write(`data: ${JSON.stringify({ connection: 'initializing', sessionId })}\n\n`);
+
+    // 🆕 Setup timeout untuk SSE (60 detik max untuk pairing)
+    const SSE_TIMEOUT = 60000; // 60 seconds
+    const timeoutId = setTimeout(() => {
+        if (!res.writableEnded) {
+            logger.warn({ sessionId, deviceId }, 'SSE timeout reached - closing connection');
+            res.write(
+                `data: ${JSON.stringify({
+                    error: 'Pairing timeout. Silakan coba lagi.',
+                    timeout: true,
+                })}\n\n`,
+            );
+            setTimeout(() => {
+                if (!res.writableEnded) {
+                    res.end();
+                }
+            }, 500);
+        }
+    }, SSE_TIMEOUT);
+
+    // 🆕 Cleanup function
+    const cleanup = () => {
+        clearTimeout(timeoutId);
+        if (!res.writableEnded) {
+            res.end();
+        }
+    };
+
+    // 🆕 Handle client disconnect - mark SSE as aborted
+    req.on('close', () => {
+        logger.info({ sessionId, deviceId }, 'Client closed SSE connection - marking as aborted');
+        
+        prisma.device.findUnique({
+            where: { id: deviceId },
+        }).then(device => {
+            if (device) {
+                markSSEAborted(device.pkId);
+            }
+        });
+        
+        cleanup();
     });
 
     try {
@@ -61,9 +109,39 @@ export const createSSE: RequestHandler = async (req, res) => {
         });
 
         if (!existingDevice) {
-            res.write(`data: ${JSON.stringify({ error: 'Device not found' })}\n\n`);
-            res.end();
+            res.write(`data: ${JSON.stringify({ error: 'Device tidak ditemukan' })}\n\n`);
+            cleanup();
             return;
+        }
+
+        // 🆕 CRITICAL FIX: Force clear old SSE connection untuk device ini
+        const activeSSEMap = getActiveSSEConnections();
+        const existingConnection = activeSSEMap.get(existingDevice.pkId);
+        
+        if (existingConnection) {
+            logger.warn(
+                { 
+                    deviceId: existingDevice.pkId, 
+                    oldSessionId: existingConnection.sessionId,
+                    newSessionId: sessionId 
+                }, 
+                '🔧 [RACE CONDITION FIX] Found existing SSE connection - force clearing before creating new one'
+            );
+            
+            // Mark old connection as aborted
+            existingConnection.aborted = true;
+            
+            // Delete dari Map
+            activeSSEMap.delete(existingDevice.pkId);
+            
+            // Destroy old instance if exists
+            if (verifyInstance(existingConnection.sessionId)) {
+                logger.info(
+                    { oldSessionId: existingConnection.sessionId },
+                    '🔧 Destroying old instance to prevent conflict'
+                );
+                await deleteInstance(existingConnection.sessionId);
+            }
         }
 
         // Check if device already has an active session
@@ -77,27 +155,43 @@ export const createSSE: RequestHandler = async (req, res) => {
         if (existingSession) {
             res.write(
                 `data: ${JSON.stringify({
-                    error: 'Device is already connected. Please disconnect first.',
+                    error: 'Device sudah terhubung. Disconnect terlebih dahulu untuk pairing ulang.',
+                    alreadyConnected: true,
                 })}\n\n`,
             );
-            res.end();
+            cleanup();
             return;
         }
 
         if (verifyInstance(sessionId)) {
-            res.write(`data: ${JSON.stringify({ error: 'Session already exists' })}\n\n`);
-            res.end();
+            res.write(
+                `data: ${JSON.stringify({
+                    error: 'Sesi sudah ada. Silakan tunggu atau refresh halaman.',
+                })}\n\n`,
+            );
+            cleanup();
             return;
         }
 
         // Send initial status
         res.write(`data: ${JSON.stringify({ connection: 'connecting', sessionId })}\n\n`);
 
-        createInstance({ sessionId, deviceId: existingDevice.pkId, res, SSE: true });
+        // 🆕 Pass cleanup function ke createInstance untuk force close SSE saat connected
+        createInstance({ 
+            sessionId, 
+            deviceId: existingDevice.pkId, 
+            res, 
+            SSE: true,
+            sseCleanup: cleanup 
+        });
     } catch (error) {
         logger.error(error, 'Error in createSSE');
-        res.write(`data: ${JSON.stringify({ error: 'Internal server error' })}\n\n`);
-        res.end();
+        res.write(
+            `data: ${JSON.stringify({
+                error: 'Terjadi kesalahan internal. Silakan coba lagi.',
+            })}\n\n`,
+        );
+        cleanup();
     }
 };
 

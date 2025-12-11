@@ -29,6 +29,8 @@ type Instance = WASocket & {
 const instances = new Map<string, Instance>();
 const retries = new Map<string, number>();
 const SSEQRGenerations = new Map<string, number>();
+// 🆕 Track active SSE connections to prevent conflicts
+const activeSSEConnections = new Map<number, { sessionId: string; aborted: boolean }>();
 
 const RECONNECT_INTERVAL = Number(process.env.RECONNECT_INTERVAL || 0);
 const MAX_RECONNECT_RETRIES = Number(process.env.MAX_RECONNECT_RETRIES || 5);
@@ -47,6 +49,11 @@ export async function init() {
     }
 }
 
+// 🆕 Export helper function untuk akses activeSSEConnections Map
+export function getActiveSSEConnections() {
+    return activeSSEConnections;
+}
+
 function shouldReconnect(sessionId: string) {
     let attempts = retries.get(sessionId) ?? 0;
 
@@ -58,6 +65,21 @@ function shouldReconnect(sessionId: string) {
     return false;
 }
 
+// 🆕 Helper untuk check apakah SSE sudah di-abort
+function isSSEAborted(deviceId: number): boolean {
+    const connection = activeSSEConnections.get(deviceId);
+    return connection?.aborted || false;
+}
+
+// 🆕 Helper untuk mark SSE sebagai aborted
+function markSSEAborted(deviceId: number): void {
+    const connection = activeSSEConnections.get(deviceId);
+    if (connection) {
+        connection.aborted = true;
+        logger.info({ deviceId, sessionId: connection.sessionId }, 'SSE marked as aborted');
+    }
+}
+
 type createInstanceOptions = {
     sessionId: string;
     deviceId: number;
@@ -65,6 +87,7 @@ type createInstanceOptions = {
     SSE?: boolean;
     readIncomingMessages?: boolean;
     socketConfig?: SocketConfig;
+    sseCleanup?: () => void; // 🆕 Cleanup function untuk force close SSE
 };
 
 export async function createInstance(options: createInstanceOptions) {
@@ -75,14 +98,35 @@ export async function createInstance(options: createInstanceOptions) {
         SSE = false,
         readIncomingMessages = false,
         socketConfig,
+        sseCleanup,
     } = options;
     const configID = `${SESSION_CONFIG_ID}-${sessionId}`;
     let connectionState: Partial<ConnectionState> = { connection: 'close' };
 
+    // 🆕 Register SSE connection
+    if (SSE && res) {
+        activeSSEConnections.set(deviceId, { sessionId, aborted: false });
+        logger.info({ deviceId, sessionId }, 'SSE connection registered');
+    }
+
     // back here: delete temporary folders
     const destroy = async (logout = true) => {
+        // 🔧 CRITICAL FIX: Delete dari Maps FIRST (before any async operations)
+        // Ini mencegah race condition di mana destroy() lama menghapus entry baru
+        if (SSE) {
+            activeSSEConnections.delete(deviceId);
+            logger.info({ deviceId, sessionId }, '🔧 [RACE CONDITION FIX] SSE connection removed from tracking BEFORE async cleanup');
+        }
+        instances.delete(sessionId);
+        logger.info({ sessionId }, '🔧 [RACE CONDITION FIX] Instance removed from map BEFORE async cleanup');
+        
         try {
             const subDirectoryPath = `media/S${sessionId}`;
+
+            // 🆕 Close SSE stream jika ada
+            if (sseCleanup) {
+                sseCleanup();
+            }
 
             // Clear WhatsApp groups saat destroy session
             try {
@@ -136,10 +180,10 @@ export async function createInstance(options: createInstanceOptions) {
                     });
                 }),
             ]);
+            
+            logger.info({ sessionId, deviceId }, '✅ Session destroy completed successfully');
         } catch (e) {
-            logger.error(e, 'An error occured during session destroy');
-        } finally {
-            instances.delete(sessionId);
+            logger.error(e, 'An error occurred during session destroy');
         }
     };
 
@@ -147,18 +191,84 @@ export async function createInstance(options: createInstanceOptions) {
         const code = (connectionState.lastDisconnect?.error as Boom)?.output?.statusCode;
         const restartRequired = code === DisconnectReason.restartRequired;
         const doNotReconnect = !shouldReconnect(sessionId);
+        
+        // 🆕 Check if SSE was aborted - jika iya, jangan reconnect
+        if (SSE && isSSEAborted(deviceId)) {
+            logger.info(
+                { sessionId, deviceId },
+                'SSE was aborted by user - skipping reconnection'
+            );
+            destroy(false);
+            return;
+        }
+        
+        // 🆕 Log disconnect reason untuk debugging
+        logger.info(
+            { sessionId, deviceId, code, restartRequired, doNotReconnect },
+            'Connection closed - evaluating reconnection'
+        );
 
-        if (code === DisconnectReason.loggedOut || doNotReconnect) {
-            if (res) {
-                !SSE &&
-                    !res.headersSent &&
-                    res.status(500).json({ error: 'Unable to create session' });
+        // 🆕 Jika logout, langsung destroy tanpa reconnect
+        if (code === DisconnectReason.loggedOut) {
+            logger.info({ sessionId, deviceId }, 'User logged out - destroying session without reconnect');
+            if (res && !res.writableEnded) {
+                if (SSE) {
+                    res.write(
+                        `data: ${JSON.stringify({
+                            connection: 'logged_out',
+                            message: 'WhatsApp telah logout dari perangkat lain',
+                        })}\n\n`,
+                    );
+                } else {
+                    res.status(200).json({ message: 'Logged out successfully' });
+                }
                 res.end();
             }
-            destroy(doNotReconnect);
+            destroy(false); // false = jangan coba logout lagi
             return;
         }
 
+        // Jika sudah mencapai max retry, destroy session
+        if (doNotReconnect) {
+            logger.info({ sessionId, deviceId }, 'Max reconnection attempts reached - destroying session');
+            if (res && !res.writableEnded) {
+                if (SSE) {
+                    res.write(
+                        `data: ${JSON.stringify({
+                            error: 'Gagal terhubung setelah beberapa percobaan. Silakan coba lagi.',
+                            maxRetriesReached: true,
+                        })}\n\n`,
+                    );
+                } else {
+                    res.status(500).json({ error: 'Unable to create session after multiple retries' });
+                }
+                res.end();
+            }
+            destroy(false);
+            return;
+        }
+
+        // 🆕 Inform user tentang reconnection attempt
+        if (res && !res.writableEnded && SSE) {
+            const attempt = retries.get(sessionId) || 1;
+            res.write(
+                `data: ${JSON.stringify({
+                    connection: 'reconnecting',
+                    attempt,
+                    maxAttempts: MAX_RECONNECT_RETRIES,
+                    message: `Mencoba menghubungkan ulang... (${attempt}/${MAX_RECONNECT_RETRIES})`,
+                })}\n\n`,
+            );
+        }
+
+        // 🆕 Check lagi sebelum reconnect
+        if (SSE && isSSEAborted(deviceId)) {
+            logger.info({ sessionId, deviceId }, 'SSE aborted during reconnect evaluation');
+            destroy(false);
+            return;
+        }
+
+        // Reconnect untuk kasus lain (connection lost, restart required, dll)
         if (!restartRequired) {
             logger.info({ attempts: retries.get(sessionId) ?? 1, sessionId }, 'Reconnecting...');
         }
@@ -173,7 +283,7 @@ export async function createInstance(options: createInstanceOptions) {
                     res.status(200).json({ qr, sessionId });
                     return;
                 } catch (e) {
-                    logger.error(e, 'An error occured during QR generation');
+                    logger.error(e, 'An error occurred during QR generation');
                     res.status(500).json({ error: 'Unable to generate QR' });
                     res.end();
                 }
@@ -182,10 +292,7 @@ export async function createInstance(options: createInstanceOptions) {
             return;
         }
 
-        // Only destroy if connection is closed and not generating QR
-        if (connectionState.connection === 'close') {
-            destroy();
-        }
+        // Connection close will be handled by handleConnectionClose() in connection.update event
     };
 
     const handleSSEConnectionUpdate = async () => {
@@ -201,10 +308,10 @@ export async function createInstance(options: createInstanceOptions) {
                         small: true,
                     });
                 } catch (e) {
-                    logger.error(e, 'An error occured during QR ASCII generation');
+                    logger.error(e, 'An error occurred during QR ASCII generation');
                 }
             } catch (e) {
-                logger.error(e, 'An error occured during QR generation');
+                logger.error(e, 'An error occurred during QR generation');
                 // Continue even if QR generation fails
             }
         }
@@ -220,7 +327,13 @@ export async function createInstance(options: createInstanceOptions) {
 
         // If we have QR and reached max generations, end gracefully
         if (qr && currentGenerations >= maxGenerations) {
-            const data = { ...connectionState, qr, qrRaw: qrAscii, maxGenerationsReached: true };
+            const data = { 
+                ...connectionState, 
+                qr, 
+                qrRaw: qrAscii, 
+                maxGenerationsReached: true,
+                message: 'QR code kedaluwarsa. Silakan mulai pairing ulang.',
+            };
             res.write(`data: ${JSON.stringify(data)}\n\n`);
             setTimeout(() => {
                 if (!res.writableEnded) {
@@ -302,6 +415,26 @@ export async function createInstance(options: createInstanceOptions) {
                 data: { phone, updatedAt: new Date() },
             });
 
+            // 🆕 Send success message ke SSE sebelum close
+            if (res && !res.writableEnded && SSE) {
+                res.write(
+                    `data: ${JSON.stringify({
+                        connection: 'open',
+                        message: 'WhatsApp berhasil terhubung!',
+                        phone: phone,
+                    })}\n\n`,
+                );
+                
+                // 🆕 Force close SSE stream setelah berhasil connect
+                setTimeout(() => {
+                    if (sseCleanup) {
+                        sseCleanup();
+                    } else if (!res.writableEnded) {
+                        res.end();
+                    }
+                }, 1000);
+            }
+
             // Auto-sync WhatsApp groups saat koneksi berhasil
             try {
                 logger.info({ sessionId, deviceId }, 'Fetching WhatsApp groups...');
@@ -353,33 +486,66 @@ export async function createInstance(options: createInstanceOptions) {
         handleConnectionUpdate();
 
         // back here: Record to update not found
-        const device = await prisma.device.update({
-            where: { pkId: deviceId },
-            data: { status: connection, updatedAt: new Date() },
-        });
-
-        if (connection) {
-            await prisma.deviceLog.create({
-                data: {
-                    sessionId,
-                    deviceId,
-                    status: connection,
-                },
+        // Add error handling to prevent crash when device is already deleted
+        try {
+            const device = await prisma.device.update({
+                where: { pkId: deviceId },
+                data: { status: connection, updatedAt: new Date() },
             });
-        }
 
-        const io: Server = getSocketIO();
-        io.emit(`device:${device.id}:status`, connection);
+            if (connection) {
+                await prisma.deviceLog.create({
+                    data: {
+                        sessionId,
+                        deviceId,
+                        status: connection,
+                    },
+                });
+            }
+
+            const io: Server = getSocketIO();
+            io.emit(`device:${device.id}:status`, connection);
+        } catch (error: any) {
+            // Handle case where device no longer exists
+            if (error.code === 'P2025') {
+                logger.warn(
+                    { sessionId, deviceId, connection },
+                    'Device not found during status update - device may have been deleted'
+                );
+                // Optionally destroy the instance if device is gone
+                destroy(false);
+            } else {
+                // Re-throw other errors
+                logger.error(
+                    { error, sessionId, deviceId, connection },
+                    'Error updating device status'
+                );
+                throw error;
+            }
+        }
     });
 
     if (readIncomingMessages) {
         sock.ev.on('messages.upsert', async (m) => {
-            const message = m.messages[0];
-            if (!message.key || message.key.fromMe || m.type !== 'notify') return;
+            try {
+                const message = m.messages[0];
+                if (!message.key || message.key.fromMe || m.type !== 'notify') return;
 
-            await delay(1000);
-            if (message.key) {
-                await sock.readMessages([message.key]);
+                // 🆕 Check if connection is still open before reading messages
+                if (connectionState.connection !== 'open') {
+                    logger.debug({ sessionId }, 'Skipping read message - connection not open');
+                    return;
+                }
+
+                await delay(1000);
+                if (message.key) {
+                    await sock.readMessages([message.key]);
+                }
+            } catch (error: any) {
+                // Ignore connection closed errors
+                if (error?.message !== 'Connection Closed') {
+                    logger.error({ error, sessionId }, 'Error handling messages.upsert');
+                }
             }
         });
     }
@@ -387,6 +553,12 @@ export async function createInstance(options: createInstanceOptions) {
     // 🆕 Listen untuk grup baru yang di-join
     sock.ev.on('groups.upsert', async (groups) => {
         try {
+            // 🆕 Check if connection is still open
+            if (connectionState.connection !== 'open') {
+                logger.debug({ sessionId }, 'Skipping groups.upsert - connection not open');
+                return;
+            }
+
             logger.info({ sessionId, deviceId, count: groups.length }, 'New groups joined detected');
             
             for (const group of groups) {
@@ -440,24 +612,36 @@ export async function createInstance(options: createInstanceOptions) {
                             'Socket.IO events emitted for new group'
                         );
                     }
-                } catch (groupError) {
-                    logger.error(
-                        { error: groupError, sessionId, deviceId, groupId: group.id },
-                        'Failed to process new group'
-                    );
+                } catch (groupError: any) {
+                    // Ignore connection closed errors
+                    if (groupError?.message !== 'Connection Closed') {
+                        logger.error(
+                            { error: groupError, sessionId, deviceId, groupId: group.id },
+                            'Failed to process new group'
+                        );
+                    }
                 }
             }
-        } catch (error) {
-            logger.error(
-                { error, sessionId, deviceId },
-                'Failed to handle groups.upsert event'
-            );
+        } catch (error: any) {
+            // Ignore connection closed errors
+            if (error?.message !== 'Connection Closed') {
+                logger.error(
+                    { error, sessionId, deviceId },
+                    'Failed to handle groups.upsert event'
+                );
+            }
         }
     });
 
     // 🆕 Listen untuk update grup (nama berubah, participant berubah, dll)
     sock.ev.on('groups.update', async (updates) => {
         try {
+            // 🆕 Check if connection is still open
+            if (connectionState.connection !== 'open') {
+                logger.debug({ sessionId }, 'Skipping groups.update - connection not open');
+                return;
+            }
+
             logger.info({ sessionId, deviceId, count: updates.length }, 'Group updates detected');
             
             for (const update of updates) {
@@ -499,24 +683,36 @@ export async function createInstance(options: createInstanceOptions) {
                             timestamp: new Date().toISOString(),
                         });
                     }
-                } catch (updateError) {
-                    logger.error(
-                        { error: updateError, sessionId, deviceId, groupId: update.id },
-                        'Failed to process group update'
-                    );
+                } catch (updateError: any) {
+                    // Ignore connection closed errors
+                    if (updateError?.message !== 'Connection Closed') {
+                        logger.error(
+                            { error: updateError, sessionId, deviceId, groupId: update.id },
+                            'Failed to process group update'
+                        );
+                    }
                 }
             }
-        } catch (error) {
-            logger.error(
-                { error, sessionId, deviceId },
-                'Failed to handle groups.update event'
-            );
+        } catch (error: any) {
+            // Ignore connection closed errors
+            if (error?.message !== 'Connection Closed') {
+                logger.error(
+                    { error, sessionId, deviceId },
+                    'Failed to handle groups.update event'
+                );
+            }
         }
     });
 
     // 🆕 Listen untuk participant changes (termasuk ketika device keluar/dikick dari grup)
     sock.ev.on('group-participants.update', async (update) => {
         try {
+            // 🆕 Check if connection is still open
+            if (connectionState.connection !== 'open') {
+                logger.debug({ sessionId }, 'Skipping group-participants.update - connection not open');
+                return;
+            }
+
             const { id: groupId, participants, action } = update;
             const myNumber = sock.user?.id.split(':')[0] + '@s.whatsapp.net';
             
@@ -603,17 +799,26 @@ export async function createInstance(options: createInstanceOptions) {
                     );
                 }
             }
-        } catch (error) {
-            logger.error(
-                { error, sessionId, deviceId },
-                'Failed to handle group-participants.update event'
-            );
+        } catch (error: any) {
+            // Ignore connection closed errors
+            if (error?.message !== 'Connection Closed') {
+                logger.error(
+                    { error, sessionId, deviceId },
+                    'Failed to handle group-participants.update event'
+                );
+            }
         }
     });
 
     // 🆕 Listen untuk chats.update - mendeteksi ketika keluar dari grup
     sock.ev.on('chats.update', async (chats) => {
         try {
+            // 🆕 Check if connection is still open
+            if (connectionState.connection !== 'open') {
+                logger.debug({ sessionId }, 'Skipping chats.update - connection not open');
+                return;
+            }
+
             for (const chat of chats) {
                 // Check jika ini adalah grup chat yang berubah
                 if (chat.id && chat.id.endsWith('@g.us')) {
@@ -677,11 +882,14 @@ export async function createInstance(options: createInstanceOptions) {
                     }
                 }
             }
-        } catch (error) {
-            logger.error(
-                { error, sessionId, deviceId },
-                'Failed to handle chats.update event'
-            );
+        } catch (error: any) {
+            // Ignore connection closed errors
+            if (error?.message !== 'Connection Closed') {
+                logger.error(
+                    { error, sessionId, deviceId },
+                    'Failed to handle chats.update event'
+                );
+            }
         }
     });
 
@@ -730,8 +938,11 @@ export async function deleteInstance(sessionId: string) {
     instances.get(sessionId)?.destroy();
 }
 
+// 🆕 Export helper untuk mark SSE as aborted
+export { markSSEAborted };
+
 export async function verifyJid(session: Instance, jid: string, type: string = 'number') {
-    if (type != 'group') {
+    if (type !== 'group') {
         if (jid.includes('@g.us')) return true;
         const onWAResult = await session.onWhatsApp(jid);
         const result = Array.isArray(onWAResult) ? onWAResult[0] : onWAResult;

@@ -34,7 +34,7 @@
         ]
     },
     "keywords": [],
-    "author": "Amri Mufti (https://github.com/amrimuf)",
+    "author": "Niko Muhamad Fajar (https://github.com/nameisjar)",
     "license": "MIT",
     "devDependencies": {
         "@types/bcrypt": "^5.0.0",
