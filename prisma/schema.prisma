@@ -297,6 +297,8 @@ model Group {
 model OutgoingMessage {
   pkId        Int      @id @default(autoincrement())
   id          String   @unique
+  /// WhatsApp message id returned by Baileys (key.id). Used to update delivery/read status reliably.
+  waMessageId String?  @unique @map("wa_message_id")
   to          String
   message     String?
   mediaPath   String?
@@ -308,6 +310,8 @@ model OutgoingMessage {
   contactId   Int?
   broadcastId Int?     // Add reference to broadcast
   isGroup     Boolean? @default(false) // Track if message is for group
+  /// For group messages: list of participant JIDs who have read the message (best-effort).
+  readBy      Json?    @map("read_by")
   contact     Contact? @relation(fields: [contactId], references: [pkId], onDelete: Cascade)
 
   @@unique([sessionId, to, id], map: "unique_outgoing_message_key_per_session_id")

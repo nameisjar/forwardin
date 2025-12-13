@@ -5,7 +5,9 @@ import prisma from '../utils/db';
 export const getActiveGroups = async (req: Request, res: Response) => {
   try {
     const { deviceId } = req.params; // This is UUID from URL
-    
+    const includeInactive = String(req.query.includeInactive || '').toLowerCase();
+    const shouldIncludeInactive = ['1', 'true', 'yes'].includes(includeInactive);
+
     if (!deviceId) {
       return res.status(400).json({
         status: false,
@@ -13,33 +15,31 @@ export const getActiveGroups = async (req: Request, res: Response) => {
       });
     }
 
-    // console.log('Getting active groups for device UUID:', deviceId);
-
     // Get device info using UUID to get pkId and sessionId
     const device = await prisma.device.findUnique({
       where: { id: deviceId },
       include: {
         sessions: {
           where: { id: { contains: 'config' } },
-          select: { sessionId: true }
-        }
-      }
+          select: { sessionId: true },
+        },
+      },
     });
 
     if (!device) {
-      // console.error(`Device not found with UUID: ${deviceId}`);
       return res.status(404).json({
         status: false,
         message: 'Device not found',
       });
     }
 
-    // Use device.pkId for database operations
-    const groups = await WhatsAppGroupService.getActiveGroups(device.pkId);
-    
-    // console.log(`Found ${groups.length} active groups for device: ${device.name}`);
-    
-    // Get WhatsApp instance to fetch profile pictures
+    // ✅ When WhatsApp is offline, groups might be marked isActive=false by design.
+    // For schedule display we still need the cached groupName from DB.
+    const groups = shouldIncludeInactive
+      ? await WhatsAppGroupService.getAllGroups(device.pkId)
+      : await WhatsAppGroupService.getActiveGroups(device.pkId);
+
+    // Get WhatsApp instance to fetch profile pictures (optional)
     let instance: any = null;
     try {
       const sessionId = device.sessions[0]?.sessionId;
@@ -47,55 +47,47 @@ export const getActiveGroups = async (req: Request, res: Response) => {
         const { getInstance, verifyInstance } = require('../whatsapp');
         if (verifyInstance(sessionId)) {
           instance = getInstance(sessionId);
-          // console.log('WhatsApp instance available, will fetch group profile pictures');
-        } else {
-          // console.log('WhatsApp instance not available, returning groups without profile pictures');
         }
       }
-    } catch (error) {
-      // console.log('Could not get WhatsApp instance:', error);
+    } catch {
+      // ignore
     }
-    
-    // Transform data and fetch profile pictures if instance is available
-    const transformedGroupsPromises = groups.map(async (group) => {
+
+    const transformedGroupsPromises = groups.map(async (group: any) => {
       let profilePicUrl: string | null = null;
-      
-      // Try to fetch profile picture if instance is available
+
       if (instance) {
         try {
           profilePicUrl = await instance.profilePictureUrl(group.groupId, 'image');
-          // console.log(`Fetched profile picture for group: ${group.groupName}`);
-        } catch (error) {
-          // Group might not have a profile picture, or other error - just skip
-          // console.log(`No profile picture for group ${group.groupName}:`, (error as any)?.message || 'Unknown error');
+        } catch {
+          // ignore
         }
       }
-      
+
       return {
-        id: group.groupId, // ✅ Use WhatsApp JID as ID
-        groupId: group.groupId, // Keep groupId for reference
+        id: group.groupId,
+        groupId: group.groupId,
         name: group.groupName,
-        subject: group.groupName, // Alias for compatibility
+        subject: group.groupName,
         participants: group.participants,
-        profilePicUrl: profilePicUrl, // ✅ Add profile picture URL
+        profilePicUrl,
         isActive: group.isActive,
         createdAt: group.createdAt,
         updatedAt: group.updatedAt,
       };
     });
-    
+
     const transformedGroups = await Promise.all(transformedGroupsPromises);
-    
+
     res.json({
       status: true,
       data: transformedGroups,
     });
   } catch (error) {
-    // console.error('Error getting active groups:', error);
     res.status(500).json({
       status: false,
       message: 'Internal server error',
-      error: (error as any)?.message || 'Unknown error'
+      error: (error as any)?.message || 'Unknown error',
     });
   }
 };

@@ -504,6 +504,10 @@ export const getAllBroadcasts: RequestHandler = async (req, res) => {
                 recipients: true,
                 deviceId: true,
                 device: { select: { name: true, sessions: { select: { sessionId: true } } } },
+                schedule: true,
+                message: true,
+                mediaPath: true,
+                delay: true,
                 sentCount: true,
                 failedCount: true,
                 attemptCount: true,
@@ -1132,11 +1136,16 @@ schedule.scheduleJob('* * * * *', async () => {
                         (cd: any) => cd.contact.phone == recipient
                     )?.contact;
 
+                    // NOTE:
+                    // - We keep `id` as the internal row identifier (existing behavior).
+                    // - We additionally store `waMessageId` so future status updates can be matched
+                    //   even if internal IDs ever differ.
                     await prisma.outgoingMessage.upsert({
                         where: { id: messageId },
-                        update: { updatedAt: new Date() },
+                        update: { waMessageId: messageId, updatedAt: new Date() },
                         create: {
                             id: messageId,
+                            waMessageId: messageId,
                             to: jid,
                             message: textPayload,
                             schedule: new Date(),

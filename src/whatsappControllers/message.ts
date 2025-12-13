@@ -67,26 +67,18 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                         // CEK: Jika pesan outgoing (fromMe), pastikan hanya simpan jika ada di outgoingMessage
                         if (message.key.fromMe) {
                             const outgoingExists = await prisma.outgoingMessage.findFirst({
-                                where: { id: message.key.id! },
+                                where: {
+                                    OR: [
+                                        { id: message.key.id! },
+                                        { waMessageId: message.key.id!, sessionId },
+                                    ],
+                                },
                             });
                             if (!outgoingExists) {
                                 // Pesan outgoing dari luar sistem, jangan simpan
                                 continue;
                             }
                         }
-
-                        // await prisma.message.upsert({
-                        //     select: { pkId: true },
-                        //     create: { ...data, remoteJid: jid, id: message.key.id!, sessionId },
-                        //     update: { ...data },
-                        //     where: {
-                        //         sessionId_remoteJid_id: {
-                        //             remoteJid: jid,
-                        //             id: message.key.id!,
-                        //             sessionId,
-                        //         },
-                        //     },
-                        // });
 
                         const contact = await prisma.contact.findFirst({
                             where: {
@@ -119,8 +111,13 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
 
                                 // Get current status to prevent degradation
                                 const currentMessage = await prisma.outgoingMessage.findFirst({
-                                    where: { id: message.key.id! },
-                                    select: { status: true },
+                                    where: {
+                                        OR: [
+                                            { waMessageId: message.key.id!, sessionId },
+                                            { id: message.key.id!, sessionId },
+                                        ],
+                                    },
+                                    select: { pkId: true, status: true, waMessageId: true },
                                 });
 
                                 // Define status hierarchy for comparison
@@ -144,22 +141,36 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                                 const shouldUpdate = !currentMessage || newLevel > currentLevel;
 
                                 if (shouldUpdate) {
-                                    const outgoingMessage = await prisma.outgoingMessage.upsert({
-                                        where: { id: message.key.id! },
-                                        update: { status },
-                                        create: {
-                                            id: message.key.id!,
-                                            to: jid,
-                                            message: messageText,
-                                            schedule: new Date(),
-                                            status,
-                                            sessionId,
-                                            contactId: contact?.pkId || null,
-                                        },
-                                        include: { contact: true },
-                                    });
+                                    if (currentMessage?.pkId) {
+                                        const outgoingMessage = await prisma.outgoingMessage.update({
+                                            where: { pkId: currentMessage.pkId },
+                                            data: {
+                                                status,
+                                                waMessageId: currentMessage.waMessageId || message.key.id!,
+                                                updatedAt: new Date(),
+                                            },
+                                            include: { contact: true },
+                                        });
+                                        io.emit(`message:${sessionId}`, outgoingMessage);
+                                    } else {
+                                        const outgoingMessage = await prisma.outgoingMessage.upsert({
+                                            where: { id: message.key.id! },
+                                            update: { status, waMessageId: message.key.id!, updatedAt: new Date() },
+                                            create: {
+                                                id: message.key.id!,
+                                                waMessageId: message.key.id!,
+                                                to: jid,
+                                                message: messageText,
+                                                schedule: new Date(),
+                                                status,
+                                                sessionId,
+                                                contactId: contact?.pkId || null,
+                                            },
+                                            include: { contact: true },
+                                        });
 
-                                    io.emit(`message:${sessionId}`, outgoingMessage);
+                                        io.emit(`message:${sessionId}`, outgoingMessage);
+                                    }
                                 } else {
                                     logger.debug(
                                         {
@@ -225,19 +236,26 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
             try {
                 if (key.remoteJid !== 'status@broadcast') {
                     await prisma.$transaction(async (tx) => {
-                        // First, try to find the outgoing message directly by ID
-                        const prevOutMessages = await tx.outgoingMessage.findFirst({
-                            where: { id: key.id!, sessionId },
+                        // Prefer matching by WhatsApp message id (new, reliable)
+                        const outgoingByWaId = await tx.outgoingMessage.findFirst({
+                            where: { waMessageId: key.id!, sessionId },
                         });
 
-                        // If no direct match, try to find by the composite key (for older messages)
-                        const prevOutMessagesByComposite = !prevOutMessages
-                            ? await tx.outgoingMessage.findFirst({
-                                  where: { id: key.id!, to: key.remoteJid!, sessionId },
-                              })
-                            : null;
+                        // Legacy fallbacks (older rows)
+                        const prevOutMessages = outgoingByWaId
+                            ? null
+                            : await tx.outgoingMessage.findFirst({
+                                  where: { id: key.id!, sessionId },
+                              });
 
-                        const outgoingMessage = prevOutMessages || prevOutMessagesByComposite;
+                        const prevOutMessagesByComposite =
+                            !outgoingByWaId && !prevOutMessages
+                                ? await tx.outgoingMessage.findFirst({
+                                      where: { id: key.id!, to: key.remoteJid!, sessionId },
+                                  })
+                                : null;
+
+                        const outgoingMessage = outgoingByWaId || prevOutMessages || prevOutMessagesByComposite;
 
                         // Try to find the message in the Message table
                         const prevMessages = await tx.message.findFirst({
@@ -313,22 +331,11 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                                     'Updating outgoing message status to higher level',
                                 );
 
-                                try {
-                                    await tx.outgoingMessage.update({
-                                        where: { id: key.id! },
-                                        data: { status, updatedAt: new Date() },
-                                    });
-                                } catch (updateError) {
-                                    // Fallback to composite key update if direct ID update fails
-                                    await tx.outgoingMessage.updateMany({
-                                        where: {
-                                            id: key.id!,
-                                            to: key.remoteJid!,
-                                            sessionId,
-                                        },
-                                        data: { status, updatedAt: new Date() },
-                                    });
-                                }
+                                // Always update by pkId to avoid ambiguity
+                                await tx.outgoingMessage.update({
+                                    where: { pkId: outgoingMessage.pkId },
+                                    data: { status, waMessageId: outgoingMessage.waMessageId || key.id!, updatedAt: new Date() },
+                                });
                             } else {
                                 logger.debug(
                                     {
@@ -389,37 +396,113 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
         for (const { key, receipt } of updates) {
             try {
                 await prisma.$transaction(async (tx) => {
+                    // Try to update Message.userReceipt if Message row exists (optional)
                     const message = await tx.message.findFirst({
                         select: { userReceipt: true },
                         where: { id: key.id!, remoteJid: key.remoteJid!, sessionId },
                     });
-                    if (!message) {
-                        return logger.debug({ key }, 'Got receipt update for non existent message');
-                    }
 
-                    let userReceipt = (message.userReceipt ||
-                        []) as unknown as MessageUserReceipt[];
-                    const recepient = userReceipt.find((m) => m.userJid === receipt.userJid);
+                    if (message) {
+                        let userReceipt = (message.userReceipt || []) as unknown as MessageUserReceipt[];
+                        const recepient = userReceipt.find((m) => m.userJid === receipt.userJid);
 
-                    if (recepient) {
-                        userReceipt = [
-                            ...userReceipt.filter((m) => m.userJid !== receipt.userJid),
-                            receipt,
-                        ];
-                    } else {
-                        userReceipt.push(receipt);
-                    }
+                        if (recepient) {
+                            userReceipt = [
+                                ...userReceipt.filter((m) => m.userJid !== receipt.userJid),
+                                receipt,
+                            ];
+                        } else {
+                            userReceipt.push(receipt);
+                        }
 
-                    await tx.message.update({
-                        select: { pkId: true },
-                        data: transformPrisma({ userReceipt: userReceipt }),
-                        where: {
-                            sessionId_remoteJid_id: {
-                                id: key.id!,
-                                remoteJid: key.remoteJid!,
-                                sessionId,
+                        await tx.message.update({
+                            select: { pkId: true },
+                            data: transformPrisma({ userReceipt: userReceipt }),
+                            where: {
+                                sessionId_remoteJid_id: {
+                                    id: key.id!,
+                                    remoteJid: key.remoteJid!,
+                                    sessionId,
+                                },
                             },
+                        });
+                    }
+
+                    // === Track group read count for outgoing messages ===
+                    if (!key.fromMe) return;
+                    if (!key.id) return;
+
+                    const outgoing = await tx.outgoingMessage.findFirst({
+                        where: {
+                            OR: [
+                                { waMessageId: key.id, sessionId },
+                                { id: key.id, sessionId },
+                                { id: key.id, to: key.remoteJid || undefined, sessionId },
+                            ],
                         },
+                        select: {
+                            pkId: true,
+                            status: true,
+                            isGroup: true,
+                            readBy: true,
+                            waMessageId: true,
+                        },
+                    });
+
+                    if (!outgoing) return;
+                    if (!outgoing.isGroup) return;
+
+                    const receiptType = String(
+                        (receipt as any)?.receipt || (receipt as any)?.type || '',
+                    ).toLowerCase();
+
+                    const hasRead =
+                        !!(receipt as any)?.readTimestamp ||
+                        receiptType.includes('read') ||
+                        receiptType === 'read';
+
+                    const hasDeliver =
+                        !!(receipt as any)?.deliveryTimestamp ||
+                        receiptType.includes('delivery') ||
+                        receiptType.includes('delivered') ||
+                        receiptType === 'delivery';
+
+                    const prev = Array.isArray(outgoing.readBy) ? (outgoing.readBy as any[]) : [];
+                    const set = new Set<string>(prev.map((x) => String(x)));
+
+                    const readerJid = (receipt as any)?.userJid;
+                    if (hasRead && readerJid) set.add(String(readerJid));
+
+                    const statusHierarchy: Record<string, number> = {
+                        pending: 1,
+                        error: 1,
+                        server_ack: 2,
+                        delivery_ack: 3,
+                        read: 4,
+                        played: 5,
+                    };
+
+                    let nextStatus = outgoing.status;
+                    if (hasRead) nextStatus = 'read';
+                    else if (hasDeliver) nextStatus = 'delivery_ack';
+
+                    const currentLevel = statusHierarchy[String(outgoing.status || 'pending')] || 0;
+                    const nextLevel = statusHierarchy[String(nextStatus || 'pending')] || 0;
+
+                    const updateData: any = {
+                        waMessageId: outgoing.waMessageId || key.id,
+                        updatedAt: new Date(),
+                    };
+
+                    if (hasRead && set.size) updateData.readBy = Array.from(set);
+                    if (nextLevel > currentLevel) updateData.status = nextStatus;
+
+                    // If this receipt only contains unknown fields, skip DB write
+                    if (Object.keys(updateData).length <= 2) return;
+
+                    await tx.outgoingMessage.update({
+                        where: { pkId: outgoing.pkId },
+                        data: updateData,
                     });
                 });
             } catch (e) {
