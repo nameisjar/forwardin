@@ -5,6 +5,8 @@ const router = express.Router();
 
 router.post('/', controller.createBroadcast);
 router.get('/', controller.getAllBroadcasts);
+router.get('/groups', controller.getBroadcastNameGroups);
+router.get('/summary', controller.getBroadcastsSummary);
 router.get('/:broadcastId', controller.getBroadcast);
 router.get('/:broadcastId/outgoing', controller.getOutgoingBroadcasts);
 router.get('/:broadcastId/replies', controller.getBrodcastReplies);

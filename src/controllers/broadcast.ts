@@ -11,6 +11,7 @@ import { diskUpload } from '../config/multer';
 import { useBroadcast } from '../utils/quota';
 import { isUUID } from '../utils/uuidChecker';
 import fs from 'fs';
+import { Prisma } from '@prisma/client';
 
 // Constants untuk retry mechanism
 const MAX_ATTEMPTS = 5;
@@ -483,116 +484,322 @@ export const createBroadcastScheduled: RequestHandler = async (req, res) => {
     }
 };
 
+export const getBroadcastsSummary: RequestHandler = async (req, res) => {
+    try {
+        const deviceId = req.query.deviceId as string | undefined;
+        const userId = req.authenticatedUser.pkId;
+        const privilegeId = req.privilege.pkId;
+
+        if (!deviceId) {
+            return res.status(400).json({ message: 'deviceId is required' });
+        }
+
+        // Resolve device pkId once to avoid relational filter on every query
+        const device = await prisma.device.findFirst({
+            where: {
+                id: deviceId,
+                userId: privilegeId !== Number(process.env.SUPER_ADMIN_ID) ? userId : undefined,
+            },
+            select: { pkId: true },
+        });
+
+        if (!device) {
+            return res.status(404).json({ message: 'Device not found' });
+        }
+
+        const now = new Date();
+        const devicePkId = device.pkId;
+
+        const [sent, inactive, scheduled] = await Promise.all([
+            prisma.broadcast.count({ where: { deviceId: devicePkId, isSent: true } }),
+            prisma.broadcast.count({ where: { deviceId: devicePkId, status: false } }),
+            prisma.broadcast.count({
+                where: {
+                    deviceId: devicePkId,
+                    isSent: false,
+                    status: { not: false },
+                    schedule: { gt: now },
+                },
+            }),
+        ]);
+
+        res.status(200).json({ sent, scheduled, inactive });
+    } catch (error) {
+        logger.error(error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};
+
 export const getAllBroadcasts: RequestHandler = async (req, res) => {
     try {
         const deviceId = req.query.deviceId as string;
         const userId = req.authenticatedUser.pkId;
         const privilegeId = req.privilege.pkId;
 
-        const broadcasts = await prisma.broadcast.findMany({
-            where: {
-                device: {
-                    userId: privilegeId !== Number(process.env.SUPER_ADMIN_ID) ? userId : undefined,
-                    id: deviceId,
-                },
-            },
-            select: {
-                pkId: true,
-                id: true,
-                name: true,
-                status: true,
-                recipients: true,
-                deviceId: true,
-                device: { select: { name: true, sessions: { select: { sessionId: true } } } },
-                schedule: true,
-                message: true,
-                mediaPath: true,
-                delay: true,
-                sentCount: true,
-                failedCount: true,
-                attemptCount: true,
-                lastAttemptAt: true,
-                lastError: true,
-                isSent: true,
-                createdAt: true,
-                updatedAt: true,
-            },
-        });
-
-        const newBroadcasts = [];
-        for (const bc of broadcasts) {
-            const recipients = await getRecipients(bc);
-            const recipientJids = recipients.map((r) => getJid(r));
-
-            const timeWindow = new Date(bc.updatedAt);
-            timeWindow.setMinutes(timeWindow.getMinutes() + 30);
-
-            const sentCount = await prisma.outgoingMessage.count({
-                where: {
-                    sessionId: { in: bc.device.sessions?.map((s) => s.sessionId) || [] },
-                    to: { in: recipientJids },
-                    createdAt: {
-                        gte: bc.createdAt,
-                        lte: timeWindow,
-                    },
-                    status: 'server_ack',
-                },
-            });
-
-            const receivedCount = await prisma.outgoingMessage.count({
-                where: {
-                    sessionId: { in: bc.device.sessions?.map((s) => s.sessionId) || [] },
-                    to: { in: recipientJids },
-                    createdAt: {
-                        gte: bc.createdAt,
-                        lte: timeWindow,
-                    },
-                    status: 'delivery_ack',
-                },
-            });
-
-            const readCount = await prisma.outgoingMessage.count({
-                where: {
-                    sessionId: { in: bc.device.sessions?.map((s) => s.sessionId) || [] },
-                    to: { in: recipientJids },
-                    createdAt: {
-                        gte: bc.createdAt,
-                        lte: timeWindow,
-                    },
-                    status: 'read',
-                },
-            });
-
-            const uniqueRecipients = new Set();
-            for (const recipient of recipients) {
-                const incomingMessagesCount = await prisma.incomingMessage.count({
-                    where: {
-                        from: `${recipient}@s.whatsapp.net`,
-                        updatedAt: {
-                            gte: bc.createdAt,
-                        },
-                    },
-                });
-
-                if (incomingMessagesCount > 0) {
-                    uniqueRecipients.add(recipient);
-                }
-            }
-            const uniqueRecipientsCount = uniqueRecipients.size;
-
-            newBroadcasts.push({
-                ...bc,
-                sentCount: sentCount,
-                receivedCount: receivedCount,
-                readCount: readCount,
-                repliesCount: uniqueRecipientsCount,
-            });
+        if (!deviceId) {
+            return res.status(400).json({ message: 'deviceId is required' });
         }
 
-        res.status(200).json(newBroadcasts);
+        // Resolve device pkId once (so broadcast queries hit idx_broadcast_device_* indexes)
+        const device = await prisma.device.findFirst({
+            where: {
+                id: deviceId,
+                userId: privilegeId !== Number(process.env.SUPER_ADMIN_ID) ? userId : undefined,
+            },
+            select: { pkId: true },
+        });
+
+        if (!device) {
+            return res.status(404).json({ message: 'Device not found' });
+        }
+
+        // --- Pagination / filtering ---
+        const pageRaw = req.query.page as string | undefined;
+        const pageSizeRaw = req.query.pageSize as string | undefined;
+        const qRaw = (req.query.q as string | undefined) || '';
+        const statusFilter = (req.query.status as string | undefined) || 'all';
+        const sortBy = (req.query.sortBy as string | undefined) || 'schedule';
+        const sortDir = ((req.query.sortDir as string | undefined) || 'asc').toLowerCase();
+
+        // Backward compatible mode: if no page/pageSize specified, return full array (legacy behavior)
+        const usePagination = !!(pageRaw || pageSizeRaw);
+        const page = Math.max(1, Number(pageRaw || 1));
+        const pageSize = Math.min(200, Math.max(1, Number(pageSizeRaw || 25)));
+
+        const where: any = {
+            deviceId: device.pkId,
+        };
+
+        if (qRaw.trim()) {
+            // case-insensitive contains (accelerated by pg_trgm index)
+            where.name = { contains: qRaw.trim(), mode: 'insensitive' };
+        }
+
+        const now = new Date();
+        if (statusFilter === 'inactive') {
+            where.status = false;
+        } else if (statusFilter === 'sent') {
+            where.isSent = true;
+        } else if (statusFilter === 'upcoming') {
+            where.isSent = false;
+            where.status = { not: false };
+            where.schedule = { gt: now };
+        }
+
+        const orderBy: any[] = [];
+        if (sortBy === 'name') {
+            orderBy.push({ name: sortDir === 'desc' ? 'desc' : 'asc' });
+        } else {
+            orderBy.push({ schedule: sortDir === 'desc' ? 'desc' : 'asc' });
+        }
+        // stable tie-breaker aligned with indexes
+        orderBy.push({ pkId: 'desc' });
+
+        const select = {
+            pkId: true,
+            id: true,
+            name: true,
+            status: true,
+            recipients: true,
+            deviceId: true,
+            schedule: true,
+            message: true,
+            mediaPath: true,
+            delay: true,
+            sentCount: true,
+            failedCount: true,
+            attemptCount: true,
+            lastAttemptAt: true,
+            lastError: true,
+            isSent: true,
+            createdAt: true,
+            updatedAt: true,
+        };
+
+        if (!usePagination) {
+            const broadcasts = await prisma.broadcast.findMany({
+                where,
+                select,
+                orderBy,
+            });
+            return res.status(200).json(broadcasts);
+        }
+
+        const [total, broadcasts] = await Promise.all([
+            prisma.broadcast.count({ where }),
+            prisma.broadcast.findMany({
+                where,
+                select,
+                orderBy,
+                skip: (page - 1) * pageSize,
+                take: pageSize,
+            }),
+        ]);
+
+        const totalPages = Math.max(1, Math.ceil(total / pageSize));
+
+        res.status(200).json({
+            data: broadcasts,
+            meta: {
+                total,
+                page,
+                pageSize,
+                totalPages,
+                hasMore: page < totalPages,
+            },
+        });
     } catch (error) {
         logger.error(error);
         res.status(500).json({ message: 'Internal server error' });
+    }
+};
+
+export const getBroadcastNameGroups: RequestHandler = async (req, res) => {
+    try {
+        const deviceId = req.query.deviceId as string;
+        const userId = req.authenticatedUser.pkId;
+        const privilegeId = req.privilege.pkId;
+
+        if (!deviceId) {
+            return res.status(400).json({ message: 'deviceId is required' });
+        }
+
+        const device = await prisma.device.findFirst({
+            where: {
+                id: deviceId,
+                userId: privilegeId !== Number(process.env.SUPER_ADMIN_ID) ? userId : undefined,
+            },
+            select: { pkId: true },
+        });
+
+        if (!device) {
+            return res.status(404).json({ message: 'Device not found' });
+        }
+
+        const page = Math.max(1, Number((req.query.page as string | undefined) || 1));
+        const pageSize = Math.min(100, Math.max(1, Number((req.query.pageSize as string | undefined) || 10)));
+        const qRaw = ((req.query.q as string | undefined) || '').trim();
+        const statusFilter = (req.query.status as string | undefined) || 'all';
+
+        const sortBy = (req.query.sortBy as string | undefined) || 'schedule';
+        const sortDir = ((req.query.sortDir as string | undefined) || 'asc').toLowerCase();
+
+        const now = new Date();
+
+        // Apply filters on Broadcast rows, then group by name
+        const where: any = { deviceId: device.pkId };
+        if (qRaw) {
+            where.name = { contains: qRaw, mode: 'insensitive' };
+        }
+        if (statusFilter === 'inactive') {
+            where.status = false;
+        } else if (statusFilter === 'sent') {
+            where.isSent = true;
+        } else if (statusFilter === 'upcoming') {
+            where.isSent = false;
+            where.status = { not: false };
+            where.schedule = { gt: now };
+        }
+
+        // Prisma groupBy for portability (avoid raw SQL/table mapping issues)
+        // NOTE: Prisma type-level constraint untuk groupBy+orderBy bisa berbeda antar versi.
+        // Untuk menghindari error build TS, kita tidak menggunakan orderBy di groupBy,
+        // lalu sorting + pagination dilakukan di memory.
+
+        type GroupRow = {
+            name: string;
+            _count: { _all: number };
+            _min: { schedule: Date | null };
+        };
+
+        const groupRowsAllRaw = await prisma.broadcast.groupBy({
+            by: ['name'],
+            where,
+            _count: { _all: true },
+            _min: { schedule: true },
+        });
+
+        const groupRowsAll = groupRowsAllRaw as unknown as GroupRow[];
+
+        // sort in-memory
+        const sortedAll = groupRowsAll.slice().sort((a, b) => {
+            if (sortBy === 'name') {
+                return String(a.name || '').localeCompare(String(b.name || ''));
+            }
+            const sa = a._min.schedule ? new Date(a._min.schedule).getTime() : 0;
+            const sb = b._min.schedule ? new Date(b._min.schedule).getTime() : 0;
+            return sa - sb;
+        });
+        if (sortDir === 'desc') sortedAll.reverse();
+
+        const total = sortedAll.length;
+        const totalPages = Math.max(1, Math.ceil(total / pageSize));
+
+        const start = (page - 1) * pageSize;
+        const rows = sortedAll.slice(start, start + pageSize);
+
+        const names = rows.map((g) => g.name);
+
+        // Fetch a sample broadcast per name (earliest schedule) for summary fields
+        const sampleRows = await Promise.all(
+            names.map((name) =>
+                prisma.broadcast.findFirst({
+                    where: { ...where, name },
+                    orderBy: [{ schedule: 'asc' }, { pkId: 'desc' }],
+                    select: {
+                        id: true,
+                        name: true,
+                        status: true,
+                        recipients: true,
+                        schedule: true,
+                        message: true,
+                        mediaPath: true,
+                        isSent: true,
+                        sentCount: true,
+                        failedCount: true,
+                        lastError: true,
+                    },
+                }),
+            ),
+        );
+
+        const sampleByName = new Map<string, any>();
+        for (const s of sampleRows) {
+            if (s?.name) sampleByName.set(s.name, s);
+        }
+
+        const data = rows.map((g) => {
+            const sample = sampleByName.get(g.name);
+            return {
+                name: g.name,
+                broadcastsCount: g._count._all,
+                nextSchedule: g._min.schedule,
+                sampleId: sample?.id || null,
+                sampleStatus: sample?.status ?? null,
+                sampleRecipients: sample?.recipients || [],
+                sampleSchedule: sample?.schedule || g._min.schedule,
+                sampleMessage: sample?.message || null,
+                sampleMediaPath: sample?.mediaPath || null,
+                sampleIsSent: sample?.isSent || false,
+                sampleSentCount: sample?.sentCount || 0,
+                sampleFailedCount: sample?.failedCount || 0,
+                sampleLastError: sample?.lastError || null,
+            };
+        });
+
+        return res.status(200).json({
+            data,
+            meta: {
+                total,
+                page,
+                pageSize,
+                totalPages,
+                hasMore: page < totalPages,
+            },
+        });
+    } catch (error) {
+        logger.error(error);
+        return res.status(500).json({ message: 'Internal server error' });
     }
 };
 
@@ -870,31 +1077,56 @@ export const deleteBroadcastsByName: RequestHandler = async (req, res) => {
             return res.status(400).json({ message: 'Broadcast name is required' });
         }
 
+        // Untuk menjaga security + performa, scoped delete harus berdasarkan device.
+        // UI Schedules selalu bekerja per device (device_selected_id), jadi kita ambil dari:
+        // - req.query.deviceId (preferred)
+        // - atau header x-device-id (fallback)
+        const deviceUuid =
+            (req.query.deviceId as string | undefined) ||
+            (req.headers['x-device-id'] as string | undefined) ||
+            '';
+
+        if (!deviceUuid) {
+            return res.status(400).json({ message: 'deviceId is required' });
+        }
+
+        // Resolve device pkId once (and enforce ownership for non-super-admin)
+        const device = await prisma.device.findFirst({
+            where: {
+                id: deviceUuid,
+                userId: privilegeId !== Number(process.env.SUPER_ADMIN_ID) ? userId : undefined,
+            },
+            select: { pkId: true },
+        });
+
+        if (!device) {
+            return res.status(404).json({ message: 'Device not found' });
+        }
+
         // Hanya hapus broadcast yang belum terkirim (isSent=false)
         const deletedBroadcasts = await prisma.broadcast.deleteMany({
             where: {
+                deviceId: device.pkId,
                 name,
                 isSent: false, // PENTING: Hanya hapus yang belum terkirim
-                device: {
-                    userId: privilegeId !== Number(process.env.SUPER_ADMIN_ID) ? userId : undefined,
-                },
             },
         });
 
         if (deletedBroadcasts.count === 0) {
-            return res.status(404).json({ 
-                message: 'Tidak ada jadwal yang dapat dihapus. Semua jadwal dengan nama ini sudah terkirim.' 
+            return res.status(404).json({
+                message:
+                    'Tidak ada jadwal yang dapat dihapus. Semua jadwal dengan nama ini sudah terkirim atau tidak ditemukan.',
             });
         }
 
         logger.info(
-            { name, deletedCount: deletedBroadcasts.count },
-            `Deleted ${deletedBroadcasts.count} unsent broadcasts with name: ${name}`
+            { name, deviceId: deviceUuid, deletedCount: deletedBroadcasts.count },
+            `Deleted ${deletedBroadcasts.count} unsent broadcasts with name: ${name}`,
         );
 
-        res.status(200).json({ 
+        res.status(200).json({
             message: `Berhasil menghapus ${deletedBroadcasts.count} jadwal yang belum terkirim`,
-            deletedCount: deletedBroadcasts.count
+            deletedCount: deletedBroadcasts.count,
         });
     } catch (error) {
         logger.error(error);

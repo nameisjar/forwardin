@@ -13,7 +13,8 @@
         "format:check": "prettier --check .",
         "format:write": "prettier --write .",
         "test": "mocha dist/tests/*.test.js --exit --timeout 10000",
-        "configure-husky": "npx husky install && npx husky add .husky/pre-commit \"npx --no-install lint-staged\""
+        "configure-husky": "npx husky install && npx husky add .husky/pre-commit \"npx --no-install lint-staged\"",
+        "seed:dummy-broadcasts": "ts-node ./prisma/seed/dummyBroadcasts"
     },
     "prisma": {
         "seed": "ts-node ./prisma/seed"

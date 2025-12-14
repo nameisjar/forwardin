@@ -354,6 +354,13 @@ model Broadcast {
   
   createdAt     DateTime @default(now()) @map("created_at")
   updatedAt     DateTime @default(now()) @map("updated_at")
+
+  @@index([deviceId, schedule], map: "idx_broadcast_device_schedule")
+  @@index([deviceId, name], map: "idx_broadcast_device_name")
+  @@index([deviceId, status, isSent, schedule], map: "idx_broadcast_device_status_sent_schedule")
+
+  /// NOTE: Search optimization (ILIKE/contains) uses pg_trgm + GIN index created via SQL migration.
+  /// Prisma doesn't support gin_trgm_ops in schema; do NOT add @@index(type: Gin) here.
 }
 
 model AutoReply {
