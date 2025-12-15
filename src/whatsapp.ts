@@ -364,7 +364,7 @@ export async function createInstance(options: createInstanceOptions) {
     // back here: adjust SocketConfig such as turn off always online
     const sock = makeWASocket({
         // printQRInTerminal removed due to deprecation; handled manually in connection.update
-        browser: ['Autosender', 'Chrome', '10.0'],
+        browser: ['Autosender', 'Chrome', '143.0.0.0'],
         ...socketConfig,
         auth: {
             creds: state.creds,
