@@ -102,6 +102,9 @@ export async function createInstance(options: createInstanceOptions) {
     } = options;
     const configID = `${SESSION_CONFIG_ID}-${sessionId}`;
     let connectionState: Partial<ConnectionState> = { connection: 'close' };
+    
+    // 🔧 FIX: Flag untuk mencegah destroy setelah koneksi berhasil
+    let connectionSuccessful = false;
 
     // 🆕 Register SSE connection
     if (SSE && res) {
@@ -319,9 +322,15 @@ export async function createInstance(options: createInstanceOptions) {
         const currentGenerations = SSEQRGenerations.get(sessionId) ?? 0;
         const maxGenerations = Math.max(1, SSE_MAX_QR_GENERATION);
 
-        // Check if response is still writable
+        // 🔧 FIX: Check if response is still writable, tapi JANGAN destroy jika koneksi sudah berhasil
         if (!res || res.writableEnded) {
-            destroy();
+            // Hanya destroy jika koneksi BELUM berhasil (masih dalam proses pairing)
+            if (!connectionSuccessful) {
+                logger.info({ sessionId, deviceId }, 'SSE stream closed before connection success - destroying session');
+                destroy();
+            } else {
+                logger.info({ sessionId, deviceId }, 'SSE stream closed after connection success - keeping session alive');
+            }
             return;
         }
 
@@ -351,7 +360,10 @@ export async function createInstance(options: createInstanceOptions) {
             res.write(`data: ${JSON.stringify(data)}\n\n`);
         } catch (e) {
             logger.error(e, 'Error writing SSE data');
-            destroy();
+            // 🔧 FIX: Jangan destroy jika koneksi sudah berhasil
+            if (!connectionSuccessful) {
+                destroy();
+            }
             return;
         }
 
@@ -406,6 +418,9 @@ export async function createInstance(options: createInstanceOptions) {
         if (connection === 'open') {
             retries.delete(sessionId);
             SSEQRGenerations.delete(sessionId);
+
+            // 🔧 FIX: Set flag connectionSuccessful saat koneksi berhasil
+            connectionSuccessful = true;
 
             // ?back here: forbid duplicate phone numbers
             const phone = sock.user?.id.split(':')[0];
