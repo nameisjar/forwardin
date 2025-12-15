@@ -1270,6 +1270,7 @@ export const createBroadcast: RequestHandler = async (req, res) => {
                         schedule,
                         deviceId: device.pkId,
                         delay,
+                        broadcastType: 'broadcast', // 🔥 Set type for AdminSentHistory
                         recipients: { set: recipients },
                         mediaPath: req.file?.path,
                     },
@@ -1991,9 +1992,7 @@ export const createBroadcastFeedback: RequestHandler = async (req, res) => {
 
             if (
                 recipientArray.includes('all') &&
-                recipientArray.some((recipient: { startsWith: (arg0: string) => string }) =>
-                    recipient.startsWith('label'),
-                )
+                recipientArray.some((recipient: string) => recipient.startsWith('label'))
             ) {
                 return res.status(400).json({
                     message:
@@ -2059,6 +2058,7 @@ export const createBroadcastFeedback: RequestHandler = async (req, res) => {
                             schedule,
                             deviceId: device.pkId,
                             delay,
+                            broadcastType: 'feedback', // 🔥 Set type for AdminSentHistory
                             recipients: {
                                 set: recipientArray,
                             },
@@ -2332,6 +2332,7 @@ export const createBroadcastScheduled: RequestHandler = async (req, res) => {
                     schedule: new Date(current),
                     deviceId: device.pkId,
                     delay,
+                    broadcastType: 'recurrence', // 🔥 Set type for AdminSentHistory
                     recipients: { set: recipients },
                     mediaPath: req.file?.path,
                 });
@@ -2531,6 +2532,7 @@ export const createBroadcastReminderAlgo: RequestHandler = async (req, res) => {
                             schedule,
                             deviceId: device.pkId,
                             delay,
+                            broadcastType: 'reminder', // 🔥 Set type for AdminSentHistory
                             recipients: {
                                 set: recipientArray,
                             },

@@ -179,6 +179,9 @@ export const createBroadcast: RequestHandler = async (req, res) => {
             const { name, deviceId, recipients, message, schedule } = req.body;
             const delay = Number(req.body.delay) ?? 5000;
 
+            const normalizedName =
+                typeof name === 'string' && name.trim() ? name.trim() : 'Broadcast';
+
             if (
                 recipients.includes('all') &&
                 recipients.some((recipient: { startsWith: (arg0: string) => string }) =>
@@ -206,7 +209,7 @@ export const createBroadcast: RequestHandler = async (req, res) => {
             await prisma.$transaction(async (transaction) => {
                 await transaction.broadcast.create({
                     data: {
-                        name,
+                        name: normalizedName,
                         message,
                         schedule,
                         deviceId: device.pkId,
@@ -271,6 +274,11 @@ export const createBroadcastFeedback: RequestHandler = async (req, res) => {
             });
         }
 
+        const baseName = typeof name === 'string' && name.trim() ? name.trim() : 'Feedback';
+        const taggedBaseName = /\[feedback\]/i.test(baseName)
+            ? baseName
+            : `${baseName} [Feedback]`;
+
         await prisma.$transaction(async (transaction) => {
             for (let i = 0; i < courseFeedbacks.length; i++) {
                 const feedback = courseFeedbacks[i];
@@ -279,12 +287,13 @@ export const createBroadcastFeedback: RequestHandler = async (req, res) => {
 
                 await transaction.broadcast.create({
                     data: {
-                        name: `${name} - Lesson ${feedback.lesson}`,
+                        name: `${taggedBaseName} - Lesson ${feedback.lesson} - ${courseName}`,
                         message: feedback.message,
                         schedule: broadcastSchedule,
                         deviceId: device.pkId,
                         delay,
                         recipients: { set: recipients },
+                        broadcastType: 'feedback', // ✅ Tambahkan broadcastType
                     },
                 });
             }
@@ -335,6 +344,11 @@ export const createBroadcastReminder: RequestHandler = async (req, res) => {
                 return res.status(404).json({ message: 'Session not found' });
             }
 
+            const baseName = typeof name === 'string' && name.trim() ? name.trim() : 'Reminder';
+            const taggedBaseName = /\[reminder\]/i.test(baseName)
+                ? baseName
+                : `${baseName} [Reminder]`;
+
             const totalLessons = Number(lessons);
 
             await prisma.$transaction(async (transaction) => {
@@ -344,13 +358,14 @@ export const createBroadcastReminder: RequestHandler = async (req, res) => {
 
                     await transaction.broadcast.create({
                         data: {
-                            name: `${name} - Week ${i + 1}`,
+                            name: `${taggedBaseName} - Week ${i + 1}`,
                             message,
                             schedule: broadcastSchedule,
                             deviceId: device.pkId,
                             delay,
                             recipients: { set: recipients },
                             mediaPath: req.file?.path,
+                            broadcastType: 'reminder', // ✅ Tambahkan broadcastType
                         },
                     });
                 }
@@ -432,18 +447,24 @@ export const createBroadcastScheduled: RequestHandler = async (req, res) => {
                 return res.status(404).json({ message: 'Session not found' });
             }
 
+            const baseName = typeof name === 'string' && name.trim() ? name.trim() : 'Recurrence';
+            const taggedBaseName = /\[(recurrence|recurring)\]/i.test(baseName)
+                ? baseName
+                : `${baseName} [Recurrence]`;
+
             const broadcasts = [] as any[];
             let current = new Date(normalizedStartDate);
 
             while (current <= normalizedEndDate) {
                 broadcasts.push({
-                    name,
+                    name: taggedBaseName,
                     message,
                     schedule: new Date(current),
                     deviceId: device.pkId,
                     delay,
                     recipients: { set: recipients },
                     mediaPath: req.file?.path,
+                    broadcastType: 'recurrence', // ✅ Tambahkan broadcastType
                 });
 
                 switch (recurrence) {
@@ -680,6 +701,7 @@ export const getBroadcastNameGroups: RequestHandler = async (req, res) => {
         const pageSize = Math.min(100, Math.max(1, Number((req.query.pageSize as string | undefined) || 10)));
         const qRaw = ((req.query.q as string | undefined) || '').trim();
         const statusFilter = (req.query.status as string | undefined) || 'all';
+        const typeFilter = (req.query.type as string | undefined) || 'all'; // ✅ Tambahkan filter type
 
         const sortBy = (req.query.sortBy as string | undefined) || 'schedule';
         const sortDir = ((req.query.sortDir as string | undefined) || 'asc').toLowerCase();
@@ -699,6 +721,11 @@ export const getBroadcastNameGroups: RequestHandler = async (req, res) => {
             where.isSent = false;
             where.status = { not: false };
             where.schedule = { gt: now };
+        }
+
+        // ✅ Tambahkan filter berdasarkan broadcastType
+        if (typeFilter && typeFilter !== 'all') {
+            where.broadcastType = typeFilter;
         }
 
         // Prisma groupBy for portability (avoid raw SQL/table mapping issues)
@@ -758,6 +785,7 @@ export const getBroadcastNameGroups: RequestHandler = async (req, res) => {
                         sentCount: true,
                         failedCount: true,
                         lastError: true,
+                        broadcastType: true, // ✅ Tambahkan broadcastType
                     },
                 }),
             ),
@@ -784,6 +812,7 @@ export const getBroadcastNameGroups: RequestHandler = async (req, res) => {
                 sampleSentCount: sample?.sentCount || 0,
                 sampleFailedCount: sample?.failedCount || 0,
                 sampleLastError: sample?.lastError || null,
+                sampleType: sample?.broadcastType || null, // ✅ Tambahkan sampleType
             };
         });
 
@@ -856,6 +885,7 @@ export const getOutgoingBroadcasts: RequestHandler = async (req, res) => {
                 recipients: true,
                 createdAt: true,
                 updatedAt: true,
+                schedule: true,
                 device: { select: { sessions: { select: { sessionId: true } } } },
             },
         });
@@ -864,19 +894,10 @@ export const getOutgoingBroadcasts: RequestHandler = async (req, res) => {
             return res.status(404).json('Broadcast not found');
         }
 
-        const recipients = await getRecipients(broadcast);
-        const recipientJids = recipients.map((r) => getJid(r));
-
-        const timeWindow = new Date(broadcast.updatedAt);
-        timeWindow.setMinutes(timeWindow.getMinutes() + 30);
-
+        // ✅ FIX: Filter berdasarkan broadcastId (pkId) yang tersimpan di OutgoingMessage
+        // Ini memastikan hanya mengambil pesan yang benar-benar dikirim oleh broadcast ini
         const whereClause: any = {
-            sessionId: { in: broadcast.device.sessions?.map((s) => s.sessionId) || [] },
-            to: { in: recipientJids },
-            createdAt: {
-                gte: broadcast.createdAt,
-                lte: timeWindow,
-            },
+            broadcastId: broadcast.pkId,
         };
 
         if (status) {
@@ -902,6 +923,7 @@ export const getOutgoingBroadcasts: RequestHandler = async (req, res) => {
         res.status(200).json({ outgoingBroadcasts });
     } catch (error) {
         logger.error(error);
+        res.status(500).json({ message: 'Internal server error' });
     }
 };
 
@@ -1374,7 +1396,12 @@ schedule.scheduleJob('* * * * *', async () => {
                     //   even if internal IDs ever differ.
                     await prisma.outgoingMessage.upsert({
                         where: { id: messageId },
-                        update: { waMessageId: messageId, updatedAt: new Date() },
+                        update: { 
+                            waMessageId: messageId, 
+                            updatedAt: new Date(),
+                            readBy: [], // 🔥 FIX: Reset readBy untuk pesan baru
+                            status: 'pending' // 🔥 FIX: Reset status juga
+                        },
                         create: {
                             id: messageId,
                             waMessageId: messageId,
@@ -1386,6 +1413,7 @@ schedule.scheduleJob('* * * * *', async () => {
                             contactId: contact?.pkId ?? null,
                             mediaPath: broadcast.mediaPath || null,
                             broadcastId: broadcast.pkId,
+                            broadcastType: broadcast.broadcastType || null,
                             isGroup: jid.includes('@g.us'),
                         },
                     });

@@ -309,6 +309,7 @@ model OutgoingMessage {
   sessionId   String?
   contactId   Int?
   broadcastId Int?     // Add reference to broadcast
+  broadcastType String? @map("broadcast_type") @db.VarChar(20) // 🔥 NEW: 'broadcast' | 'reminder' | 'feedback' | 'recurrence'
   isGroup     Boolean? @default(false) // Track if message is for group
   /// For group messages: list of participant JIDs who have read the message (best-effort).
   readBy      Json?    @map("read_by")
@@ -342,6 +343,7 @@ model Broadcast {
   delay         Int
   isSent        Boolean  @default(false)
   mediaPath     String?
+  broadcastType String?  @map("broadcast_type") @db.VarChar(20) // 'broadcast' | 'reminder' | 'feedback' | 'recurrence'
   deviceId      Int
   device        Device   @relation(fields: [deviceId], references: [pkId], onDelete: Cascade)
   

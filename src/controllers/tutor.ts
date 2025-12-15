@@ -479,6 +479,7 @@ export const listOutgoingMessagesAll: RequestHandler = async (req, res) => {
                     select: {
                         pkId: true,
                         name: true,
+                        broadcastType: true, // 🔥 Read from DB field
                         device: {
                             select: {
                                 user: { select: { firstName: true, lastName: true, email: true } },
@@ -531,23 +532,39 @@ export const listOutgoingMessagesAll: RequestHandler = async (req, res) => {
                             lastName?: string | null;
                             email?: string | null;
                         } | null;
-                        type?: 'feedback' | 'reminder' | 'broadcast';
+                        type?: 'feedback' | 'reminder' | 'recurrence' | 'broadcast';
                     }
                 >();
                 broadcasts.forEach((b) => {
                     const csUser = (b.device as any).CustomerService?.user;
                     const user = csUser || b.device.user;
                     const name = b.name || '';
-                    const isReminder = /\b(Recipients|Reminder)\b/i.test(name);
-                    let type: 'feedback' | 'reminder' | 'broadcast' = 'broadcast';
 
-                    if (isReminder) {
-                        type = 'reminder';
+                    // 🔥 Prioritize broadcastType from DB, fallback to name detection
+                    let type: 'feedback' | 'reminder' | 'recurrence' | 'broadcast' = 'broadcast';
+                    
+                    if (b.broadcastType) {
+                        // Use database value if available
+                        type = b.broadcastType as any;
                     } else {
-                        // Check if this broadcast name contains a courseName that exists in CourseFeedback
-                        const courseMatch = name.match(/^.+\s*-\s*(.+)$/);
-                        if (courseMatch && feedbackNames.has(courseMatch[1].trim())) {
+                        // Fallback to legacy name-based detection
+                        const hasRecurrenceMarker = /\[(recurrence|recurring)\]/i.test(name);
+                        const hasReminderMarker = /\[reminder\]/i.test(name);
+                        const hasFeedbackMarker = /\[feedback\]/i.test(name);
+                        const isReminderLegacy = /\b(Recipients|Reminder)\b/i.test(name);
+
+                        if (hasRecurrenceMarker) {
+                            type = 'recurrence';
+                        } else if (hasReminderMarker || isReminderLegacy) {
+                            type = 'reminder';
+                        } else if (hasFeedbackMarker) {
                             type = 'feedback';
+                        } else {
+                            // feedback detection via CourseFeedback table (best-effort)
+                            const courseMatch = name.match(/^.+\s*-\s*(.+)$/);
+                            if (courseMatch && feedbackNames.has(courseMatch[1].trim())) {
+                                type = 'feedback';
+                            }
                         }
                     }
 
