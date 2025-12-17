@@ -105,7 +105,18 @@ export const sendMonthlyFeedback: RequestHandler = async (req, res) => {
             });
             logger.info('PDF generated with Puppeteer successfully, size:', pdfBuffer.length, 'bytes');
         } catch (puppeteerError) {
-            logger.warn('Puppeteer failed, falling back to PDFKit:', puppeteerError);
+            // 🔥 DETAILED ERROR LOGGING
+            logger.error('=== PUPPETEER ERROR DETAILS ===');
+            logger.error('Error name:', puppeteerError instanceof Error ? puppeteerError.name : 'Unknown');
+            logger.error('Error message:', puppeteerError instanceof Error ? puppeteerError.message : String(puppeteerError));
+            logger.error('Error stack:', puppeteerError instanceof Error ? puppeteerError.stack : 'No stack');
+            
+            // Log additional context
+            if (puppeteerError && typeof puppeteerError === 'object') {
+                logger.error('Error details:', JSON.stringify(puppeteerError, Object.getOwnPropertyNames(puppeteerError), 2));
+            }
+            
+            logger.warn('Puppeteer failed, falling back to PDFKit');
             // Fallback to PDFKit if Puppeteer fails
             pdfBuffer = await generateMonthlyFeedbackPDF({
                 studentName,
