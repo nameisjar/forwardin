@@ -2,14 +2,104 @@ import { RequestHandler } from 'express';
 import prisma from '../utils/db';
 import logger from '../config/logger';
 import { sendDocument } from '../services/whatsapp';
-import { generateMonthlyFeedbackPDFWithPuppeteer, generateMonthlyFeedbackPDF } from '../services/pdfGenerator';
+import { generateMonthlyFeedbackPDFWithPuppeteer } from '../services/pdfGenerator';
+import { executeWithRateLimit, RateLimitResult, setDeviceAsPersonal, setDeviceAsShared } from '../services/rateLimiter';
+
+// 🔥 Environment variables untuk role checking
+const ADMIN_ID = Number(process.env.ADMIN_ID);
+const SUPER_ADMIN_ID = Number(process.env.SUPER_ADMIN_ID);
+
+// 🔥 Helper function untuk check apakah user adalah admin
+function isAdminUser(privilegeId: number | undefined): boolean {
+    if (!privilegeId) return false;
+    return privilegeId === ADMIN_ID || privilegeId === SUPER_ADMIN_ID;
+}
+
+// 🔥 Helper function untuk set device rate limit berdasarkan role user
+function configureDeviceRateLimit(deviceId: string, privilegeId: number | undefined): void {
+    if (isAdminUser(privilegeId)) {
+        // Admin/Super Admin → Shared Device (lebih longgar: 20 msg/min)
+        setDeviceAsShared(deviceId);
+        logger.info(`[RateLimit] Device ${deviceId} configured as SHARED (Admin user)`);
+    } else {
+        // Tutor → Personal Device (lebih konservatif: 10 msg/min)
+        setDeviceAsPersonal(deviceId);
+        logger.info(`[RateLimit] Device ${deviceId} configured as PERSONAL (Tutor user)`);
+    }
+}
+
+// 🔥 Helper function untuk expand label menjadi daftar nomor kontak
+async function expandLabelToContacts(labelName: string, deviceId: string): Promise<string[]> {
+    try {
+        // Cari kontak yang memiliki label ini DAN terhubung ke device ini
+        const contactsWithLabel = await prisma.contact.findMany({
+            where: {
+                ContactLabel: {
+                    some: {
+                        label: {
+                            name: {
+                                equals: labelName,
+                                mode: 'insensitive'
+                            }
+                        }
+                    }
+                },
+                contactDevices: {
+                    some: {
+                        device: {
+                            id: deviceId
+                        }
+                    }
+                }
+            },
+            select: {
+                phone: true
+            }
+        });
+
+        // Extract nomor telepon
+        const phones = contactsWithLabel
+            .map(contact => contact.phone)
+            .filter((phone): phone is string => !!phone && phone.length > 0);
+
+        logger.info(`Label "${labelName}" expanded to ${phones.length} contacts for device ${deviceId}`);
+        return phones;
+    } catch (error) {
+        logger.error(`Error expanding label "${labelName}":`, error);
+        return [];
+    }
+}
+
+// 🔥 Helper function untuk memproses recipients (expand label jika ada)
+async function processRecipients(recipients: string[], deviceId: string): Promise<string[]> {
+    const processedRecipients: string[] = [];
+
+    for (const recipient of recipients) {
+        if (typeof recipient === 'string' && recipient.toLowerCase().startsWith('label_')) {
+            // Extract nama label (hapus prefix "label_")
+            const labelName = recipient.slice(6);
+            logger.info(`Expanding label: ${labelName}`);
+            
+            const labelContacts = await expandLabelToContacts(labelName, deviceId);
+            processedRecipients.push(...labelContacts);
+        } else {
+            // Bukan label, tambahkan langsung
+            processedRecipients.push(recipient);
+        }
+    }
+
+    // Hapus duplikat
+    const uniqueRecipients = [...new Set(processedRecipients)];
+    logger.info(`Processed recipients: ${recipients.length} input -> ${uniqueRecipients.length} unique recipients`);
+    
+    return uniqueRecipients;
+}
 
 // Send monthly feedback with PDF
 export const sendMonthlyFeedback: RequestHandler = async (req, res) => {
     try {
         logger.info('=== Starting monthly feedback send ===');
-        logger.info('Request body:', JSON.stringify(req.body, null, 2));
-
+        
         const {
             studentName,
             courseName,
@@ -23,67 +113,65 @@ export const sendMonthlyFeedback: RequestHandler = async (req, res) => {
             youtubeLink,
             referralLink,
             tutorComment,
-            recipientPhone, // 🔄 Keep for backward compatibility
-            recipients,     // 🆕 New: support multiple recipients
+            recipientPhone,
+            recipients,
             deviceId,
-            rating,         // 🆕 Rating bintang (1-5)
-            reportBy        // 🆕 Laporan dibuat oleh
+            rating,
+            reportBy
         } = req.body;
 
-        // 🆕 Support both single and multiple recipients
-        const recipientList = recipients && Array.isArray(recipients) && recipients.length > 0 
+        // Log hanya field penting (bukan full request body)
+        logger.info('Request:', { studentName, courseName, month, deviceId, recipientCount: recipients?.length || (recipientPhone ? 1 : 0) });
+
+        const rawRecipientList = recipients && Array.isArray(recipients) && recipients.length > 0 
             ? recipients 
             : (recipientPhone ? [recipientPhone] : []);
 
-        // Validate required fields
-        if (!studentName || !courseName || !month || recipientList.length === 0 || !tutorComment) {
-            logger.warn('Missing required fields:', {
-                hasStudentName: !!studentName,
-                hasCourseName: !!courseName,
-                hasMonth: !!month,
-                hasRecipients: recipientList.length > 0,
-                hasTutorComment: !!tutorComment
-            });
+        if (!studentName || !courseName || !month || rawRecipientList.length === 0 || !tutorComment) {
+            logger.warn('Missing required fields');
             return res.status(400).json({ 
                 message: 'Missing required fields',
                 details: {
                     studentName: !studentName ? 'required' : 'ok',
                     courseName: !courseName ? 'required' : 'ok',
                     month: !month ? 'required' : 'ok',
-                    recipients: recipientList.length === 0 ? 'required (at least 1)' : 'ok',
+                    recipients: rawRecipientList.length === 0 ? 'required (at least 1)' : 'ok',
                     tutorComment: !tutorComment ? 'required' : 'ok'
                 }
             });
         }
 
-        // Validate device ID
         if (!deviceId) {
             logger.warn('Device ID is missing');
-            return res.status(400).json({ 
-                message: 'Device ID is required' 
-            });
+            return res.status(400).json({ message: 'Device ID is required' });
         }
 
-        logger.info('Device ID:', deviceId);
-        logger.info('Recipients count:', recipientList.length);
-
-        // Check if device exists
         const device = await prisma.device.findUnique({
             where: { id: deviceId }
         });
 
         if (!device) {
             logger.error('Device not found:', deviceId);
-            return res.status(404).json({ 
-                message: 'Device not found',
-                deviceId 
-            });
+            return res.status(404).json({ message: 'Device not found', deviceId });
         }
 
         logger.info('Device found:', device.name);
 
-        // Generate PDF using Puppeteer (matches preview exactly)
-        // 🔥 Now with 5x retry mechanism - NO fallback to PDFKit
+        // 🔥 Configure device rate limit based on user role
+        configureDeviceRateLimit(deviceId, req.privilege.pkId);
+
+        // 🔥 Process recipients - expand labels to actual phone numbers
+        const recipientList = await processRecipients(rawRecipientList, deviceId);
+
+        if (recipientList.length === 0) {
+            logger.warn('No valid recipients after processing labels');
+            return res.status(400).json({ 
+                message: 'No valid recipients found. Labels may be empty or contacts not found.',
+                originalRecipients: rawRecipientList
+            });
+        }
+
+        // Generate PDF
         logger.info('Generating PDF with Puppeteer...');
         const pdfBuffer = await generateMonthlyFeedbackPDFWithPuppeteer({
             studentName,
@@ -103,10 +191,8 @@ export const sendMonthlyFeedback: RequestHandler = async (req, res) => {
         });
         logger.info('PDF generated successfully, size:', pdfBuffer.length, 'bytes');
 
-        // 🆕 Send PDF to all recipients
         const fileName = `Feedback_${studentName.replace(/\s+/g, '_')}_${courseName.replace(/\s+/g, '_')}_Bulan${month}.pdf`;
         
-        // 🔥 UPDATE: Caption yang lebih personal dan profesional
         const tutorName = reportBy || 'Tutor';
         const caption = `Halo, Ayah/Bunda dari ${studentName}! 👋
 
@@ -120,24 +206,46 @@ Jika ada hal yang ingin ditanyakan mengenai hasil ini atau tentang perkembangan 
         
         logger.info('Sending document to', recipientList.length, 'recipient(s)...');
         
-        const sendResults = [];
+        const sendResults: Array<{
+            recipient: string;
+            status: string;
+            error?: string;
+            rateLimitInfo?: RateLimitResult;
+        }> = [];
+
         for (const recipient of recipientList) {
             try {
                 logger.info('Sending to:', recipient);
-                await sendDocument(
-                    deviceId,
-                    recipient,
-                    pdfBuffer,
-                    fileName,
-                    caption
-                );
-                sendResults.push({ recipient, status: 'success' });
-                logger.info('✅ Sent to:', recipient);
                 
-                // Small delay between sends to avoid rate limiting
-                if (recipientList.length > 1) {
-                    await new Promise(resolve => setTimeout(resolve, 2000));
+                // 🔥 Menggunakan rate limiter untuk pengiriman WhatsApp
+                const { result: sendResult, rateLimitInfo } = await executeWithRateLimit(
+                    deviceId,
+                    async () => {
+                        await sendDocument(
+                            deviceId,
+                            recipient,
+                            pdfBuffer,
+                            fileName,
+                            caption
+                        );
+                        return { success: true };
+                    },
+                    `feedback-${studentName}-${recipient}-${Date.now()}`
+                );
+                
+                sendResults.push({ 
+                    recipient, 
+                    status: 'success',
+                    rateLimitInfo
+                });
+                
+                // Log info rate limit jika ada delay
+                if (rateLimitInfo.delayed) {
+                    logger.info(`✅ Sent to ${recipient} (delayed ${Math.round(rateLimitInfo.delayMs/1000)}s)`);
+                } else {
+                    logger.info('✅ Sent to:', recipient);
                 }
+                
             } catch (sendError) {
                 logger.error('❌ Failed to send to:', recipient, sendError);
                 sendResults.push({ 
@@ -148,13 +256,9 @@ Jika ada hal yang ingin ditanyakan mengenai hasil ini atau tentang perkembangan 
             }
         }
 
-        logger.info('Send results:', sendResults);
-
-        // Log to database (optional - won't fail if table doesn't exist)
+        // Log to database
         try {
-            // Check if user is authenticated
             if (req.authenticatedUser && req.authenticatedUser.id) {
-                // 🆕 Log each successful send
                 for (const result of sendResults) {
                     if (result.status === 'success') {
                         await prisma.monthlyFeedbackLog.create({
@@ -169,14 +273,9 @@ Jika ada hal yang ingin ditanyakan mengenai hasil ini atau tentang perkembangan 
                         });
                     }
                 }
-                logger.info('Feedback logged to database');
-            } else {
-                logger.warn('User not authenticated, skipping database logging');
             }
         } catch (err) {
-            // Log error but don't fail the request
-            logger.error('Error logging monthly feedback to database:', err);
-            logger.info('Continuing without database logging...');
+            logger.error('Error logging to database:', err);
         }
 
         const successCount = sendResults.filter(r => r.status === 'success').length;
@@ -196,9 +295,7 @@ Jika ada hal yang ingin ditanyakan mengenai hasil ini atau tentang perkembangan 
         });
     } catch (error) {
         logger.error('=== Error sending monthly feedback ===');
-        logger.error('Error type:', error?.constructor?.name);
-        logger.error('Error message:', error instanceof Error ? error.message : 'Unknown error');
-        logger.error('Error stack:', error instanceof Error ? error.stack : 'No stack trace');
+        logger.error('Error:', error instanceof Error ? error.message : 'Unknown error');
         
         res.status(500).json({ 
             message: 'Failed to send monthly feedback',

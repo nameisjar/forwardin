@@ -11,6 +11,7 @@ import http from 'http';
 import { error } from 'console';
 import { internalServerErrorHandler, notFoundHandler } from './middleware/errorHandler';
 import { warmupBrowser } from './services/pdfGenerator';
+import { shutdownRateLimiter } from './services/rateLimiter';
 
 // Import scheduler untuk memastikan broadcast scheduler berjalan
 import './controllers/broadcast';
@@ -51,5 +52,22 @@ prisma
     
     server.listen(port, host, listener);
 })();
+
+// Graceful shutdown handler
+const gracefulShutdown = async (signal: string) => {
+    logger.info(`[Server] ${signal} received - starting graceful shutdown...`);
+    
+    // Shutdown rate limiter
+    await shutdownRateLimiter();
+    
+    // Close server
+    server.close(() => {
+        logger.info('[Server] HTTP server closed');
+        process.exit(0);
+    });
+};
+
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 
 export default app;

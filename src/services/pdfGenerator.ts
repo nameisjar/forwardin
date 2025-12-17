@@ -22,6 +22,55 @@ interface MonthlyFeedbackData {
 }
 
 // ============================================
+// 🔥 MUTEX/LOCK SYSTEM - Mencegah Race Condition
+// ============================================
+
+class Mutex {
+    private locked: boolean = false;
+    private queue: Array<() => void> = [];
+
+    async acquire(): Promise<void> {
+        return new Promise((resolve) => {
+            if (!this.locked) {
+                this.locked = true;
+                resolve();
+            } else {
+                this.queue.push(resolve);
+            }
+        });
+    }
+
+    release(): void {
+        if (this.queue.length > 0) {
+            const next = this.queue.shift();
+            if (next) next();
+        } else {
+            this.locked = false;
+        }
+    }
+
+    async withLock<T>(fn: () => Promise<T>): Promise<T> {
+        await this.acquire();
+        try {
+            return await fn();
+        } finally {
+            this.release();
+        }
+    }
+
+    isLocked(): boolean {
+        return this.locked;
+    }
+
+    getQueueLength(): number {
+        return this.queue.length;
+    }
+}
+
+// Global mutex untuk operasi browser
+const browserMutex = new Mutex();
+
+// ============================================
 // 🔥 CONCURRENCY QUEUE SYSTEM
 // ============================================
 
@@ -41,25 +90,33 @@ class PDFGeneratorQueue {
     private readonly queueTimeout: number;
     private processedCount: number = 0;
     private failedCount: number = 0;
+    private isShuttingDown: boolean = false;
 
     constructor(options?: { maxConcurrent?: number; maxQueueSize?: number; queueTimeout?: number }) {
-        this.maxConcurrent = options?.maxConcurrent ?? 10;   // Max 10 PDF generations at once
-        this.maxQueueSize = options?.maxQueueSize ?? 500;    // Max 500 items in queue
-        this.queueTimeout = options?.queueTimeout ?? 300000; // 5 minutes timeout for queue wait
+        this.maxConcurrent = options?.maxConcurrent ?? 10;
+        this.maxQueueSize = options?.maxQueueSize ?? 500;
+        this.queueTimeout = options?.queueTimeout ?? 300000;
         
-        logger.info(`[PDFQueue] Initialized - maxConcurrent: ${this.maxConcurrent}, maxQueueSize: ${this.maxQueueSize}, timeout: ${this.queueTimeout}ms`);
+        logger.info(`[PDFQueue] Initialized (concurrent: ${this.maxConcurrent}, maxQueue: ${this.maxQueueSize})`);
     }
 
     async add(task: () => Promise<Buffer>, taskId?: string): Promise<Buffer> {
-        const id = taskId || `pdf-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+        const id = taskId || `pdf-${Date.now()}`;
         
-        // Check queue size limit
+        // Reject new tasks if shutting down
+        if (this.isShuttingDown) {
+            throw new Error('Server sedang restart, silakan coba lagi dalam beberapa saat');
+        }
+        
         if (this.queue.length >= this.maxQueueSize) {
-            logger.error(`[PDFQueue] Queue full (${this.queue.length}/${this.maxQueueSize}), rejecting task ${id}`);
+            logger.error(`[PDFQueue] Queue full (${this.queue.length}/${this.maxQueueSize})`);
             throw new Error('Server sedang sibuk, silakan coba lagi dalam beberapa menit');
         }
 
-        logger.info(`[PDFQueue] Adding task ${id} - Queue: ${this.queue.length}, Active: ${this.activeCount}/${this.maxConcurrent}`);
+        // Only log if queue is building up (> 5 items)
+        if (this.queue.length > 5) {
+            logger.info(`[PDFQueue] Queue: ${this.queue.length}, Active: ${this.activeCount}/${this.maxConcurrent}`);
+        }
 
         return new Promise<Buffer>((resolve, reject) => {
             const item: QueueItem = {
@@ -72,17 +129,15 @@ class PDFGeneratorQueue {
 
             this.queue.push(item);
             
-            // Set timeout for queue wait
             const timeoutId = setTimeout(() => {
                 const index = this.queue.findIndex(q => q.id === id);
                 if (index !== -1) {
                     this.queue.splice(index, 1);
-                    logger.warn(`[PDFQueue] Task ${id} timed out after waiting in queue`);
+                    logger.warn(`[PDFQueue] Task timeout: ${id}`);
                     reject(new Error('Request timeout - server sedang sibuk'));
                 }
             }, this.queueTimeout);
 
-            // Store timeout ID to clear it later
             const originalResolve = item.resolve;
             const originalReject = item.reject;
             
@@ -101,33 +156,68 @@ class PDFGeneratorQueue {
     }
 
     private async processQueue(): Promise<void> {
-        // Check if we can process more
         if (this.activeCount >= this.maxConcurrent || this.queue.length === 0) {
             return;
         }
 
-        // Get next item from queue
         const item = this.queue.shift();
         if (!item) return;
 
         this.activeCount++;
-        const waitTime = Date.now() - item.addedAt;
-        logger.info(`[PDFQueue] Processing task ${item.id} - waited ${waitTime}ms, Active: ${this.activeCount}/${this.maxConcurrent}, Remaining: ${this.queue.length}`);
 
         try {
             const result = await item.task();
             this.processedCount++;
-            logger.info(`[PDFQueue] Task ${item.id} completed successfully. Total processed: ${this.processedCount}`);
             item.resolve(result);
         } catch (error) {
             this.failedCount++;
-            logger.error(`[PDFQueue] Task ${item.id} failed. Total failed: ${this.failedCount}`, error);
+            logger.error(`[PDFQueue] Task failed (total failed: ${this.failedCount})`);
             item.reject(error instanceof Error ? error : new Error(String(error)));
         } finally {
             this.activeCount--;
-            // Process next item in queue
             this.processQueue();
         }
+    }
+
+    /**
+     * Graceful shutdown - reject semua queue dan tunggu active tasks selesai
+     * @param timeoutMs - maksimal waktu tunggu (default 30 detik)
+     */
+    async shutdown(timeoutMs: number = 30000): Promise<void> {
+        if (this.isShuttingDown) return;
+        
+        this.isShuttingDown = true;
+        logger.info(`[PDFQueue] Shutting down... (queue: ${this.queue.length}, active: ${this.activeCount})`);
+        
+        // Reject semua items di queue
+        const queuedItems = [...this.queue];
+        this.queue = [];
+        
+        for (const item of queuedItems) {
+            item.reject(new Error('Server sedang restart, silakan coba lagi'));
+        }
+        
+        if (queuedItems.length > 0) {
+            logger.info(`[PDFQueue] Rejected ${queuedItems.length} queued tasks`);
+        }
+        
+        // Tunggu active tasks selesai (dengan timeout)
+        if (this.activeCount > 0) {
+            logger.info(`[PDFQueue] Waiting for ${this.activeCount} active tasks to complete...`);
+            
+            const startTime = Date.now();
+            while (this.activeCount > 0 && (Date.now() - startTime) < timeoutMs) {
+                await new Promise(resolve => setTimeout(resolve, 100));
+            }
+            
+            if (this.activeCount > 0) {
+                logger.warn(`[PDFQueue] Shutdown timeout - ${this.activeCount} tasks still running`);
+            } else {
+                logger.info('[PDFQueue] All active tasks completed');
+            }
+        }
+        
+        logger.info(`[PDFQueue] Shutdown complete (processed: ${this.processedCount}, failed: ${this.failedCount})`);
     }
 
     getStats() {
@@ -136,7 +226,8 @@ class PDFGeneratorQueue {
             activeCount: this.activeCount,
             maxConcurrent: this.maxConcurrent,
             processedCount: this.processedCount,
-            failedCount: this.failedCount
+            failedCount: this.failedCount,
+            isShuttingDown: this.isShuttingDown
         };
     }
 }
@@ -151,6 +242,9 @@ const pdfQueue = new PDFGeneratorQueue({
 // Export for monitoring
 export const getPDFQueueStats = () => pdfQueue.getStats();
 
+// Export for graceful shutdown
+export const shutdownPDFQueue = (timeoutMs?: number) => pdfQueue.shutdown(timeoutMs);
+
 // ============================================
 // 🔥 PUPPETEER OPTIMIZATION: Browser Pool
 // ============================================
@@ -163,102 +257,90 @@ let browserCreatedAt: number = 0;
 
 /**
  * Get or create a browser instance (singleton pattern with auto-cleanup)
+ * Uses mutex to prevent race condition
  */
 const getBrowser = async (): Promise<Browser> => {
-    const now = Date.now();
-    
-    // Check if browser needs restart (too old or disconnected)
-    if (browserInstance) {
-        const browserAge = now - browserCreatedAt;
-        const isConnected = browserInstance.isConnected();
+    return browserMutex.withLock(async () => {
+        const now = Date.now();
         
-        if (!isConnected || browserAge > MAX_BROWSER_AGE) {
-            logger.info(`[Puppeteer] Browser needs restart - Connected: ${isConnected}, Age: ${Math.round(browserAge/1000)}s`);
-            await closeBrowser();
-        }
-    }
-    
-    // Create new browser if needed
-    if (!browserInstance) {
-        logger.info('[Puppeteer] Launching new browser instance...');
-        
-        // Detect OS for platform-specific args
-        const isWindows = process.platform === 'win32';
-        const isLinux = process.platform === 'linux';
-        
-        logger.info(`[Puppeteer] Platform: ${process.platform}, isWindows: ${isWindows}, isLinux: ${isLinux}`);
-        
-        // Base args that work on all platforms
-        const baseArgs = [
-            '--no-sandbox',
-            '--disable-setuid-sandbox',
-            '--disable-dev-shm-usage',
-            '--disable-gpu',
-            '--disable-software-rasterizer',
-            '--disable-extensions',
-            '--disable-plugins',
-            '--disable-sync',
-            '--disable-translate',
-            '--disable-default-apps',
-            '--disable-background-networking',
-            '--disable-background-timer-throttling',
-            '--disable-backgrounding-occluded-windows',
-            '--disable-breakpad',
-            '--disable-component-update',
-            '--disable-domain-reliability',
-            '--disable-features=TranslateUI',
-            '--disable-hang-monitor',
-            '--disable-ipc-flooding-protection',
-            '--disable-popup-blocking',
-            '--disable-prompt-on-repost',
-            '--disable-renderer-backgrounding',
-            '--disable-client-side-phishing-detection',
-            '--no-first-run',
-            '--memory-pressure-off',
-        ];
-        
-        // Linux/Docker specific args (NOT for Windows)
-        const linuxArgs = isLinux ? [
-            '--no-zygote',
-            '--single-process',
-        ] : [];
-        
-        const allArgs = [...baseArgs, ...linuxArgs];
-        
-        logger.info('[Puppeteer] Launch args:', allArgs.join(', '));
-        
-        try {
-            browserInstance = await puppeteer.launch({
-                headless: true,
-                args: allArgs,
-                timeout: 60000,
-                ignoreDefaultArgs: ['--enable-automation'],
-            });
+        // Check if browser needs restart (too old or disconnected)
+        if (browserInstance) {
+            const browserAge = now - browserCreatedAt;
+            const isConnected = browserInstance.isConnected();
             
-            browserCreatedAt = now;
-            logger.info('[Puppeteer] Browser launched successfully');
-            
-            // Handle browser disconnect
-            browserInstance.on('disconnected', () => {
-                logger.warn('[Puppeteer] Browser disconnected unexpectedly');
-                browserInstance = null;
-            });
-        } catch (launchError) {
-            logger.error('[Puppeteer] Failed to launch browser:', launchError);
-            logger.error('[Puppeteer] Launch error message:', launchError instanceof Error ? launchError.message : String(launchError));
-            logger.error('[Puppeteer] Launch error stack:', launchError instanceof Error ? launchError.stack : 'No stack');
-            throw launchError;
+            if (!isConnected || browserAge > MAX_BROWSER_AGE) {
+                logger.info(`[Puppeteer] Browser restart needed - Connected: ${isConnected}, Age: ${Math.round(browserAge/1000)}s`);
+                await closeBrowserInternal();
+            }
         }
-    }
-    
-    browserLastUsed = now;
-    return browserInstance;
+        
+        // Create new browser if needed
+        if (!browserInstance) {
+            logger.info('[Puppeteer] Launching browser...');
+            
+            const isLinux = process.platform === 'linux';
+            
+            const baseArgs = [
+                '--no-sandbox',
+                '--disable-setuid-sandbox',
+                '--disable-dev-shm-usage',
+                '--disable-gpu',
+                '--disable-software-rasterizer',
+                '--disable-extensions',
+                '--disable-plugins',
+                '--disable-sync',
+                '--disable-translate',
+                '--disable-default-apps',
+                '--disable-background-networking',
+                '--disable-background-timer-throttling',
+                '--disable-backgrounding-occluded-windows',
+                '--disable-breakpad',
+                '--disable-component-update',
+                '--disable-domain-reliability',
+                '--disable-features=TranslateUI',
+                '--disable-hang-monitor',
+                '--disable-ipc-flooding-protection',
+                '--disable-popup-blocking',
+                '--disable-prompt-on-repost',
+                '--disable-renderer-backgrounding',
+                '--disable-client-side-phishing-detection',
+                '--no-first-run',
+                '--memory-pressure-off',
+            ];
+            
+            const linuxArgs = isLinux ? ['--no-zygote', '--single-process'] : [];
+            const allArgs = [...baseArgs, ...linuxArgs];
+            
+            try {
+                browserInstance = await puppeteer.launch({
+                    headless: true,
+                    args: allArgs,
+                    timeout: 60000,
+                    ignoreDefaultArgs: ['--enable-automation'],
+                });
+                
+                browserCreatedAt = now;
+                logger.info(`[Puppeteer] Browser launched (${process.platform})`);
+                
+                browserInstance.on('disconnected', () => {
+                    logger.warn('[Puppeteer] Browser disconnected');
+                    browserInstance = null;
+                });
+            } catch (launchError) {
+                logger.error('[Puppeteer] Browser launch failed:', launchError instanceof Error ? launchError.message : String(launchError));
+                throw launchError;
+            }
+        }
+        
+        browserLastUsed = now;
+        return browserInstance;
+    });
 };
 
 /**
- * Close browser instance
+ * Internal close browser (without mutex - called from within mutex)
  */
-const closeBrowser = async (): Promise<void> => {
+const closeBrowserInternal = async (): Promise<void> => {
     if (browserInstance) {
         try {
             logger.info('[Puppeteer] Closing browser instance...');
@@ -269,6 +351,15 @@ const closeBrowser = async (): Promise<void> => {
             browserInstance = null;
         }
     }
+};
+
+/**
+ * Close browser instance (with mutex - safe to call from outside)
+ */
+const closeBrowser = async (): Promise<void> => {
+    await browserMutex.withLock(async () => {
+        await closeBrowserInternal();
+    });
 };
 
 /**
@@ -284,48 +375,28 @@ export const cleanupIdleBrowser = async (): Promise<void> => {
 // Setup periodic cleanup (every 2 minutes)
 setInterval(cleanupIdleBrowser, 2 * 60 * 1000);
 
-// Cleanup on process exit
+// Cleanup on process exit with graceful shutdown
 process.on('exit', () => closeBrowser());
+
 process.on('SIGINT', async () => {
+    logger.info('[Server] SIGINT received - starting graceful shutdown...');
+    await shutdownPDFQueue(30000); // Wait max 30 seconds for queue
     await closeBrowser();
     process.exit(0);
 });
+
 process.on('SIGTERM', async () => {
+    logger.info('[Server] SIGTERM received - starting graceful shutdown...');
+    await shutdownPDFQueue(30000); // Wait max 30 seconds for queue
     await closeBrowser();
     process.exit(0);
 });
 
 // ============================================
-// 🔥 RETRY MECHANISM
+// 🔥 HELPER FUNCTIONS
 // ============================================
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
-
-const withRetry = async <T>(
-    fn: () => Promise<T>,
-    maxRetries: number = 3,
-    delayMs: number = 1000,
-    operationName: string = 'operation'
-): Promise<T> => {
-    let lastError: Error | null = null;
-    
-    for (let attempt = 1; attempt <= maxRetries; attempt++) {
-        try {
-            return await fn();
-        } catch (error) {
-            lastError = error as Error;
-            logger.warn(`[Puppeteer] ${operationName} failed (attempt ${attempt}/${maxRetries}):`, lastError.message);
-            
-            if (attempt < maxRetries) {
-                // Force browser restart on retry
-                await closeBrowser();
-                await sleep(delayMs * attempt); // Exponential backoff
-            }
-        }
-    }
-    
-    throw lastError;
-};
 
 // ============================================
 // 🔥 TEMPLATE CACHING
@@ -336,40 +407,15 @@ let cachedImages: Record<string, string> | null = null;
 let cacheLoadedAt: number = 0;
 const CACHE_TTL = 60 * 60 * 1000; // 1 hour
 
-/**
- * Get the correct templates directory path
- * Works both in development (src/) and production (dist/)
- */
-const getTemplatesPath = (): string => {
-    // Try multiple possible paths
-    const possiblePaths = [
-        // From dist/services/ -> templates/
-        path.join(__dirname, '../../templates'),
-        // From src/services/ -> templates/
-        path.join(__dirname, '../../templates'),
-        // From project root
-        path.join(process.cwd(), 'templates'),
-        // Absolute path fallback
-        path.resolve('templates'),
-    ];
-    
-    logger.info('[Puppeteer] __dirname:', __dirname);
-    logger.info('[Puppeteer] process.cwd():', process.cwd());
-    logger.info('[Puppeteer] Checking template paths:', possiblePaths);
-    
-    return possiblePaths[0]; // Primary path
-};
-
 const loadTemplateAndImages = async (): Promise<{ template: string; images: Record<string, string> }> => {
     const now = Date.now();
     
-    // Return cached if still valid
+    // Return cached if still valid (no logging for cache hit - too verbose)
     if (cachedTemplate && cachedImages && (now - cacheLoadedAt) < CACHE_TTL) {
-        logger.info('[Puppeteer] Using cached template and images');
         return { template: cachedTemplate, images: cachedImages };
     }
     
-    logger.info('[Puppeteer] Loading template and images...');
+    logger.info('[Puppeteer] Loading template and images (cache miss or expired)...');
     
     // Try multiple paths to find templates
     const templatesPaths = [
@@ -385,23 +431,21 @@ const loadTemplateAndImages = async (): Promise<{ template: string; images: Reco
         const tryTemplatePath = path.join(basePath, 'monthly-feedback-template.html');
         const tryImagesPath = path.join(basePath, 'images-base64.json');
         
-        logger.info(`[Puppeteer] Trying path: ${basePath}`);
-        
         try {
             await fs.access(tryTemplatePath);
             await fs.access(tryImagesPath);
             templatePath = tryTemplatePath;
             imagesPath = tryImagesPath;
             foundPath = true;
-            logger.info(`[Puppeteer] ✅ Found templates at: ${basePath}`);
+            logger.info(`[Puppeteer] Found templates at: ${basePath}`);
             break;
         } catch {
-            logger.warn(`[Puppeteer] ❌ Templates not found at: ${basePath}`);
+            // Silent - will try next path
         }
     }
     
     if (!foundPath) {
-        const errorMsg = `Template files not found. Tried paths: ${templatesPaths.join(', ')}. __dirname: ${__dirname}, cwd: ${process.cwd()}`;
+        const errorMsg = `Template files not found. __dirname: ${__dirname}, cwd: ${process.cwd()}`;
         logger.error('[Puppeteer] ' + errorMsg);
         throw new Error(errorMsg);
     }
@@ -415,9 +459,7 @@ const loadTemplateAndImages = async (): Promise<{ template: string; images: Reco
     cachedImages = JSON.parse(imagesJson) as Record<string, string>;
     cacheLoadedAt = now;
     
-    logger.info('[Puppeteer] Template and images loaded successfully');
-    logger.info('[Puppeteer] Template length:', template.length, 'chars');
-    logger.info('[Puppeteer] Images keys:', Object.keys(cachedImages).length);
+    logger.info(`[Puppeteer] Template cached (${template.length} chars, ${Object.keys(cachedImages).length} images)`);
     
     return { template: cachedTemplate, images: cachedImages };
 };
@@ -530,8 +572,9 @@ const generatePDFInternal = async (data: MonthlyFeedbackData): Promise<Buffer> =
 };
 
 /**
- * Generate PDF using Puppeteer with RETRY mechanism
- * Will retry up to 5 times before giving up (NO fallback to PDFKit)
+ * Generate PDF using Puppeteer with SMART RETRY mechanism
+ * - Attempt 1-2: Retry tanpa restart browser (mungkin hanya page yang bermasalah)
+ * - Attempt 3-5: Retry dengan restart browser (browser mungkin bermasalah)
  */
 export const generateMonthlyFeedbackPDFWithPuppeteer = async (data: MonthlyFeedbackData): Promise<Buffer> => {
     return pdfQueue.add(async () => {
@@ -540,28 +583,37 @@ export const generateMonthlyFeedbackPDFWithPuppeteer = async (data: MonthlyFeedb
         
         for (let attempt = 1; attempt <= maxRetries; attempt++) {
             try {
-                logger.info(`[Puppeteer] Attempt ${attempt}/${maxRetries} for: ${data.studentName}`);
+                // Only log attempt number if it's a retry
+                if (attempt > 1) {
+                    logger.info(`[Puppeteer] Retry ${attempt}/${maxRetries} for: ${data.studentName}`);
+                }
+                
                 const result = await generatePDFInternal(data);
+                
+                // Log success only if it was a retry
+                if (attempt > 1) {
+                    logger.info(`[Puppeteer] ✅ Succeeded on retry ${attempt} for: ${data.studentName}`);
+                }
+                
                 return result;
             } catch (error) {
                 lastError = error instanceof Error ? error : new Error(String(error));
-                logger.warn(`[Puppeteer] Attempt ${attempt}/${maxRetries} failed:`, lastError.message);
+                logger.warn(`[Puppeteer] Attempt ${attempt}/${maxRetries} failed: ${lastError.message}`);
                 
                 if (attempt < maxRetries) {
-                    // Close browser and restart fresh
-                    logger.info('[Puppeteer] Restarting browser for retry...');
-                    await closeBrowser();
+                    // Smart retry strategy
+                    if (attempt >= 2) {
+                        await closeBrowser();
+                    }
                     
-                    // Wait before retry (exponential backoff: 1s, 2s, 3s, 4s)
-                    const waitTime = attempt * 1000;
-                    logger.info(`[Puppeteer] Waiting ${waitTime}ms before retry...`);
+                    const waitTime = attempt <= 2 ? 500 : (attempt - 1) * 1000;
                     await sleep(waitTime);
                 }
             }
         }
         
         // All retries failed
-        logger.error(`[Puppeteer] All ${maxRetries} attempts failed for: ${data.studentName}`);
+        logger.error(`[Puppeteer] All ${maxRetries} attempts failed for: ${data.studentName} - ${lastError?.message}`);
         throw lastError || new Error('PDF generation failed after all retries');
     }, `pdf-${data.studentName}-${Date.now()}`);
 };
@@ -599,6 +651,25 @@ const escapeHtml = (str: string): string => {
         .replace(/"/g, '&quot;')
         .replace(/'/g, '&#039;');
 };
+
+// ============================================
+// 📦 BACKUP: PDFKit Generator (Simple Template)
+// ============================================
+// 
+// Fungsi ini adalah BACKUP jika Puppeteer benar-benar tidak bisa jalan.
+// Template ini lebih sederhana (text-based) dibanding Puppeteer (HTML template).
+// 
+// KAPAN DIGUNAKAN:
+// - Jika server tidak support Chromium/Puppeteer
+// - Untuk debugging/testing tanpa Puppeteer
+// 
+// CARA MENGGUNAKAN (manual):
+// 1. Import: import { generateMonthlyFeedbackPDF } from './pdfGenerator'
+// 2. Panggil: const pdf = await generateMonthlyFeedbackPDF(data)
+//
+// CATATAN: Fungsi ini TIDAK dipanggil otomatis. 
+// generateMonthlyFeedbackPDFWithPuppeteer sudah punya retry mechanism.
+// ============================================
 
 export const generateMonthlyFeedbackPDF = async (data: MonthlyFeedbackData): Promise<Buffer> => {
     return new Promise((resolve, reject) => {
