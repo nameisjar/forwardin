@@ -423,113 +423,168 @@ const loadTemplateAndImages = async (): Promise<{ template: string; images: Reco
 };
 
 // ============================================
-// 🔥 MAIN PDF GENERATION (OPTIMIZED)
+// 🔥 MAIN PDF GENERATION (OPTIMIZED WITH RETRY)
 // ============================================
 
 /**
- * Generate PDF using Puppeteer (renders HTML to PDF)
- * OPTIMIZED: Browser pooling, retry mechanism, better error handling
+ * Internal function to generate PDF (used by retry mechanism)
+ */
+const generatePDFInternal = async (data: MonthlyFeedbackData): Promise<Buffer> => {
+    const startTime = Date.now();
+    logger.info('[Puppeteer] Starting PDF generation for:', data.studentName);
+    
+    let page: Page | null = null;
+    
+    try {
+        // Load template and images (cached)
+        const { template, images } = await loadTemplateAndImages();
+        
+        // Replace placeholders
+        let htmlContent = template
+            .replace(/\{\{studentName\}\}/g, escapeHtml(data.studentName))
+            .replace(/\{\{courseName\}\}/g, escapeHtml(data.courseName))
+            .replace(/\{\{duration\}\}/g, escapeHtml(data.duration))
+            .replace(/\{\{level\}\}/g, escapeHtml(data.level))
+            .replace(/\{\{month\}\}/g, String(data.month))
+            .replace(/\{\{code\}\}/g, escapeHtml(data.code))
+            .replace(/\{\{topicModule\}\}/g, escapeHtml(data.topicModule))
+            .replace(/\{\{result\}\}/g, escapeHtml(data.result))
+            .replace(/\{\{skillsAcquired\}\}/g, escapeHtml(data.skillsAcquired))
+            .replace(/\{\{youtubeLink\}\}/g, escapeHtml(data.youtubeLink))
+            .replace(/\{\{referralLink\}\}/g, escapeHtml(data.referralLink))
+            .replace(/\{\{tutorComment\}\}/g, escapeHtml(data.tutorComment))
+            .replace(/\{\{rating\}\}/g, String(data.rating || 5))
+            .replace(/\{\{reportBy\}\}/g, escapeHtml(data.reportBy || 'Tutor'))
+            // Images
+            .replace(/\{\{headerImage\}\}/g, images.cellImage_1836760394_0 || '')
+            .replace(/\{\{educationPathImage\}\}/g, images.gambar_jalur_pendidikan || '')
+            // Icons
+            .replace(/\{\{trophyIcon\}\}/g, images.cellImage_1836760394_1 || '')
+            .replace(/\{\{linkIcon\}\}/g, images.cellImage_1836760394_8 || '')
+            .replace(/\{\{skillsIcon\}\}/g, images.cellImage_1836760394_6 || '')
+            .replace(/\{\{freeLessonGiftIcon\}\}/g, images.cellImage_1836760394_3 || '')
+            .replace(/\{\{aboutModuleIcon\}\}/g, images.cellImage_1836760394_5 || '')
+            .replace(/\{\{feedbackIcon\}\}/g, images.cellImage_1836760394_7 || '');
+        
+        // Get browser (pooled)
+        const browser = await getBrowser();
+        
+        // Create new page
+        page = await browser.newPage();
+        
+        // Set viewport
+        await page.setViewport({ 
+            width: 794, 
+            height: 1123,
+            deviceScaleFactor: 2 // Higher quality
+        });
+        
+        // Set content with timeout
+        await page.setContent(htmlContent, { 
+            waitUntil: 'networkidle0',
+            timeout: 30000 // 30 second timeout
+        });
+        
+        // Wait for all images to load
+        await page.evaluate(() => {
+            return Promise.all(
+                Array.from(document.images)
+                    .filter(img => !img.complete)
+                    .map(img => new Promise(resolve => {
+                        img.onload = img.onerror = resolve;
+                    }))
+            );
+        });
+        
+        // Small delay to ensure rendering is complete
+        await sleep(300);
+        
+        // Generate PDF
+        const pdfBuffer = await page.pdf({
+            format: 'A4',
+            printBackground: true,
+            margin: {
+                top: '0mm',
+                bottom: '0mm',
+                left: '0mm',
+                right: '0mm'
+            },
+            timeout: 30000 // 30 second timeout
+        });
+        
+        const duration = Date.now() - startTime;
+        logger.info(`[Puppeteer] PDF generated successfully in ${duration}ms, size: ${pdfBuffer.length} bytes`);
+        
+        return Buffer.from(pdfBuffer);
+        
+    } finally {
+        // Always close the page (but keep browser open)
+        if (page) {
+            try {
+                await page.close();
+            } catch (e) {
+                logger.warn('[Puppeteer] Error closing page:', e);
+            }
+        }
+    }
+};
+
+/**
+ * Generate PDF using Puppeteer with RETRY mechanism
+ * Will retry up to 5 times before giving up (NO fallback to PDFKit)
  */
 export const generateMonthlyFeedbackPDFWithPuppeteer = async (data: MonthlyFeedbackData): Promise<Buffer> => {
     return pdfQueue.add(async () => {
-        const startTime = Date.now();
-        logger.info('[Puppeteer] Starting PDF generation for:', data.studentName);
+        const maxRetries = 5;
+        let lastError: Error | null = null;
         
-        let page: Page | null = null;
-        
-        try {
-            // Load template and images (cached)
-            const { template, images } = await loadTemplateAndImages();
-            
-            // Replace placeholders
-            let htmlContent = template
-                .replace(/\{\{studentName\}\}/g, escapeHtml(data.studentName))
-                .replace(/\{\{courseName\}\}/g, escapeHtml(data.courseName))
-                .replace(/\{\{duration\}\}/g, escapeHtml(data.duration))
-                .replace(/\{\{level\}\}/g, escapeHtml(data.level))
-                .replace(/\{\{month\}\}/g, String(data.month))
-                .replace(/\{\{code\}\}/g, escapeHtml(data.code))
-                .replace(/\{\{topicModule\}\}/g, escapeHtml(data.topicModule))
-                .replace(/\{\{result\}\}/g, escapeHtml(data.result))
-                .replace(/\{\{skillsAcquired\}\}/g, escapeHtml(data.skillsAcquired))
-                .replace(/\{\{youtubeLink\}\}/g, escapeHtml(data.youtubeLink))
-                .replace(/\{\{referralLink\}\}/g, escapeHtml(data.referralLink))
-                .replace(/\{\{tutorComment\}\}/g, escapeHtml(data.tutorComment))
-                .replace(/\{\{rating\}\}/g, String(data.rating || 5))
-                .replace(/\{\{reportBy\}\}/g, escapeHtml(data.reportBy || 'Tutor'))
-                // Images
-                .replace(/\{\{headerImage\}\}/g, images.cellImage_1836760394_0 || '')
-                .replace(/\{\{educationPathImage\}\}/g, images.gambar_jalur_pendidikan || '')
-                // Icons
-                .replace(/\{\{trophyIcon\}\}/g, images.cellImage_1836760394_1 || '')
-                .replace(/\{\{linkIcon\}\}/g, images.cellImage_1836760394_8 || '')
-                .replace(/\{\{skillsIcon\}\}/g, images.cellImage_1836760394_6 || '')
-                .replace(/\{\{freeLessonGiftIcon\}\}/g, images.cellImage_1836760394_3 || '')
-                .replace(/\{\{aboutModuleIcon\}\}/g, images.cellImage_1836760394_5 || '')
-                .replace(/\{\{feedbackIcon\}\}/g, images.cellImage_1836760394_7 || '');
-            
-            // Get browser (pooled)
-            const browser = await getBrowser();
-            
-            // Create new page
-            page = await browser.newPage();
-            
-            // Set viewport
-            await page.setViewport({ 
-                width: 794, 
-                height: 1123,
-                deviceScaleFactor: 2 // Higher quality
-            });
-            
-            // Set content with timeout
-            await page.setContent(htmlContent, { 
-                waitUntil: 'networkidle0',
-                timeout: 30000 // 30 second timeout
-            });
-            
-            // Wait for all images to load
-            await page.evaluate(() => {
-                return Promise.all(
-                    Array.from(document.images)
-                        .filter(img => !img.complete)
-                        .map(img => new Promise(resolve => {
-                            img.onload = img.onerror = resolve;
-                        }))
-                );
-            });
-            
-            // Small delay to ensure rendering is complete
-            await sleep(500);
-            
-            // Generate PDF
-            const pdfBuffer = await page.pdf({
-                format: 'A4',
-                printBackground: true,
-                margin: {
-                    top: '0mm',
-                    bottom: '0mm',
-                    left: '0mm',
-                    right: '0mm'
-                },
-                timeout: 30000 // 30 second timeout
-            });
-            
-            const duration = Date.now() - startTime;
-            logger.info(`[Puppeteer] PDF generated successfully in ${duration}ms, size: ${pdfBuffer.length} bytes`);
-            
-            return Buffer.from(pdfBuffer);
-            
-        } finally {
-            // Always close the page (but keep browser open)
-            if (page) {
-                try {
-                    await page.close();
-                } catch (e) {
-                    logger.warn('[Puppeteer] Error closing page:', e);
+        for (let attempt = 1; attempt <= maxRetries; attempt++) {
+            try {
+                logger.info(`[Puppeteer] Attempt ${attempt}/${maxRetries} for: ${data.studentName}`);
+                const result = await generatePDFInternal(data);
+                return result;
+            } catch (error) {
+                lastError = error instanceof Error ? error : new Error(String(error));
+                logger.warn(`[Puppeteer] Attempt ${attempt}/${maxRetries} failed:`, lastError.message);
+                
+                if (attempt < maxRetries) {
+                    // Close browser and restart fresh
+                    logger.info('[Puppeteer] Restarting browser for retry...');
+                    await closeBrowser();
+                    
+                    // Wait before retry (exponential backoff: 1s, 2s, 3s, 4s)
+                    const waitTime = attempt * 1000;
+                    logger.info(`[Puppeteer] Waiting ${waitTime}ms before retry...`);
+                    await sleep(waitTime);
                 }
             }
         }
-    });
+        
+        // All retries failed
+        logger.error(`[Puppeteer] All ${maxRetries} attempts failed for: ${data.studentName}`);
+        throw lastError || new Error('PDF generation failed after all retries');
+    }, `pdf-${data.studentName}-${Date.now()}`);
+};
+
+/**
+ * Pre-warm the browser (call this on server startup)
+ * This ensures browser is ready before first request
+ */
+export const warmupBrowser = async (): Promise<void> => {
+    try {
+        logger.info('[Puppeteer] Warming up browser...');
+        const browser = await getBrowser();
+        
+        // Create and close a test page to ensure browser is fully ready
+        const page = await browser.newPage();
+        await page.setContent('<html><body>Warmup</body></html>');
+        await page.close();
+        
+        logger.info('[Puppeteer] Browser warmed up successfully');
+    } catch (error) {
+        logger.error('[Puppeteer] Browser warmup failed:', error);
+        // Don't throw - warmup failure shouldn't crash the app
+    }
 };
 
 /**

@@ -10,6 +10,7 @@ import { initSocketServer } from './socket';
 import http from 'http';
 import { error } from 'console';
 import { internalServerErrorHandler, notFoundHandler } from './middleware/errorHandler';
+import { warmupBrowser } from './services/pdfGenerator';
 
 // Import scheduler untuk memastikan broadcast scheduler berjalan
 import './controllers/broadcast';
@@ -44,6 +45,10 @@ prisma
 
 (async () => {
     await init();
+    
+    // 🔥 Pre-warm Puppeteer browser for PDF generation
+    await warmupBrowser();
+    
     server.listen(port, host, listener);
 })();
 

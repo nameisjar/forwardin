@@ -83,59 +83,25 @@ export const sendMonthlyFeedback: RequestHandler = async (req, res) => {
         logger.info('Device found:', device.name);
 
         // Generate PDF using Puppeteer (matches preview exactly)
+        // 🔥 Now with 5x retry mechanism - NO fallback to PDFKit
         logger.info('Generating PDF with Puppeteer...');
-        let pdfBuffer;
-        
-        try {
-            pdfBuffer = await generateMonthlyFeedbackPDFWithPuppeteer({
-                studentName,
-                courseName,
-                month: Number(month),
-                duration: duration || `Bulan ke-${month}`,
-                level: level || '',
-                code: code || '',
-                topicModule: topicModule || '',
-                result: result || '',
-                skillsAcquired: skillsAcquired || '',
-                youtubeLink: youtubeLink || '',
-                referralLink: referralLink || '',
-                tutorComment: tutorComment || '',
-                rating: rating || 5,           // 🆕 Pass rating to PDF generator
-                reportBy: reportBy || 'Tutor'  // 🆕 Pass reportBy to PDF generator
-            });
-            logger.info('PDF generated with Puppeteer successfully, size:', pdfBuffer.length, 'bytes');
-        } catch (puppeteerError) {
-            // 🔥 DETAILED ERROR LOGGING
-            logger.error('=== PUPPETEER ERROR DETAILS ===');
-            logger.error('Error name:', puppeteerError instanceof Error ? puppeteerError.name : 'Unknown');
-            logger.error('Error message:', puppeteerError instanceof Error ? puppeteerError.message : String(puppeteerError));
-            logger.error('Error stack:', puppeteerError instanceof Error ? puppeteerError.stack : 'No stack');
-            
-            // Log additional context
-            if (puppeteerError && typeof puppeteerError === 'object') {
-                logger.error('Error details:', JSON.stringify(puppeteerError, Object.getOwnPropertyNames(puppeteerError), 2));
-            }
-            
-            logger.warn('Puppeteer failed, falling back to PDFKit');
-            // Fallback to PDFKit if Puppeteer fails
-            pdfBuffer = await generateMonthlyFeedbackPDF({
-                studentName,
-                courseName,
-                month: Number(month),
-                duration: duration || `Bulan ke-${month}`,
-                level: level || '',
-                code: code || '',
-                topicModule: topicModule || '',
-                result: result || '',
-                skillsAcquired: skillsAcquired || '',
-                youtubeLink: youtubeLink || '',
-                referralLink: referralLink || '',
-                tutorComment: tutorComment || '',
-                rating: rating || 5,           // 🆕 Pass rating to PDF generator
-                reportBy: reportBy || 'Tutor'  // 🆕 Pass reportBy to PDF generator
-            });
-            logger.info('PDF generated with PDFKit successfully, size:', pdfBuffer.length, 'bytes');
-        }
+        const pdfBuffer = await generateMonthlyFeedbackPDFWithPuppeteer({
+            studentName,
+            courseName,
+            month: Number(month),
+            duration: duration || `Bulan ke-${month}`,
+            level: level || '',
+            code: code || '',
+            topicModule: topicModule || '',
+            result: result || '',
+            skillsAcquired: skillsAcquired || '',
+            youtubeLink: youtubeLink || '',
+            referralLink: referralLink || '',
+            tutorComment: tutorComment || '',
+            rating: rating || 5,
+            reportBy: reportBy || 'Tutor'
+        });
+        logger.info('PDF generated successfully, size:', pdfBuffer.length, 'bytes');
 
         // 🆕 Send PDF to all recipients
         const fileName = `Feedback_${studentName.replace(/\s+/g, '_')}_${courseName.replace(/\s+/g, '_')}_Bulan${month}.pdf`;
