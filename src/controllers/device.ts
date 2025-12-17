@@ -7,6 +7,7 @@ import { useDevice } from '../utils/quota';
 import fs from 'fs';
 import schedule from 'node-schedule';
 import { isUUID } from '../utils/uuidChecker';
+import { generateDeviceAccessToken } from '../utils/jwtGenerator';
 
 export const getDevices: RequestHandler = async (req, res) => {
     const pkId = req.authenticatedUser.pkId;
@@ -55,10 +56,26 @@ export const generateApiKeyDevice: RequestHandler = async (req, res) => {
         if (!isUUID(deviceId)) {
             return res.status(400).json({ message: 'Invalid deviceId' });
         }
+
+        const userPkId = req.authenticatedUser.pkId;
+        const isSuperAdmin = req.privilege?.pkId === Number(process.env.SUPER_ADMIN_ID);
+
+        const device = await prisma.device.findFirst({
+            where: {
+                id: deviceId,
+                ...(isSuperAdmin ? {} : { userId: userPkId }),
+            },
+            select: { pkId: true },
+        });
+
+        if (!device) {
+            return res.status(404).json({ message: 'Device not found' });
+        }
+
         const apiKey = generateUuid();
 
         await prisma.device.update({
-            where: { id: deviceId },
+            where: { pkId: device.pkId },
             data: {
                 apiKey,
             },
@@ -133,9 +150,13 @@ export const getDevice: RequestHandler = async (req, res) => {
             return res.status(400).json({ message: 'Invalid deviceId' });
         }
 
-        const device = await prisma.device.findUnique({
+        const userPkId = req.authenticatedUser.pkId;
+        const isSuperAdmin = req.privilege?.pkId === Number(process.env.SUPER_ADMIN_ID);
+
+        const device = await prisma.device.findFirst({
             where: {
                 id: deviceId,
+                ...(isSuperAdmin ? {} : { userId: userPkId }),
             },
             include: {
                 sessions: { where: { id: { contains: 'config' } }, select: { sessionId: true } },
@@ -350,6 +371,40 @@ export const deleteDevices: RequestHandler = async (req, res) => {
         res.status(200).json({ message: 'Device(s) deleted successfully' });
     } catch (error) {
         logger.error('Error in deleteDevices:', error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};
+
+export const issueDeviceAccessToken: RequestHandler = async (req, res) => {
+    try {
+        const deviceId = req.params.deviceId;
+        if (!isUUID(deviceId)) {
+            return res.status(400).json({ message: 'Invalid deviceId' });
+        }
+
+        const userPkId = req.authenticatedUser.pkId;
+
+        const device = await prisma.device.findFirst({
+            where: {
+                id: deviceId,
+                userId: userPkId,
+            },
+            select: { id: true },
+        });
+
+        if (!device) {
+            return res.status(404).json({ message: 'Device not found' });
+        }
+
+        const token = generateDeviceAccessToken({
+            deviceId: device.id,
+            userId: userPkId,
+            purpose: 'device-api',
+        });
+
+        res.status(200).json({ token, expiresIn: process.env.DEVICE_ACCESS_TOKEN_TTL || '2m' });
+    } catch (error) {
+        logger.error(error);
         res.status(500).json({ message: 'Internal server error' });
     }
 };

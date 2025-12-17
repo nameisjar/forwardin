@@ -1,19 +1,20 @@
 import { Router } from 'express';
 import * as controller from '../controllers/deviceApi';
+import { apiBroadcastRateLimit, apiSendRateLimit } from '../services/rateLimiter';
 
 const router = Router();
 
-router.post('/messages/send', controller.sendMessages);
+router.post('/messages/send', apiSendRateLimit, controller.sendMessages);
 router.post('/messages/send/image', controller.sendImageMessages);
 router.post('/messages/send/doc', controller.sendDocumentMessages);
 router.post('/messages/send/audio', controller.sendAudioMessages);
 router.post('/messages/send/video', controller.sendVideoMessages);
 router.post('/messages/send/button', controller.sendButton);
-router.post('/messages/broadcasts', controller.createBroadcast);
-router.post('/messages/broadcasts/scheduled', controller.createBroadcastScheduled);
-router.post('/messages/broadcasts/reminder', controller.createBroadcastReminder);
-router.post('/messages/broadcasts/feedback', controller.createBroadcastFeedback);
-router.post('/messages/broadcasts/reminder-algo', controller.createBroadcastReminderAlgo);
+router.post('/messages/broadcasts', apiBroadcastRateLimit, controller.createBroadcast);
+router.post('/messages/broadcasts/scheduled', apiBroadcastRateLimit, controller.createBroadcastScheduled);
+router.post('/messages/broadcasts/reminder', apiBroadcastRateLimit, controller.createBroadcastReminder);
+router.post('/messages/broadcasts/feedback', apiBroadcastRateLimit, controller.createBroadcastFeedback);
+router.post('/messages/broadcasts/reminder-algo', apiBroadcastRateLimit, controller.createBroadcastReminderAlgo);
 // router.post('/messages/broadcasts/recurring', controller.createBroadcastRecurring);  //testing
 router.post('/messages/auto-replies', controller.createAutoReplies);
 router.get('/messages', controller.getConversationMessages);

@@ -11,5 +11,6 @@ router.get('/:deviceId', controller.getDevice);
 router.get('/api-key/:deviceId', controller.generateApiKeyDevice);
 router.put('/:deviceId', controller.updateDevice);
 router.delete('/', controller.deleteDevices);
+router.post('/:deviceId/access-token', controller.issueDeviceAccessToken);
 
 export default router;

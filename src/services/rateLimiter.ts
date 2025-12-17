@@ -1,4 +1,5 @@
 import logger from '../config/logger';
+import type { RequestHandler } from 'express';
 
 // ============================================
 // 🔥 SMART RATE LIMITER PER DEVICE
@@ -403,5 +404,57 @@ export const setDeviceRateLimitConfig = (deviceId: string, config: Partial<RateL
 export const getDeviceRateLimitStats = (deviceId: string) => rateLimiter.getStats(deviceId);
 export const getRateLimiterGlobalStats = () => rateLimiter.getGlobalStats();
 export const shutdownRateLimiter = () => rateLimiter.shutdown();
+
+// =====================================================
+// Lightweight per-IP+deviceUuid rate limit for /api paths
+// (separate from queue-based WhatsApp rate limiter)
+// =====================================================
+const API_RATE_WINDOW_MS = Number(process.env.API_RATE_WINDOW_MS || 60_000);
+const API_RATE_MAX_SEND = Number(process.env.API_RATE_MAX_SEND || 30);
+const API_RATE_MAX_BROADCAST = Number(process.env.API_RATE_MAX_BROADCAST || 10);
+
+const apiMem = new Map<string, { count: number; resetAt: number }>();
+function apiHit(key: string, max: number): boolean {
+    const now = Date.now();
+    const cur = apiMem.get(key);
+    if (!cur || cur.resetAt <= now) {
+        apiMem.set(key, { count: 1, resetAt: now + API_RATE_WINDOW_MS });
+        return true;
+    }
+    if (cur.count >= max) return false;
+    cur.count += 1;
+    return true;
+}
+
+function apiIpFromReq(req: any): string {
+    return (
+        req.header?.('CF-Connecting-IP') ||
+        req.header?.('X-Forwarded-For')?.split(',')[0]?.trim() ||
+        req.ip ||
+        ''
+    );
+}
+
+export const apiSendRateLimit: RequestHandler = (req, res, next) => {
+    const deviceUuid = (req.authenticatedDevice as any)?.deviceUuid || 'unknown-device';
+    const ip = apiIpFromReq(req) || 'unknown-ip';
+    const key = `send:${deviceUuid}:${ip}`;
+    if (!apiHit(key, API_RATE_MAX_SEND)) {
+        res.setHeader('Retry-After', String(Math.ceil(API_RATE_WINDOW_MS / 1000)));
+        return res.status(429).json({ message: 'Too many requests' });
+    }
+    next();
+};
+
+export const apiBroadcastRateLimit: RequestHandler = (req, res, next) => {
+    const deviceUuid = (req.authenticatedDevice as any)?.deviceUuid || 'unknown-device';
+    const ip = apiIpFromReq(req) || 'unknown-ip';
+    const key = `broadcast:${deviceUuid}:${ip}`;
+    if (!apiHit(key, API_RATE_MAX_BROADCAST)) {
+        res.setHeader('Retry-After', String(Math.ceil(API_RATE_WINDOW_MS / 1000)));
+        return res.status(429).json({ message: 'Too many requests' });
+    }
+    next();
+};
 
 export default rateLimiter;

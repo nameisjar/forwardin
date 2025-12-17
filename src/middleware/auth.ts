@@ -3,6 +3,7 @@ import jwt from 'jsonwebtoken';
 import prisma from '../utils/db';
 import { jwtSecretKey } from '../utils/jwtGenerator';
 import { User } from '@prisma/client';
+import { verifyDeviceAccessToken } from '../utils/jwtGenerator';
 
 export const authMiddleware: RequestHandler = (req, res, next) => {
     if (!req.header('Authorization')) {
@@ -94,6 +95,15 @@ export const apiKey: RequestHandler = async (req, res, next) => {
     req.privilege = user.privilege;
     next();
 };
+
+function getClientIp(req: any): string {
+    return (
+        req.header?.('CF-Connecting-IP') ||
+        req.header?.('X-Forwarded-For')?.split(',')[0]?.trim() ||
+        req.ip ||
+        ''
+    );
+}
 
 // to protect super admin routes
 export const superAdminOnly: RequestHandler = async (req, res, next) => {
@@ -218,16 +228,65 @@ export const apiKeyDevice: RequestHandler = async (req, res, next) => {
         },
     });
 
-    // console.log(existingSession);
-    // console.log('==============================================');
-
     if (!existingSession) {
         return res.status(401).json({ message: 'Authentication failed: Session not found' });
     }
 
-    req.authenticatedDevice = existingSession;
-    req.authenticatedUser = device.user;
+    req.authenticatedDevice = existingSession as any;
+    // NOTE: existingSession.deviceId is INT (device.pkId). Don't overwrite it.
+    (req.authenticatedDevice as any).deviceUuid = device.id;
+    req.authenticatedUser = device.user as any;
+
+    // attach for downstream audit/debug (do not log keys)
+    (req as any).clientIp = getClientIp(req);
     next();
+};
+
+export const deviceAccessTokenRequired: RequestHandler = async (req, res, next) => {
+    try {
+        const authHeader = req.header('Authorization');
+        if (!authHeader || !authHeader.startsWith('Bearer ')) {
+            return res
+                .status(401)
+                .json({ message: 'Authentication failed: Missing device access token' });
+        }
+
+        const token = authHeader.substring('Bearer '.length);
+        if (!token) {
+            return res
+                .status(401)
+                .json({ message: 'Authentication failed: Missing device access token' });
+        }
+
+        const payload = verifyDeviceAccessToken(token);
+        if (!payload || payload.purpose !== 'device-api') {
+            return res.status(401).json({ message: 'Authentication failed: Invalid device access token' });
+        }
+
+        if (!req.authenticatedDevice) {
+            return res.status(401).json({ message: 'Authentication failed: Device not authenticated' });
+        }
+
+        // Bind token to the current device (UUID string)
+        const deviceUuidFromSession = (req.authenticatedDevice as any).deviceUuid;
+        if (!deviceUuidFromSession || payload.deviceId !== deviceUuidFromSession) {
+            return res.status(403).json({ message: 'Access denied: Device token does not match device' });
+        }
+
+        // Bind token to the device owner
+        const authedUser = req.authenticatedUser as any;
+        const authedUserPkId = authedUser?.pkId;
+        if (!authedUserPkId || payload.userId !== authedUserPkId) {
+            return res.status(403).json({ message: 'Access denied: Device token does not match user' });
+        }
+
+        (req as any).deviceAccessToken = payload;
+        return next();
+    } catch (e) {
+        return res
+            .status(401)
+            .json({ message: 'Authentication failed: Invalid or expired device access token' });
+    }
 };
 
 export default authMiddleware;

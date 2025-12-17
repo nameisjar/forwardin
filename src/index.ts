@@ -17,8 +17,26 @@ import { shutdownRateLimiter } from './services/rateLimiter';
 import './controllers/broadcast';
 
 const app = express();
+
+// Trust reverse proxy (Cloudflare) so req.ip uses CF-Connecting-IP / X-Forwarded-For.
+app.set('trust proxy', true);
+
 app.use(pinoHttp({ logger }));
-app.use(cors());
+
+// Tighten CORS in production (allow configured client origins only)
+const allowedOrigins = [process.env.CLIENT_URL1, process.env.CLIENT_URL2].filter(Boolean) as string[];
+app.use(
+    cors({
+        origin: (origin, cb) => {
+            // allow same-origin or non-browser clients with no Origin header
+            if (!origin) return cb(null, true);
+            if (allowedOrigins.length === 0) return cb(null, true);
+            if (allowedOrigins.includes(origin)) return cb(null, true);
+            return cb(new Error('Not allowed by CORS'));
+        },
+        credentials: false,
+    }),
+);
 
 app.use(bodyParser.json({ limit: '500mb' }));
 app.use(bodyParser.urlencoded({ extended: true, limit: '500mb' }));
