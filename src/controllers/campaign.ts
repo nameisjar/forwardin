@@ -10,6 +10,11 @@ import { generateSlug } from '../utils/slug';
 import { getRandomColor } from '../utils/profilePic';
 import { diskUpload } from '../config/multer';
 import { isUUID } from '../utils/uuidChecker';
+import { 
+    sendTextMessage, 
+    sendMediaMessage, 
+    detectMediaType 
+} from '../services/messageSender';
 
 // back here: add deviceId param checker
 export const createCampaign: RequestHandler = async (req, res) => {
@@ -994,7 +999,8 @@ export const deleteCampaigns: RequestHandler = async (req, res) => {
     }
 };
 
-schedule.scheduleJob('*', async () => {
+// 🔥 UPDATED: Campaign Message Scheduler - setiap menit (bukan setiap detik) dengan rate limiter
+schedule.scheduleJob('* * * * *', async () => {
     try {
         const pendingcampaignMessages = await prisma.campaignMessage.findMany({
             where: {
@@ -1009,6 +1015,7 @@ schedule.scheduleJob('*', async () => {
                     select: {
                         device: {
                             select: {
+                                id: true, // 🔥 Tambah device.id untuk rate limiter
                                 sessions: { select: { sessionId: true } },
                                 contactDevices: { select: { contact: true } },
                             },
@@ -1023,10 +1030,22 @@ schedule.scheduleJob('*', async () => {
             },
         });
 
+        if (pendingcampaignMessages.length === 0) {
+            logger.debug('Campaign message job: No pending messages');
+            return;
+        }
+
         for (const campaignMessage of pendingcampaignMessages) {
             const processedRecipients: (string | number)[] = [];
+            const deviceId = campaignMessage.Campaign.device.id;
+            const sessionId = campaignMessage.Campaign.device.sessions[0]?.sessionId;
+            const session = sessionId ? getInstance(sessionId) : null;
 
-            const session = getInstance(campaignMessage.Campaign.device.sessions[0].sessionId)!;
+            if (!session) {
+                logger.warn({ campaignMessageId: campaignMessage.id }, 'Session not found, skipping');
+                continue;
+            }
+
             for (let i = 0; i < campaignMessage.Campaign.group.contactGroups.length; i++) {
                 const recipient = campaignMessage.Campaign.group.contactGroups[i];
                 const isLastRecipient =
@@ -1064,28 +1083,30 @@ schedule.scheduleJob('*', async () => {
                         )[0]?.contact.email ?? undefined,
                 };
 
+                const messageText = replaceVariables(campaignMessage.message, variables);
+
+                // 🔥 Gunakan messageSender dengan rate limiter
                 if (campaignMessage.mediaPath) {
-                    await sendMediaFile(
+                    const mediaType = detectMediaType(campaignMessage.mediaPath);
+                    await sendMediaMessage(
                         session,
-                        [jid],
+                        deviceId,
+                        jid,
+                        { url: campaignMessage.mediaPath },
+                        mediaType,
                         {
-                            url: campaignMessage.mediaPath,
-                            newName: campaignMessage.mediaPath.split('/').pop(),
-                        },
-                        ['jpg', 'png', 'jpeg'].includes(
-                            campaignMessage.mediaPath.split('.').pop() || '',
-                        )
-                            ? 'image'
-                            : 'document',
-                        replaceVariables(campaignMessage.message, variables),
-                        null,
-                        `CPM_${campaignMessage.pkId}_${Date.now()}`,
+                            caption: messageText,
+                            fileName: campaignMessage.mediaPath.split('/').pop(),
+                            messageId: `CPM_${campaignMessage.pkId}_${Date.now()}`,
+                        }
                     );
                 } else {
-                    await session.sendMessage(
+                    await sendTextMessage(
+                        session,
+                        deviceId,
                         jid,
-                        { text: replaceVariables(campaignMessage.message, variables) },
-                        { messageId: `CPM_${campaignMessage.pkId}_${Date.now()}` },
+                        messageText,
+                        { messageId: `CPM_${campaignMessage.pkId}_${Date.now()}` }
                     );
                 }
 
@@ -1109,13 +1130,14 @@ schedule.scheduleJob('*', async () => {
                 },
             });
         }
-        logger.debug('Campaign message job is running...');
+        logger.debug('Campaign message job completed');
     } catch (error) {
         logger.error(error, 'Error processing scheduled campaign messages');
     }
 });
 
-schedule.scheduleJob('*', async () => {
+// 🔥 UPDATED: Campaign Scheduler - setiap menit (bukan setiap detik) dengan rate limiter
+schedule.scheduleJob('* * * * *', async () => {
     try {
         const pendingCampaigns = await prisma.campaign.findMany({
             where: {
@@ -1128,6 +1150,7 @@ schedule.scheduleJob('*', async () => {
             include: {
                 device: {
                     select: {
+                        id: true, // 🔥 Tambah device.id untuk rate limiter
                         sessions: { select: { sessionId: true } },
                         contactDevices: {
                             select: { contact: true },
@@ -1137,15 +1160,24 @@ schedule.scheduleJob('*', async () => {
             },
         });
 
-        // back here: fix processedRecipients
+        if (pendingCampaigns.length === 0) {
+            logger.debug('Campaign job: No pending campaigns');
+            return;
+        }
+
         for (const campaign of pendingCampaigns) {
             const processedRecipients: (string | number)[] = [];
-            const session = getInstance(campaign.device.sessions[0].sessionId)!;
+            const deviceId = campaign.device.id;
+            const sessionId = campaign.device.sessions[0]?.sessionId;
+            const session = sessionId ? getInstance(sessionId) : null;
+
+            if (!session) {
+                logger.warn({ campaignId: campaign.id }, 'Session not found, skipping');
+                continue;
+            }
+
             const recipients: string[] = [];
             for (const recipient of campaign.recipients) {
-                // all == all contacts
-                // label == contact labels
-                // can't use "all" and "label" at the same time
                 if (recipient.includes('all')) {
                     const contacts = await prisma.contact.findMany({
                         where: { contactDevices: { some: { deviceId: campaign.deviceId } } },
@@ -1197,10 +1229,6 @@ schedule.scheduleJob('*', async () => {
                 }
             }
 
-            // const recipients = campaign.recipients.includes('all')
-            //     ? campaign.device.contactDevices.map((c) => c.contact.phone)
-            //     : campaign.recipients;
-
             for (let i = 0; i < recipients.length; i++) {
                 const recipient = recipients[i];
                 const isLastRecipient = i === recipients.length - 1;
@@ -1237,26 +1265,30 @@ schedule.scheduleJob('*', async () => {
                         )[0]?.contact.email ?? undefined,
                 };
 
+                const messageText = replaceVariables(campaign.registrationMessage, variables);
+
+                // 🔥 Gunakan messageSender dengan rate limiter
                 if (campaign.mediaPath) {
-                    await sendMediaFile(
+                    const mediaType = detectMediaType(campaign.mediaPath);
+                    await sendMediaMessage(
                         session,
-                        [jid],
+                        deviceId,
+                        jid,
+                        { url: campaign.mediaPath },
+                        mediaType,
                         {
-                            url: campaign.mediaPath,
-                            newName: campaign.mediaPath.split('/').pop(),
-                        },
-                        ['jpg', 'png', 'jpeg'].includes(campaign.mediaPath.split('.').pop() || '')
-                            ? 'image'
-                            : 'document',
-                        replaceVariables(campaign.registrationMessage, variables),
-                        null,
-                        `CP_${campaign.pkId}_${Date.now()}`,
+                            caption: messageText,
+                            fileName: campaign.mediaPath.split('/').pop(),
+                            messageId: `CP_${campaign.pkId}_${Date.now()}`,
+                        }
                     );
                 } else {
-                    await session.sendMessage(
+                    await sendTextMessage(
+                        session,
+                        deviceId,
                         jid,
-                        { text: replaceVariables(campaign.registrationMessage, variables) },
-                        { messageId: `CP_${campaign.pkId}_${Date.now()}` },
+                        messageText,
+                        { messageId: `CP_${campaign.pkId}_${Date.now()}` }
                     );
                 }
 
@@ -1276,7 +1308,7 @@ schedule.scheduleJob('*', async () => {
                 },
             });
         }
-        logger.debug('Campaign job is running...');
+        logger.debug('Campaign job completed');
     } catch (error) {
         logger.error(error, 'Error processing scheduled campaigns');
     }

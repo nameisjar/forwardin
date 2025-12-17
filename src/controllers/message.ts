@@ -9,6 +9,23 @@ import { isUUID } from '../utils/uuidChecker';
 import fs from 'fs';
 import { createZipFile } from '../utils/zip';
 import { time } from 'console';
+import { 
+    sendTextMessage, 
+    sendImageMessage, 
+    sendDocumentMessage, 
+    sendAudioMessage, 
+    sendVideoMessage,
+    sendGenericMessage 
+} from '../services/messageSender';
+
+// 🔥 Helper untuk mendapatkan deviceId dari sessionId
+async function getDeviceIdFromSession(sessionId: string): Promise<string | null> {
+    const session = await prisma.session.findFirst({
+        where: { sessionId },
+        select: { device: { select: { id: true } } }
+    });
+    return session?.device?.id || null;
+}
 
 export const sendMessages: RequestHandler = async (req, res) => {
     try {
@@ -17,7 +34,13 @@ export const sendMessages: RequestHandler = async (req, res) => {
             return res.status(400).json({ message: 'Invalid sessionId' });
         }
 
-        const results: { index: number; result?: any }[] = [];
+        // 🔥 Get deviceId untuk rate limiter
+        const deviceId = await getDeviceIdFromSession(req.params.sessionId);
+        if (!deviceId) {
+            return res.status(404).json({ message: 'Device not found for session' });
+        }
+
+        const results: { index: number; result?: any; rateLimitInfo?: any }[] = [];
         const errors: { index: number; error: string }[] = [];
 
         for (const [
@@ -34,8 +57,18 @@ export const sendMessages: RequestHandler = async (req, res) => {
                 const delayElapsed = endTime - startTime;
                 logger.info(`Delay of ${delay} milliseconds elapsed: ${delayElapsed} milliseconds`);
 
-                const result = await session.sendMessage(jid, message, options);
-                results.push({ index, result });
+                // 🔥 Gunakan messageSender dengan rate limiter
+                const sendResult = await sendGenericMessage(session, deviceId, jid, message, options);
+                
+                if (sendResult.success) {
+                    results.push({ 
+                        index, 
+                        result: sendResult.result,
+                        rateLimitInfo: sendResult.rateLimitInfo 
+                    });
+                } else {
+                    errors.push({ index, error: sendResult.error || 'Failed to send message' });
+                }
             } catch (e) {
                 const message =
                     e instanceof Error ? e.message : 'An error occurred during message send';
@@ -62,6 +95,12 @@ export const sendImageMessages: RequestHandler = async (req, res) => {
             return res.status(400).json({ message: 'Invalid sessionId' });
         }
 
+        // 🔥 Get deviceId untuk rate limiter
+        const deviceId = await getDeviceIdFromSession(req.params.sessionId);
+        if (!deviceId) {
+            return res.status(404).json({ message: 'Device not found for session' });
+        }
+
         memoryUpload.single('image')(req, res, async (err) => {
             if (err) {
                 const message = 'An error occurred during file upload';
@@ -75,31 +114,36 @@ export const sendImageMessages: RequestHandler = async (req, res) => {
                 return res.status(400).json({ error: 'Recipient JIDs are required' });
             }
 
-            const fileData = {
-                mimetype: req.file?.mimetype,
-                buffer: req.file?.buffer,
-                newName: req.file?.filename,
-                originalName: req.file?.originalname,
-                url: req.file?.path,
-            };
-
-            const fileType = 'image';
             const caption = req.body.caption || '';
             const delay = req.body.delay || 5000;
 
-            const startTime = new Date().getTime();
-            if (recipients.length > 0) await delayMs(delay);
-            const endTime = new Date().getTime();
-            const delayElapsed = endTime - startTime;
-            logger.info(`Delay of ${delay} milliseconds elapsed: ${delayElapsed} milliseconds`);
+            const results: any[] = [];
+            const errors: any[] = [];
 
-            const { results, errors } = await sendMediaFile(
-                session,
-                recipients,
-                fileData,
-                fileType,
-                caption,
-            );
+            for (let i = 0; i < recipients.length; i++) {
+                const recipient = recipients[i];
+                const jid = getJid(recipient);
+
+                if (i > 0) await delayMs(delay);
+
+                // 🔥 Gunakan messageSender dengan rate limiter
+                const sendResult = await sendImageMessage(
+                    session,
+                    deviceId,
+                    jid,
+                    req.file?.buffer!,
+                    {
+                        caption,
+                        fileName: req.file?.originalname,
+                    }
+                );
+
+                if (sendResult.success) {
+                    results.push({ recipient, result: sendResult.result, rateLimitInfo: sendResult.rateLimitInfo });
+                } else {
+                    errors.push({ recipient, error: sendResult.error });
+                }
+            }
 
             res.status(errors.length > 0 ? 500 : 200).json({
                 results,
@@ -120,6 +164,12 @@ export const sendDocumentMessages: RequestHandler = async (req, res) => {
             return res.status(400).json({ message: 'Invalid sessionId' });
         }
 
+        // 🔥 Get deviceId untuk rate limiter
+        const deviceId = await getDeviceIdFromSession(req.params.sessionId);
+        if (!deviceId) {
+            return res.status(404).json({ message: 'Device not found for session' });
+        }
+
         memoryUpload.single('document')(req, res, async (err) => {
             if (err) {
                 const message = 'An error occurred during file upload';
@@ -133,31 +183,37 @@ export const sendDocumentMessages: RequestHandler = async (req, res) => {
                 return res.status(400).json({ error: 'Recipient JIDs are required' });
             }
 
-            const fileData = {
-                mimetype: req.file?.mimetype,
-                buffer: req.file?.buffer,
-                newName: req.file?.filename,
-                originalName: req.file?.originalname,
-                url: req.file?.path,
-            };
-
-            const fileType = 'document';
             const caption = req.body.caption || '';
             const delay = req.body.delay || 5000;
 
-            const startTime = new Date().getTime();
-            if (recipients.length > 0) await delayMs(delay);
-            const endTime = new Date().getTime();
-            const delayElapsed = endTime - startTime;
-            logger.info(`Delay of ${delay} milliseconds elapsed: ${delayElapsed} milliseconds`);
+            const results: any[] = [];
+            const errors: any[] = [];
 
-            const { results, errors } = await sendMediaFile(
-                session,
-                recipients,
-                fileData,
-                fileType,
-                caption,
-            );
+            for (let i = 0; i < recipients.length; i++) {
+                const recipient = recipients[i];
+                const jid = getJid(recipient);
+
+                if (i > 0) await delayMs(delay);
+
+                // 🔥 Gunakan messageSender dengan rate limiter
+                const sendResult = await sendDocumentMessage(
+                    session,
+                    deviceId,
+                    jid,
+                    req.file?.buffer!,
+                    {
+                        caption,
+                        fileName: req.file?.originalname,
+                        mimetype: req.file?.mimetype,
+                    }
+                );
+
+                if (sendResult.success) {
+                    results.push({ recipient, result: sendResult.result, rateLimitInfo: sendResult.rateLimitInfo });
+                } else {
+                    errors.push({ recipient, error: sendResult.error });
+                }
+            }
 
             res.status(errors.length > 0 ? 500 : 200).json({
                 results,
@@ -178,6 +234,12 @@ export const sendAudioMessages: RequestHandler = async (req, res) => {
             return res.status(400).json({ message: 'Invalid sessionId' });
         }
 
+        // 🔥 Get deviceId untuk rate limiter
+        const deviceId = await getDeviceIdFromSession(req.params.sessionId);
+        if (!deviceId) {
+            return res.status(404).json({ message: 'Device not found for session' });
+        }
+
         memoryUpload.single('audio')(req, res, async (err) => {
             if (err) {
                 const message = 'An error occurred during file upload';
@@ -191,31 +253,35 @@ export const sendAudioMessages: RequestHandler = async (req, res) => {
                 return res.status(400).json({ error: 'Recipient JIDs are required' });
             }
 
-            const fileData = {
-                mimetype: req.file?.mimetype,
-                buffer: req.file?.buffer,
-                newName: req.file?.filename,
-                originalName: req.file?.originalname,
-                url: req.file?.path,
-            };
-
-            const fileType = 'audio';
-            const caption = req.body.caption || '';
             const delay = req.body.delay || 5000;
 
-            const startTime = new Date().getTime();
-            if (recipients.length > 0) await delayMs(delay);
-            const endTime = new Date().getTime();
-            const delayElapsed = endTime - startTime;
-            logger.info(`Delay of ${delay} milliseconds elapsed: ${delayElapsed} milliseconds`);
+            const results: any[] = [];
+            const errors: any[] = [];
 
-            const { results, errors } = await sendMediaFile(
-                session,
-                recipients,
-                fileData,
-                fileType,
-                caption,
-            );
+            for (let i = 0; i < recipients.length; i++) {
+                const recipient = recipients[i];
+                const jid = getJid(recipient);
+
+                if (i > 0) await delayMs(delay);
+
+                // 🔥 Gunakan messageSender dengan rate limiter
+                const sendResult = await sendAudioMessage(
+                    session,
+                    deviceId,
+                    jid,
+                    req.file?.buffer!,
+                    {
+                        fileName: req.file?.originalname,
+                        mimetype: req.file?.mimetype,
+                    }
+                );
+
+                if (sendResult.success) {
+                    results.push({ recipient, result: sendResult.result, rateLimitInfo: sendResult.rateLimitInfo });
+                } else {
+                    errors.push({ recipient, error: sendResult.error });
+                }
+            }
 
             res.status(errors.length > 0 ? 500 : 200).json({ results, errors });
         });
@@ -233,6 +299,12 @@ export const sendVideoMessages: RequestHandler = async (req, res) => {
             return res.status(400).json({ message: 'Invalid sessionId' });
         }
 
+        // 🔥 Get deviceId untuk rate limiter
+        const deviceId = await getDeviceIdFromSession(req.params.sessionId);
+        if (!deviceId) {
+            return res.status(404).json({ message: 'Device not found for session' });
+        }
+
         memoryUpload.single('video')(req, res, async (err) => {
             if (err) {
                 const message = 'An error occurred during file upload';
@@ -246,31 +318,36 @@ export const sendVideoMessages: RequestHandler = async (req, res) => {
                 return res.status(400).json({ error: 'Recipient JIDs are required' });
             }
 
-            const fileData = {
-                mimetype: req.file?.mimetype,
-                buffer: req.file?.buffer,
-                newName: req.file?.filename,
-                originalName: req.file?.originalname,
-                url: req.file?.path,
-            };
-
-            const fileType = 'video';
             const caption = req.body.caption || '';
             const delay = req.body.delay || 5000;
 
-            const startTime = new Date().getTime();
-            if (recipients.length > 0) await delayMs(delay);
-            const endTime = new Date().getTime();
-            const delayElapsed = endTime - startTime;
-            logger.info(`Delay of ${delay} milliseconds elapsed: ${delayElapsed} milliseconds`);
+            const results: any[] = [];
+            const errors: any[] = [];
 
-            const { results, errors } = await sendMediaFile(
-                session,
-                recipients,
-                fileData,
-                fileType,
-                caption,
-            );
+            for (let i = 0; i < recipients.length; i++) {
+                const recipient = recipients[i];
+                const jid = getJid(recipient);
+
+                if (i > 0) await delayMs(delay);
+
+                // 🔥 Gunakan messageSender dengan rate limiter
+                const sendResult = await sendVideoMessage(
+                    session,
+                    deviceId,
+                    jid,
+                    req.file?.buffer!,
+                    {
+                        caption,
+                        fileName: req.file?.originalname,
+                    }
+                );
+
+                if (sendResult.success) {
+                    results.push({ recipient, result: sendResult.result, rateLimitInfo: sendResult.rateLimitInfo });
+                } else {
+                    errors.push({ recipient, error: sendResult.error });
+                }
+            }
 
             res.status(errors.length > 0 ? 500 : 200).json({ results, errors });
         });

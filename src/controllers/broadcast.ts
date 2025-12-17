@@ -12,6 +12,19 @@ import { useBroadcast } from '../utils/quota';
 import { isUUID } from '../utils/uuidChecker';
 import fs from 'fs';
 import { Prisma } from '@prisma/client';
+import { 
+    sendTextMessage, 
+    sendMediaMessage, 
+    detectMediaType,
+    SendResult 
+} from '../services/messageSender';
+import {
+    calculateNaturalDelay,
+    showTypingIndicator,
+    resetClusterState,
+    loadNaturalDelayConfig,
+    NaturalDelayResult,
+} from '../services/naturalDelay';
 
 // Constants untuk retry mechanism
 const MAX_ATTEMPTS = 5;
@@ -83,8 +96,10 @@ function getRetryDelay(attempt: number, baseDelay: number): number {
 }
 
 // Helper function untuk retry dengan exponential backoff + jitter
+// 🔥 UPDATED: Menggunakan messageSender dengan rate limiter
 async function sendMessageWithRetry(
     session: any,
+    deviceId: string, // Tambah deviceId untuk rate limiter
     jid: string,
     textPayload: string,
     mediaPath: string | null,
@@ -92,37 +107,45 @@ async function sendMessageWithRetry(
 ): Promise<{ success: boolean; messageId?: string; error?: any; isRateLimit?: boolean }> {
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
         try {
-            let sentMessage;
+            let result: SendResult;
             
             if (mediaPath) {
-                const result = await sendMediaFile(
+                // Kirim dengan media menggunakan rate limiter
+                const mediaType = detectMediaType(mediaPath);
+                result = await sendMediaMessage(
                     session,
-                    [jid],
+                    deviceId,
+                    jid,
+                    { url: mediaPath },
+                    mediaType,
                     {
-                        url: mediaPath,
-                        newName: mediaPath.split('/').pop(),
-                    },
-                    ['jpg', 'png', 'jpeg'].includes(mediaPath.split('.').pop() || '')
-                        ? 'image'
-                        : 'document',
-                    textPayload,
-                    null,
-                    undefined,
+                        caption: textPayload,
+                        fileName: mediaPath.split('/').pop(),
+                    }
                 );
-                sentMessage = result.results?.[0]?.result || result;
             } else {
-                sentMessage = await session.sendMessage(jid, { text: textPayload });
+                // Kirim teks menggunakan rate limiter
+                result = await sendTextMessage(session, deviceId, jid, textPayload);
             }
 
-            // Extract messageId dengan robust handling
-            const messageId = extractMessageId(sentMessage);
-            
-            if (!messageId) {
-                logger.warn({ jid, attempt }, 'No message ID returned from WhatsApp');
-                return { success: false, error: 'No message ID returned' };
+            if (!result.success) {
+                logger.warn({ jid, attempt, error: result.error }, 'Message send failed');
+                
+                // Check if it's a rate limit error
+                const errorStr = String(result.error || '').toLowerCase();
+                const isRateLimit = errorStr.includes('rate') || errorStr.includes('limit');
+                
+                if (attempt < maxRetries) {
+                    const waitTime = getRetryDelay(attempt, BASE_RETRY_DELAY);
+                    logger.warn({ jid, attempt, waitTime }, `Retrying in ${waitTime}ms...`);
+                    await delayMs(waitTime);
+                    continue;
+                }
+                
+                return { success: false, error: result.error, isRateLimit };
             }
 
-            return { success: true, messageId };
+            return { success: true, messageId: result.messageId };
             
         } catch (error: any) {
             const isRateLimit = isRateLimitError(error);
@@ -1067,7 +1090,7 @@ export const updateBroadcastStatus: RequestHandler = async (req, res) => {
         res.status(200).json(updatedBroadcast);
     } catch (error) {
         logger.error(error);
-        res.status(500).json({ message: 'Internal server error' });
+        res.status  (500).json({ message: 'Internal server error' });
     }
 };
 
@@ -1246,11 +1269,10 @@ export const bulkDeleteBroadcasts: RequestHandler = async (req, res) => {
 };
 
 // ============================================================================
-// SCHEDULER JOB - Runs every 10 seconds
+// SCHEDULER JOB - Runs every minute
+// 🔥 UPDATED: Menggunakan Natural Delay untuk pola pengiriman lebih natural
 // ============================================================================
 
-// Scheduler job setiap 10 detik
-// '*/10 * * * * *',
 schedule.scheduleJob('* * * * *', async () => {
     try {
         const now = new Date();
@@ -1270,6 +1292,8 @@ schedule.scheduleJob('* * * * *', async () => {
             include: {
                 device: {
                     select: {
+                        pkId: true,
+                        id: true,
                         sessions: { select: { sessionId: true } },
                         contactDevices: { select: { contact: true } },
                     },
@@ -1284,6 +1308,9 @@ schedule.scheduleJob('* * * * *', async () => {
 
         logger.info(`Found ${pendingBroadcasts.length} pending broadcasts to process`);
 
+        // Load natural delay config sekali untuk semua broadcasts
+        const naturalDelayConfig = loadNaturalDelayConfig();
+
         for (const broadcast of pendingBroadcasts) {
             const sessionId = broadcast.device.sessions[0]?.sessionId;
             const session = sessionId ? getInstance(sessionId) : null;
@@ -1296,6 +1323,9 @@ schedule.scheduleJob('* * * * *', async () => {
                 );
                 continue;
             }
+
+            // 🔥 Reset cluster state untuk broadcast baru
+            resetClusterState(broadcast.device.id);
 
             // Increment attemptCount & update lastAttemptAt SEBELUM proses
             await prisma.broadcast.update({
@@ -1359,9 +1389,31 @@ schedule.scheduleJob('* * * * *', async () => {
 
                 const textPayload = replaceVariables(broadcast.message, variables);
 
+                // 🔥 Hitung natural delay SEBELUM kirim pesan
+                // Ini termasuk: jitter, cluster, progressive, typing simulation
+                const naturalDelay = calculateNaturalDelay(
+                    broadcast.device.id,
+                    broadcast.delay, // base delay dari broadcast config
+                    textPayload.length, // panjang pesan untuk typing simulation
+                    naturalDelayConfig
+                );
+
+                // 🔥 Tampilkan typing indicator atau delay sebelum kirim pesan
+                // TYPING_INDICATOR_ENABLED=true → tampil "sedang mengetik..." + delay
+                // TYPING_INDICATOR_ENABLED=false → hanya delay tanpa indicator
+                if (naturalDelay.shouldShowTypingIndicator) {
+                    await showTypingIndicator(
+                        session, 
+                        jid, 
+                        naturalDelay.typingIndicatorDuration,
+                        naturalDelay.showIndicatorInWhatsApp
+                    );
+                }
+
                 // Send dengan retry mechanism
                 const result = await sendMessageWithRetry(
                     session,
+                    broadcast.device.id,
                     jid,
                     textPayload,
                     broadcast.mediaPath,
@@ -1377,12 +1429,34 @@ schedule.scheduleJob('* * * * *', async () => {
                     }
                     
                     failCount++;
-                    await delayMs(isLastRecipient ? 0 : broadcast.delay);
+                    
+                    // 🔥 Gunakan natural delay meskipun gagal
+                    if (!isLastRecipient) {
+                        logger.debug(
+                            { 
+                                jid, 
+                                delay: naturalDelay.totalDelay,
+                                breakdown: naturalDelay.breakdown,
+                                isClusterEnd: naturalDelay.isClusterEnd
+                            },
+                            '[Broadcast] Applying natural delay after failed send'
+                        );
+                        await delayMs(naturalDelay.totalDelay);
+                    }
                     continue;
                 }
 
                 const messageId = result.messageId!;
-                logger.info({ broadcastId: broadcast.id, messageId, recipient: jid }, 'Message sent successfully');
+                logger.info(
+                    { 
+                        broadcastId: broadcast.id, 
+                        messageId, 
+                        recipient: jid,
+                        naturalDelay: naturalDelay.totalDelay,
+                        isClusterEnd: naturalDelay.isClusterEnd
+                    }, 
+                    'Message sent successfully'
+                );
 
                 // Save to OutgoingMessage
                 try {
@@ -1390,17 +1464,13 @@ schedule.scheduleJob('* * * * *', async () => {
                         (cd: any) => cd.contact.phone == recipient
                     )?.contact;
 
-                    // NOTE:
-                    // - We keep `id` as the internal row identifier (existing behavior).
-                    // - We additionally store `waMessageId` so future status updates can be matched
-                    //   even if internal IDs ever differ.
                     await prisma.outgoingMessage.upsert({
                         where: { id: messageId },
                         update: { 
                             waMessageId: messageId, 
                             updatedAt: new Date(),
-                            readBy: [], // 🔥 FIX: Reset readBy untuk pesan baru
-                            status: 'pending' // 🔥 FIX: Reset status juga
+                            readBy: [],
+                            status: 'pending'
                         },
                         create: {
                             id: messageId,
@@ -1427,7 +1497,19 @@ schedule.scheduleJob('* * * * *', async () => {
                     failCount++;
                 }
 
-                await delayMs(isLastRecipient ? 0 : broadcast.delay);
+                // 🔥 Gunakan natural delay (bukan delay konstan)
+                if (!isLastRecipient) {
+                    logger.debug(
+                        { 
+                            jid, 
+                            delay: naturalDelay.totalDelay,
+                            breakdown: naturalDelay.breakdown,
+                            isClusterEnd: naturalDelay.isClusterEnd
+                        },
+                        '[Broadcast] Applying natural delay'
+                    );
+                    await delayMs(naturalDelay.totalDelay);
+                }
             }
 
             // Decision logic
@@ -1463,7 +1545,6 @@ schedule.scheduleJob('* * * * *', async () => {
                     '✅ Broadcast marked as SENT (at least 1 success)'
                 );
             } 
-            // Jika semua gagal & bukan rate limit & sudah max attempts → mark sent untuk stop retry
             else if (allFailed && !hasRateLimit && reachedMaxAttempts) {
                 updateData.isSent = true;
                 logger.error(
@@ -1471,14 +1552,12 @@ schedule.scheduleJob('* * * * *', async () => {
                     '❌ Broadcast marked as SENT (failed after max attempts, no rate limit)'
                 );
             }
-            // Jika ada rate limit dan belum max attempts → JANGAN mark sent, biarkan retry
             else if (hasRateLimit && !reachedMaxAttempts) {
                 logger.warn(
                     { broadcastId: broadcast.id, rateLimitCount, attemptCount: currentAttempt },
                     '⏳ Broadcast will retry (rate limit detected, not at max attempts yet)'
                 );
             }
-            // Semua gagal & rate limit & max attempts → mark sent
             else if (allFailed && hasRateLimit && reachedMaxAttempts) {
                 updateData.isSent = true;
                 logger.error(
