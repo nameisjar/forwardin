@@ -35,4 +35,8 @@ router.get('/messages', authMiddleware, isTutor, tutor.listOutgoingMessages);
 router.post('/sessions/create-sse', authMiddleware, isTutor, tutor.createSSE);
 router.get('/groups', authMiddleware, isTutor, tutor.listGroups);
 
+// Device message statistics
+router.get('/devices/message-stats', authMiddleware, isTutor, tutor.getAllDevicesMessageStats);
+router.get('/devices/:deviceId/message-stats', authMiddleware, isTutor, tutor.getDeviceMessageStats);
+
 export default router;

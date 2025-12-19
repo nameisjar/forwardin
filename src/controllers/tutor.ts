@@ -724,3 +724,128 @@ export const listGroups: RequestHandler = async (req, res) => {
 
 // re-export for route usage
 export const createSSE: RequestHandler = (req, res, next) => createSessionSSE(req, res, next);
+
+/**
+ * Get message statistics (sent + scheduled) for a specific device
+ */
+export const getDeviceMessageStats: RequestHandler = async (req, res) => {
+    try {
+        const deviceId = Number(req.params.deviceId);
+        if (!deviceId || isNaN(deviceId)) {
+            return res.status(400).json({ message: 'Invalid deviceId' });
+        }
+
+        // Check if device exists and user has access
+        const device = await prisma.device.findUnique({
+            where: { pkId: deviceId },
+            include: { sessions: { select: { sessionId: true } } },
+        });
+
+        if (!device) {
+            return res.status(404).json({ message: 'Device not found' });
+        }
+
+        // Get session IDs for this device
+        const sessionIds = device.sessions.map((s) => s.sessionId);
+
+        // Count sent messages (outgoing messages)
+        const sentCount = sessionIds.length > 0
+            ? await prisma.outgoingMessage.count({
+                where: { sessionId: { in: sessionIds } },
+            })
+            : 0;
+
+        // Count scheduled broadcasts (pending broadcasts for this device)
+        const scheduledCount = await prisma.broadcast.count({
+            where: {
+                deviceId: deviceId,
+                schedule: { gt: new Date() }, // Future schedules only
+            },
+        });
+
+        res.status(200).json({
+            deviceId,
+            sent: sentCount,
+            scheduled: scheduledCount,
+            total: sentCount + scheduledCount,
+        });
+    } catch (e) {
+        logger.error(e);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};
+
+/**
+ * Get message statistics for all devices (batch)
+ * Returns stats keyed by device.id (UUID) for frontend compatibility
+ * 
+ * Note: OutgoingMessage.sessionId may be NULL when device is disconnected.
+ * We count sent messages via Broadcast -> OutgoingMessage relationship,
+ * since Broadcast.deviceId is always preserved.
+ */
+export const getAllDevicesMessageStats: RequestHandler = async (req, res) => {
+    try {
+        const pkId = req.authenticatedUser.pkId;
+        const roleId = req.privilege?.pkId;
+
+        // Get devices based on role
+        let devices;
+        if (roleId === ADMIN_ID || roleId === SUPER_ADMIN_ID) {
+            // Admin can see all devices
+            devices = await prisma.device.findMany({
+                select: {
+                    id: true,
+                    pkId: true,
+                },
+            });
+        } else {
+            // Tutor/CS can only see their own devices
+            devices = await prisma.device.findMany({
+                where: { userId: pkId },
+                select: {
+                    id: true,
+                    pkId: true,
+                },
+            });
+        }
+
+        // Use device.id (UUID) as key for frontend compatibility
+        const stats: Record<string, { sent: number; scheduled: number; total: number }> = {};
+
+        for (const device of devices) {
+            // Get all broadcast IDs for this device
+            const broadcasts = await prisma.broadcast.findMany({
+                where: { deviceId: device.pkId },
+                select: { pkId: true, schedule: true },
+            });
+
+            const broadcastIds = broadcasts.map(b => b.pkId);
+
+            // Count sent messages via broadcastId
+            // OutgoingMessage has broadcastId that links to Broadcast.pkId
+            let sentCount = 0;
+            if (broadcastIds.length > 0) {
+                sentCount = await prisma.outgoingMessage.count({
+                    where: {
+                        broadcastId: { in: broadcastIds },
+                    },
+                });
+            }
+
+            // Count scheduled broadcasts (future schedules only)
+            const scheduledCount = broadcasts.filter(b => b.schedule && new Date(b.schedule) > new Date()).length;
+
+            // Use device.id (UUID) as key
+            stats[device.id] = {
+                sent: sentCount,
+                scheduled: scheduledCount,
+                total: sentCount + scheduledCount,
+            };
+        }
+
+        res.status(200).json(stats);
+    } catch (e) {
+        logger.error(e);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};

@@ -8,6 +8,7 @@ import fs from 'fs';
 import schedule from 'node-schedule';
 import { isUUID } from '../utils/uuidChecker';
 import { generateDeviceAccessToken } from '../utils/jwtGenerator';
+import { verifyInstance } from '../whatsapp';
 
 export const getDevices: RequestHandler = async (req, res) => {
     const pkId = req.authenticatedUser.pkId;
@@ -25,10 +26,63 @@ export const getDevices: RequestHandler = async (req, res) => {
                         },
                     },
                 },
+                // 🆕 Include sessions untuk validasi
+                sessions: {
+                    where: { id: { contains: 'config' } },
+                    select: { sessionId: true }
+                }
             },
         });
 
-        res.status(200).json(devices);
+        // 🆕 Validasi status device: jika status 'open' tapi tidak ada instance aktif, update ke 'close'
+        const validatedDevices = await Promise.all(
+            devices.map(async (device) => {
+                const sessionId = device.sessions[0]?.sessionId;
+                const dbStatus = device.status;
+
+                // Jika status di DB adalah 'open', validasi apakah instance benar-benar aktif
+                if (dbStatus === 'open' && sessionId) {
+                    const isInstanceActive = verifyInstance(sessionId);
+                    
+                    if (!isInstanceActive) {
+                        // Instance tidak aktif, update status di DB ke 'close'
+                        logger.warn(
+                            { deviceId: device.id, sessionId },
+                            'Device status mismatch: DB says open but no active instance. Updating to close.'
+                        );
+                        
+                        await prisma.device.update({
+                            where: { pkId: device.pkId },
+                            data: { status: 'close', updatedAt: new Date() }
+                        });
+
+                        // Return device dengan status yang sudah dikoreksi
+                        const { sessions, ...deviceWithoutSessions } = device;
+                        return { ...deviceWithoutSessions, status: 'close' };
+                    }
+                } else if (dbStatus === 'open' && !sessionId) {
+                    // Status open tapi tidak ada session sama sekali
+                    logger.warn(
+                        { deviceId: device.id },
+                        'Device status mismatch: DB says open but no session found. Updating to close.'
+                    );
+                    
+                    await prisma.device.update({
+                        where: { pkId: device.pkId },
+                        data: { status: 'close', updatedAt: new Date() }
+                    });
+
+                    const { sessions, ...deviceWithoutSessions } = device;
+                    return { ...deviceWithoutSessions, status: 'close' };
+                }
+
+                // Remove sessions from response (tidak perlu dikirim ke frontend)
+                const { sessions, ...deviceWithoutSessions } = device;
+                return deviceWithoutSessions;
+            })
+        );
+
+        res.status(200).json(validatedDevices);
     } catch (error) {
         logger.error(error);
         res.status(500).json({ message: 'Internal server error' });
