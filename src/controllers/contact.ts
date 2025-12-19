@@ -709,3 +709,391 @@ export const syncGoogle: RequestHandler = async (req, res) => {
         res.status(500).json({ message: 'Internal server error' });
     }
 };
+
+// ============================================
+// FUNGSI-FUNGSI YANG HILANG
+// ============================================
+
+export const getContacts: RequestHandler = async (req, res) => {
+    try {
+        const pkId = req.authenticatedUser.pkId;
+        const privilegeId = req.privilege.pkId;
+        const { deviceId, search, label, page = '1', limit = '50' } = req.query;
+
+        const pageNum = parseInt(page as string, 10) || 1;
+        const limitNum = parseInt(limit as string, 10) || 50;
+        const skip = (pageNum - 1) * limitNum;
+
+        const whereClause: any = {
+            contactDevices: {
+                some: {
+                    device: {
+                        id: deviceId ? String(deviceId) : undefined,
+                        userId: privilegeId !== Number(process.env.SUPER_ADMIN_ID) ? pkId : undefined,
+                    },
+                },
+            },
+        };
+
+        if (search) {
+            whereClause.OR = [
+                { firstName: { contains: String(search), mode: 'insensitive' } },
+                { lastName: { contains: String(search), mode: 'insensitive' } },
+                { phone: { contains: String(search) } },
+                { email: { contains: String(search), mode: 'insensitive' } },
+            ];
+        }
+
+        if (label) {
+            whereClause.ContactLabel = {
+                some: {
+                    label: {
+                        slug: String(label),
+                    },
+                },
+            };
+        }
+
+        const [contacts, total] = await Promise.all([
+            prisma.contact.findMany({
+                where: whereClause,
+                include: {
+                    ContactLabel: {
+                        include: {
+                            label: true,
+                        },
+                    },
+                    contactDevices: {
+                        include: {
+                            device: {
+                                select: {
+                                    id: true,
+                                    name: true,
+                                },
+                            },
+                        },
+                    },
+                },
+                orderBy: { createdAt: 'desc' },
+                skip,
+                take: limitNum,
+            }),
+            prisma.contact.count({ where: whereClause }),
+        ]);
+
+        res.status(200).json({
+            contacts,
+            pagination: {
+                page: pageNum,
+                limit: limitNum,
+                total,
+                totalPages: Math.ceil(total / limitNum),
+            },
+        });
+    } catch (error) {
+        logger.error(error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};
+
+export const getContact: RequestHandler = async (req, res) => {
+    try {
+        const contactId = req.params.contactId;
+        const pkId = req.authenticatedUser.pkId;
+        const privilegeId = req.privilege.pkId;
+
+        if (!isUUID(contactId)) {
+            return res.status(400).json({ message: 'Invalid contactId' });
+        }
+
+        const contact = await prisma.contact.findFirst({
+            where: {
+                id: contactId,
+                contactDevices: {
+                    some: {
+                        device: {
+                            userId: privilegeId !== Number(process.env.SUPER_ADMIN_ID) ? pkId : undefined,
+                        },
+                    },
+                },
+            },
+            include: {
+                ContactLabel: {
+                    include: {
+                        label: true,
+                    },
+                },
+                contactDevices: {
+                    include: {
+                        device: {
+                            select: {
+                                id: true,
+                                name: true,
+                            },
+                        },
+                    },
+                },
+                contactGroups: {
+                    include: {
+                        group: {
+                            select: {
+                                id: true,
+                                name: true,
+                            },
+                        },
+                    },
+                },
+            },
+        });
+
+        if (!contact) {
+            return res.status(404).json({ message: 'Contact not found' });
+        }
+
+        res.status(200).json({ contact });
+    } catch (error) {
+        logger.error(error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};
+
+export const getContactLabels: RequestHandler = async (req, res) => {
+    try {
+        const pkId = req.authenticatedUser.pkId;
+        const privilegeId = req.privilege.pkId;
+        const { deviceId } = req.query;
+
+        const labels = await prisma.label.findMany({
+            where: {
+                ContactLabel: {
+                    some: {
+                        contact: {
+                            contactDevices: {
+                                some: {
+                                    device: {
+                                        id: deviceId ? String(deviceId) : undefined,
+                                        userId: privilegeId !== Number(process.env.SUPER_ADMIN_ID) ? pkId : undefined,
+                                    },
+                                },
+                            },
+                        },
+                    },
+                },
+            },
+            include: {
+                _count: {
+                    select: {
+                        ContactLabel: true,
+                    },
+                },
+            },
+            orderBy: { name: 'asc' },
+        });
+
+        res.status(200).json({ labels });
+    } catch (error) {
+        logger.error(error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};
+
+export const exportContacts: RequestHandler = async (req, res) => {
+    try {
+        const pkId = req.authenticatedUser.pkId;
+        const privilegeId = req.privilege.pkId;
+        const { deviceId } = req.query;
+
+        const contacts = await prisma.contact.findMany({
+            where: {
+                contactDevices: {
+                    some: {
+                        device: {
+                            id: deviceId ? String(deviceId) : undefined,
+                            userId: privilegeId !== Number(process.env.SUPER_ADMIN_ID) ? pkId : undefined,
+                        },
+                    },
+                },
+            },
+            include: {
+                ContactLabel: {
+                    include: {
+                        label: true,
+                    },
+                },
+            },
+            orderBy: { createdAt: 'desc' },
+        });
+
+        const workbook = new ExcelJS.Workbook();
+        const worksheet = workbook.addWorksheet('Contacts');
+
+        worksheet.columns = [
+            { header: 'First Name', key: 'firstName', width: 20 },
+            { header: 'Last Name', key: 'lastName', width: 20 },
+            { header: 'Phone', key: 'phone', width: 20 },
+            { header: 'Email', key: 'email', width: 30 },
+            { header: 'Gender', key: 'gender', width: 10 },
+            { header: 'Date of Birth', key: 'dob', width: 15 },
+            { header: 'Labels', key: 'labels', width: 30 },
+        ];
+
+        contacts.forEach((contact) => {
+            worksheet.addRow({
+                firstName: contact.firstName,
+                lastName: contact.lastName || '',
+                phone: contact.phone,
+                email: contact.email || '',
+                gender: contact.gender || '',
+                dob: contact.dob ? contact.dob.toISOString().split('T')[0] : '',
+                labels: contact.ContactLabel.map((cl) => cl.label.name).join(', '),
+            });
+        });
+
+        res.setHeader(
+            'Content-Type',
+            'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        );
+        res.setHeader('Content-Disposition', 'attachment; filename=contacts.xlsx');
+
+        await workbook.xlsx.write(res);
+        res.end();
+    } catch (error) {
+        logger.error(error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};
+
+export const deleteContacts: RequestHandler = async (req, res) => {
+    try {
+        const pkId = req.authenticatedUser.pkId;
+        const privilegeId = req.privilege.pkId;
+        const { contactIds } = req.body;
+
+        if (!Array.isArray(contactIds) || contactIds.length === 0) {
+            return res.status(400).json({ message: 'contactIds array is required' });
+        }
+
+        // Validate all IDs are UUIDs
+        for (const id of contactIds) {
+            if (!isUUID(id)) {
+                return res.status(400).json({ message: `Invalid contactId: ${id}` });
+            }
+        }
+
+        // Get contacts that belong to the user
+        const contacts = await prisma.contact.findMany({
+            where: {
+                id: { in: contactIds },
+                contactDevices: {
+                    some: {
+                        device: {
+                            userId: privilegeId !== Number(process.env.SUPER_ADMIN_ID) ? pkId : undefined,
+                        },
+                    },
+                },
+            },
+            select: { pkId: true, id: true },
+        });
+
+        if (contacts.length === 0) {
+            return res.status(404).json({ message: 'No contacts found to delete' });
+        }
+
+        const contactPkIds = contacts.map((c) => c.pkId);
+
+        await prisma.$transaction(async (transaction) => {
+            // Delete related records first
+            await transaction.contactLabel.deleteMany({
+                where: { contactId: { in: contactPkIds } },
+            });
+            await transaction.contactDevice.deleteMany({
+                where: { contactId: { in: contactPkIds } },
+            });
+            await transaction.contactGroup.deleteMany({
+                where: { contactId: { in: contactPkIds } },
+            });
+
+            // Delete contacts
+            await transaction.contact.deleteMany({
+                where: { pkId: { in: contactPkIds } },
+            });
+        });
+
+        res.status(200).json({
+            message: 'Contacts deleted successfully',
+            deletedCount: contacts.length,
+        });
+    } catch (error) {
+        logger.error(error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};
+
+export const addContactToGroup: RequestHandler = async (req, res) => {
+    try {
+        const pkId = req.authenticatedUser.pkId;
+        const privilegeId = req.privilege.pkId;
+        const { contactIds, groupId } = req.body;
+
+        if (!groupId) {
+            return res.status(400).json({ message: 'groupId is required' });
+        }
+
+        if (!Array.isArray(contactIds) || contactIds.length === 0) {
+            return res.status(400).json({ message: 'contactIds array is required' });
+        }
+
+        // Validate groupId
+        if (!isUUID(groupId)) {
+            return res.status(400).json({ message: 'Invalid groupId' });
+        }
+
+        // Check if group exists and belongs to user
+        const group = await prisma.group.findFirst({
+            where: {
+                id: groupId,
+                userId: privilegeId !== Number(process.env.SUPER_ADMIN_ID) ? pkId : undefined,
+            },
+        });
+
+        if (!group) {
+            return res.status(404).json({ message: 'Group not found' });
+        }
+
+        // Get contacts that belong to the user
+        const contacts = await prisma.contact.findMany({
+            where: {
+                id: { in: contactIds },
+                contactDevices: {
+                    some: {
+                        device: {
+                            userId: privilegeId !== Number(process.env.SUPER_ADMIN_ID) ? pkId : undefined,
+                        },
+                    },
+                },
+            },
+            select: { pkId: true, id: true },
+        });
+
+        if (contacts.length === 0) {
+            return res.status(404).json({ message: 'No valid contacts found' });
+        }
+
+        // Add contacts to group
+        await prisma.contactGroup.createMany({
+            data: contacts.map((contact) => ({
+                contactId: contact.pkId,
+                groupId: group.pkId,
+            })),
+            skipDuplicates: true,
+        });
+
+        res.status(200).json({
+            message: 'Contacts added to group successfully',
+            addedCount: contacts.length,
+        });
+    } catch (error) {
+        logger.error(error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};
