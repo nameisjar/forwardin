@@ -711,17 +711,17 @@ export const syncGoogle: RequestHandler = async (req, res) => {
 };
 
 // ============================================
-// FUNGSI-FUNGSI YANG HILANG
+// FUNGSI-FUNGSI TAMBAHAN
 // ============================================
 
 export const getContacts: RequestHandler = async (req, res) => {
     try {
         const pkId = req.authenticatedUser.pkId;
         const privilegeId = req.privilege.pkId;
-        const { deviceId, search, label, page = '1', limit = '50' } = req.query;
+        const { deviceId, q, page = '1', pageSize = '50', sortBy = 'createdAt', sortDir = 'desc' } = req.query;
 
         const pageNum = parseInt(page as string, 10) || 1;
-        const limitNum = parseInt(limit as string, 10) || 50;
+        const limitNum = parseInt(pageSize as string, 10) || 50;
         const skip = (pageNum - 1) * limitNum;
 
         const whereClause: any = {
@@ -735,24 +735,19 @@ export const getContacts: RequestHandler = async (req, res) => {
             },
         };
 
-        if (search) {
+        if (q) {
             whereClause.OR = [
-                { firstName: { contains: String(search), mode: 'insensitive' } },
-                { lastName: { contains: String(search), mode: 'insensitive' } },
-                { phone: { contains: String(search) } },
-                { email: { contains: String(search), mode: 'insensitive' } },
+                { firstName: { contains: String(q), mode: 'insensitive' } },
+                { lastName: { contains: String(q), mode: 'insensitive' } },
+                { phone: { contains: String(q) } },
+                { email: { contains: String(q), mode: 'insensitive' } },
             ];
         }
 
-        if (label) {
-            whereClause.ContactLabel = {
-                some: {
-                    label: {
-                        slug: String(label),
-                    },
-                },
-            };
-        }
+        const orderByField = ['createdAt', 'firstName', 'lastName', 'phone'].includes(String(sortBy)) 
+            ? String(sortBy) 
+            : 'createdAt';
+        const orderByDir = sortDir === 'asc' ? 'asc' : 'desc';
 
         const [contacts, total] = await Promise.all([
             prisma.contact.findMany({
@@ -774,20 +769,22 @@ export const getContacts: RequestHandler = async (req, res) => {
                         },
                     },
                 },
-                orderBy: { createdAt: 'desc' },
+                orderBy: { [orderByField]: orderByDir },
                 skip,
                 take: limitNum,
             }),
             prisma.contact.count({ where: whereClause }),
         ]);
 
+        const totalPages = Math.ceil(total / limitNum);
+
         res.status(200).json({
-            contacts,
-            pagination: {
-                page: pageNum,
-                limit: limitNum,
-                total,
-                totalPages: Math.ceil(total / limitNum),
+            data: contacts,
+            metadata: {
+                totalContacts: total,
+                currentPage: pageNum,
+                totalPages,
+                hasMore: pageNum < totalPages,
             },
         });
     } catch (error) {
@@ -945,7 +942,7 @@ export const exportContacts: RequestHandler = async (req, res) => {
                 email: contact.email || '',
                 gender: contact.gender || '',
                 dob: contact.dob ? contact.dob.toISOString().split('T')[0] : '',
-                labels: contact.ContactLabel.map((cl) => cl.label.name).join(', '),
+                labels: contact.ContactLabel.map((cl: any) => cl.label.name).join(', '),
             });
         });
 
@@ -953,7 +950,7 @@ export const exportContacts: RequestHandler = async (req, res) => {
             'Content-Type',
             'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
         );
-        res.setHeader('Content-Disposition', 'attachment; filename=contacts.xlsx');
+        res.setHeader('Content-Disposition', `attachment; filename=contacts_${new Date().toISOString().split('T')[0]}.xlsx`);
 
         await workbook.xlsx.write(res);
         res.end();
