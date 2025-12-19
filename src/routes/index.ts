@@ -18,13 +18,14 @@ import privilegeRoutes from './privileges';
 import customerServiceRoutes from './customerServices';
 import businessHourRoutes from './businessHours';
 import analyticsRoutes from './analytics';
-import { authMiddleware, apiKeyDevice, deviceAccessTokenRequired } from '../middleware/auth';
+import { authMiddleware, apiKeyDevice, deviceAccessTokenRequired, deviceTokenOnly } from '../middleware/auth';
 import superAdminRoutes from './superAdmin';
 import deviceApi from './deviceApi';
 import courseRoutes from './course';
 import tutorsRoutes from './tutors';
 import whatsappGroupRoutes from './whatsappGroups';
 import algorithmicsRoutes from './algorithmics';
+import deviceApiExternal from './deviceApiExternal';
 
 const router = Router();
 
@@ -52,7 +53,9 @@ router.use('/subscription-plans', authMiddleware, subsPlanRoutes);
 router.use('/customer-services', customerServiceRoutes);
 router.use('/analytics', authMiddleware, analyticsRoutes);
 router.use('/super-admin', superAdminRoutes);
-router.use('/api', apiKeyDevice, deviceAccessTokenRequired, deviceApi);
+router.use('/api', deviceTokenOnly, deviceApi);
+// Reserve for future third-party usage
+router.use('/api-external', apiKeyDevice, deviceApiExternal);
 router.use('/algorithmics', authMiddleware, algorithmicsRoutes);
 router.use('/course', authMiddleware, courseRoutes); // 🔥 Tambahkan ini!
 router.use('/tutors', tutorsRoutes);

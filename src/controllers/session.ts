@@ -235,12 +235,13 @@ export const getSessions: RequestHandler = async (req, res) => {
 
 export const getSessionsByDeviceApiKey: RequestHandler = async (req, res) => {
     try {
-        const deviceApiKey = req.params.deviceApiKey;
+        const deviceApiKey = String(req.params.deviceApiKey || '').trim();
+        if (!deviceApiKey) {
+            return res.status(400).json({ message: 'deviceApiKey is required' });
+        }
 
         const existingDevice = await prisma.device.findUnique({
-            where: {
-                apiKey: deviceApiKey,
-            },
+            where: { apiKey: deviceApiKey },
         });
 
         if (!existingDevice) {
@@ -248,24 +249,14 @@ export const getSessionsByDeviceApiKey: RequestHandler = async (req, res) => {
         }
 
         const sessions = await prisma.session.findMany({
-            where: {
-                deviceId: existingDevice.pkId,
-                id: { contains: 'config' },
-            },
-            select: {
-                sessionId: true,
-                data: true,
-            },
+            where: { deviceId: existingDevice.pkId, id: { contains: 'config' } },
+            select: { sessionId: true, data: true },
         });
 
-        if (!sessions) {
-            return res.status(404).json({ message: 'Session not found' });
-        }
-
-        res.status(200).json(sessions);
+        return res.status(200).json(sessions);
     } catch (error) {
         logger.error(error);
-        res.status(500).json({ message: 'Internal server error' });
+        return res.status(500).json({ message: 'Internal server error' });
     }
 };
 

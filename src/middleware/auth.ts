@@ -289,4 +289,67 @@ export const deviceAccessTokenRequired: RequestHandler = async (req, res, next) 
     }
 };
 
+export const deviceTokenOnly: RequestHandler = async (req, res, next) => {
+    try {
+        const authHeader = req.header('Authorization');
+        if (!authHeader || !authHeader.startsWith('Bearer ')) {
+            return res
+                .status(401)
+                .json({ message: 'Authentication failed: Missing device access token' });
+        }
+
+        const token = authHeader.substring('Bearer '.length);
+        if (!token) {
+            return res
+                .status(401)
+                .json({ message: 'Authentication failed: Missing device access token' });
+        }
+
+        const payload = verifyDeviceAccessToken(token);
+        if (!payload || payload.purpose !== 'device-api') {
+            return res
+                .status(401)
+                .json({ message: 'Authentication failed: Invalid device access token' });
+        }
+
+        // Resolve device (UUID) and enforce ownership
+        const device = await prisma.device.findFirst({
+            where: {
+                id: payload.deviceId,
+                userId: payload.userId,
+            },
+            include: { user: true },
+        });
+
+        if (!device) {
+            return res.status(401).json({ message: 'Authentication failed: Device not found' });
+        }
+
+        const existingSession = await prisma.session.findFirst({
+            where: {
+                deviceId: device.pkId,
+                id: { contains: 'config' },
+            },
+        });
+
+        if (!existingSession) {
+            return res.status(401).json({ message: 'Authentication failed: Session not found' });
+        }
+
+        req.authenticatedDevice = existingSession as any;
+        (req.authenticatedDevice as any).deviceUuid = device.id;
+        req.authenticatedUser = device.user as any;
+
+        // attach for downstream audit/debug (do not log tokens)
+        (req as any).deviceAccessToken = payload;
+        (req as any).clientIp = getClientIp(req);
+
+        return next();
+    } catch (e) {
+        return res
+            .status(401)
+            .json({ message: 'Authentication failed: Invalid or expired device access token' });
+    }
+};
+
 export default authMiddleware;
