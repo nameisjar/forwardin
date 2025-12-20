@@ -20,6 +20,17 @@ import { getSocketIO } from './socket';
 import { Server } from 'socket.io';
 import fs from 'fs';
 import { WhatsAppGroupService } from './services/whatsappGroup';
+import {
+    getOrCreateSessionState,
+    getSessionState,
+    updateConnectionState,
+    markConnectionSuccessful,
+    isConnectionSuccessful,
+    isSessionConnected,
+    getSessionQR,
+    getLastDisconnect,
+    removeSessionState,
+} from './utils/sessionState';
 
 type Instance = WASocket & {
     destroy: () => Promise<void>;
@@ -101,10 +112,13 @@ export async function createInstance(options: createInstanceOptions) {
         sseCleanup,
     } = options;
     const configID = `${SESSION_CONFIG_ID}-${sessionId}`;
-    let connectionState: Partial<ConnectionState> = { connection: 'close' };
     
-    // 🔧 FIX: Flag untuk mencegah destroy setelah koneksi berhasil
-    let connectionSuccessful = false;
+    // 🔧 FIX: Gunakan centralized state management (Issue 3.5)
+    // State disimpan di Map global, bukan local variable yang di-capture closure
+    const sessionState = getOrCreateSessionState(sessionId, deviceId);
+    
+    // Helper untuk akses state terkini (selalu ambil dari Map, bukan closure)
+    const getState = () => getSessionState(sessionId);
 
     // 🆕 Register SSE connection
     if (SSE && res) {
@@ -121,7 +135,8 @@ export async function createInstance(options: createInstanceOptions) {
             logger.info({ deviceId, sessionId }, '🔧 [RACE CONDITION FIX] SSE connection removed from tracking BEFORE async cleanup');
         }
         instances.delete(sessionId);
-        logger.info({ sessionId }, '🔧 [RACE CONDITION FIX] Instance removed from map BEFORE async cleanup');
+        removeSessionState(sessionId); // 🔧 FIX: Cleanup centralized state
+        logger.info({ sessionId }, '🔧 [RACE CONDITION FIX] Instance and state removed from maps BEFORE async cleanup');
         
         try {
             const subDirectoryPath = `media/S${sessionId}`;
@@ -191,7 +206,10 @@ export async function createInstance(options: createInstanceOptions) {
     };
 
     const handleConnectionClose = () => {
-        const code = (connectionState.lastDisconnect?.error as Boom)?.output?.statusCode;
+        // 🔧 FIX: Gunakan centralized state (Issue 3.5)
+        const currentState = getState();
+        const lastDisconnect = currentState?.connectionState.lastDisconnect;
+        const code = (lastDisconnect?.error as Boom)?.output?.statusCode;
         const restartRequired = code === DisconnectReason.restartRequired;
         const doNotReconnect = !shouldReconnect(sessionId);
         
@@ -279,10 +297,14 @@ export async function createInstance(options: createInstanceOptions) {
     };
 
     const handleNormalConnectionUpdate = async () => {
-        if (connectionState.qr?.length) {
+        // 🔧 FIX: Gunakan centralized state (Issue 3.5)
+        const currentState = getState();
+        const qrCode = currentState?.connectionState.qr;
+        
+        if (qrCode?.length) {
             if (res && !res.headersSent) {
                 try {
-                    const qr = await toDataURL(connectionState.qr);
+                    const qr = await toDataURL(qrCode);
                     res.status(200).json({ qr, sessionId });
                     return;
                 } catch (e) {
@@ -299,14 +321,19 @@ export async function createInstance(options: createInstanceOptions) {
     };
 
     const handleSSEConnectionUpdate = async () => {
+        // 🔧 FIX: Gunakan centralized state (Issue 3.5)
+        const currentState = getState();
+        const qrCode = currentState?.connectionState.qr;
+        const connSuccessful = currentState?.connectionSuccessful ?? false;
+        
         let qr: string | undefined = undefined;
         let qrAscii: string | undefined = undefined;
 
-        if (connectionState.qr?.length) {
+        if (qrCode?.length) {
             try {
-                qr = await toDataURL(connectionState.qr);
+                qr = await toDataURL(qrCode);
                 try {
-                    qrAscii = await qrToString(connectionState.qr, {
+                    qrAscii = await qrToString(qrCode, {
                         type: 'terminal',
                         small: true,
                     });
@@ -325,7 +352,7 @@ export async function createInstance(options: createInstanceOptions) {
         // 🔧 FIX: Check if response is still writable, tapi JANGAN destroy jika koneksi sudah berhasil
         if (!res || res.writableEnded) {
             // Hanya destroy jika koneksi BELUM berhasil (masih dalam proses pairing)
-            if (!connectionSuccessful) {
+            if (!connSuccessful) {
                 logger.info({ sessionId, deviceId }, 'SSE stream closed before connection success - destroying session');
                 destroy();
             } else {
@@ -337,7 +364,7 @@ export async function createInstance(options: createInstanceOptions) {
         // If we have QR and reached max generations, end gracefully
         if (qr && currentGenerations >= maxGenerations) {
             const data = { 
-                ...connectionState, 
+                ...(currentState?.connectionState || {}), 
                 qr, 
                 qrRaw: qrAscii, 
                 maxGenerationsReached: true,
@@ -353,7 +380,7 @@ export async function createInstance(options: createInstanceOptions) {
             return;
         }
 
-        const data = { ...connectionState, qr, qrRaw: qrAscii };
+        const data = { ...(currentState?.connectionState || {}), qr, qrRaw: qrAscii };
         if (qr) SSEQRGenerations.set(sessionId, currentGenerations + 1);
 
         try {
@@ -361,7 +388,7 @@ export async function createInstance(options: createInstanceOptions) {
         } catch (e) {
             logger.error(e, 'Error writing SSE data');
             // 🔧 FIX: Jangan destroy jika koneksi sudah berhasil
-            if (!connectionSuccessful) {
+            if (!connSuccessful) {
                 destroy();
             }
             return;
@@ -412,15 +439,16 @@ export async function createInstance(options: createInstanceOptions) {
             }
         }
 
-        connectionState = update;
+        // 🔧 FIX: Update centralized state (Issue 3.5)
+        updateConnectionState(sessionId, update);
         const { connection } = update;
 
         if (connection === 'open') {
             retries.delete(sessionId);
             SSEQRGenerations.delete(sessionId);
 
-            // 🔧 FIX: Set flag connectionSuccessful saat koneksi berhasil
-            connectionSuccessful = true;
+            // 🔧 FIX: Mark connection successful di centralized state
+            markConnectionSuccessful(sessionId);
 
             // ?back here: forbid duplicate phone numbers
             const phone = sock.user?.id.split(':')[0];
@@ -546,8 +574,8 @@ export async function createInstance(options: createInstanceOptions) {
                 const message = m.messages[0];
                 if (!message.key || message.key.fromMe || m.type !== 'notify') return;
 
-                // 🆕 Check if connection is still open before reading messages
-                if (connectionState.connection !== 'open') {
+                // 🔧 FIX: Check connection via centralized state (Issue 3.5)
+                if (!isSessionConnected(sessionId)) {
                     logger.debug({ sessionId }, 'Skipping read message - connection not open');
                     return;
                 }
@@ -568,8 +596,8 @@ export async function createInstance(options: createInstanceOptions) {
     // 🆕 Listen untuk grup baru yang di-join
     sock.ev.on('groups.upsert', async (groups) => {
         try {
-            // 🆕 Check if connection is still open
-            if (connectionState.connection !== 'open') {
+            // 🔧 FIX: Check connection via centralized state (Issue 3.5)
+            if (!isSessionConnected(sessionId)) {
                 logger.debug({ sessionId }, 'Skipping groups.upsert - connection not open');
                 return;
             }
@@ -651,8 +679,8 @@ export async function createInstance(options: createInstanceOptions) {
     // 🆕 Listen untuk update grup (nama berubah, participant berubah, dll)
     sock.ev.on('groups.update', async (updates) => {
         try {
-            // 🆕 Check if connection is still open
-            if (connectionState.connection !== 'open') {
+            // 🔧 FIX: Check connection via centralized state (Issue 3.5)
+            if (!isSessionConnected(sessionId)) {
                 logger.debug({ sessionId }, 'Skipping groups.update - connection not open');
                 return;
             }
@@ -722,8 +750,8 @@ export async function createInstance(options: createInstanceOptions) {
     // 🆕 Listen untuk participant changes (termasuk ketika device keluar/dikick dari grup)
     sock.ev.on('group-participants.update', async (update) => {
         try {
-            // 🆕 Check if connection is still open
-            if (connectionState.connection !== 'open') {
+            // 🔧 FIX: Check connection via centralized state (Issue 3.5)
+            if (!isSessionConnected(sessionId)) {
                 logger.debug({ sessionId }, 'Skipping group-participants.update - connection not open');
                 return;
             }
@@ -828,8 +856,8 @@ export async function createInstance(options: createInstanceOptions) {
     // 🆕 Listen untuk chats.update - mendeteksi ketika keluar dari grup
     sock.ev.on('chats.update', async (chats) => {
         try {
-            // 🆕 Check if connection is still open
-            if (connectionState.connection !== 'open') {
+            // 🔧 FIX: Check connection via centralized state (Issue 3.5)
+            if (!isSessionConnected(sessionId)) {
                 logger.debug({ sessionId }, 'Skipping chats.update - connection not open');
                 return;
             }
@@ -1055,3 +1083,13 @@ export async function sendButtonMessage(
         throw error;
     }
 }
+
+// 🔧 FIX: Re-export session state utilities untuk monitoring (Issue 3.5)
+export { 
+    getSessionState,
+    getSessionStateSummary,
+    isSessionConnected,
+    isConnectionSuccessful,
+    getActiveSessionIds,
+    getSessionCount,
+} from './utils/sessionState';

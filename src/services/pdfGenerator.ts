@@ -473,7 +473,12 @@ const loadTemplateAndImages = async (): Promise<{ template: string; images: Reco
  */
 const generatePDFInternal = async (data: MonthlyFeedbackData): Promise<Buffer> => {
     const startTime = Date.now();
-    logger.info('[Puppeteer] Starting PDF generation for:', data.studentName);
+    // 🔒 Log tanpa nama student lengkap (privacy)
+    logger.info('[Puppeteer] Starting PDF generation', { 
+        studentId: data.studentName ? `${data.studentName.substring(0, 2)}***` : 'unknown',
+        courseName: data.courseName,
+        month: data.month 
+    });
     
     let page: Page | null = null;
     
@@ -585,14 +590,14 @@ export const generateMonthlyFeedbackPDFWithPuppeteer = async (data: MonthlyFeedb
             try {
                 // Only log attempt number if it's a retry
                 if (attempt > 1) {
-                    logger.info(`[Puppeteer] Retry ${attempt}/${maxRetries} for: ${data.studentName}`);
+                    logger.info(`[Puppeteer] Retry ${attempt}/${maxRetries} for: ${data.studentName?.substring(0, 2)}***`);
                 }
                 
                 const result = await generatePDFInternal(data);
                 
                 // Log success only if it was a retry
                 if (attempt > 1) {
-                    logger.info(`[Puppeteer] ✅ Succeeded on retry ${attempt} for: ${data.studentName}`);
+                    logger.info(`[Puppeteer] ✅ Succeeded on retry ${attempt} for: ${data.studentName?.substring(0, 2)}***`);
                 }
                 
                 return result;
@@ -613,9 +618,9 @@ export const generateMonthlyFeedbackPDFWithPuppeteer = async (data: MonthlyFeedb
         }
         
         // All retries failed
-        logger.error(`[Puppeteer] All ${maxRetries} attempts failed for: ${data.studentName} - ${lastError?.message}`);
+        logger.error(`[Puppeteer] All ${maxRetries} attempts failed for: ${data.studentName?.substring(0, 2)}*** - ${lastError?.message}`);
         throw lastError || new Error('PDF generation failed after all retries');
-    }, `pdf-${data.studentName}-${Date.now()}`);
+    }, `pdf-${data.studentName?.substring(0, 2)}***-${Date.now()}`);
 };
 
 /**

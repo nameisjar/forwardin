@@ -1,6 +1,7 @@
 import prisma from '../utils/db';
 import logger from '../config/logger';
 import { getInstance } from '../whatsapp';
+import { redactPhone } from '../utils/logRedaction';
 
 /**
  * Send document via WhatsApp
@@ -13,9 +14,10 @@ export const sendDocument = async (
     caption?: string
 ): Promise<void> => {
     try {
-        logger.info('sendDocument called with:', {
+        // 🔒 Log tanpa nomor telepon lengkap
+        logger.info('sendDocument called', {
             deviceId,
-            recipient,
+            recipient: redactPhone(recipient),
             fileName,
             bufferSize: documentBuffer.length,
             hasCaption: !!caption
@@ -69,7 +71,7 @@ export const sendDocument = async (
 
         logger.info('WhatsApp session found and connected:', {
             sessionId,
-            user: session.user?.id
+            user: session.user?.id ? redactPhone(session.user.id) : undefined
         });
 
         // Format recipient number (ensure it has @s.whatsapp.net)
@@ -77,7 +79,7 @@ export const sendDocument = async (
             ? recipient 
             : `${recipient}@s.whatsapp.net`;
 
-        logger.info('Sending document to:', formattedRecipient);
+        logger.debug('Sending document', { recipient: redactPhone(formattedRecipient) });
 
         // Send document
         const result = await session.sendMessage(formattedRecipient, {
@@ -87,15 +89,15 @@ export const sendDocument = async (
             caption: caption || ''
         });
 
-        logger.info(`Document sent successfully to ${recipient}`, {
+        logger.info(`Document sent successfully`, {
+            recipient: redactPhone(recipient),
             messageId: result?.key?.id
         });
     } catch (error) {
         logger.error('Error in sendDocument:', {
             error: error instanceof Error ? error.message : String(error),
-            stack: error instanceof Error ? error.stack : undefined,
             deviceId,
-            recipient
+            recipient: redactPhone(recipient)
         });
         throw error; // Re-throw original error instead of generic one
     }
@@ -124,9 +126,12 @@ export const sendMessage = async (
             text: message
         });
 
-        logger.info(`Message sent successfully to ${recipient}`);
+        logger.info('Message sent successfully', { recipient: redactPhone(recipient) });
     } catch (error) {
-        logger.error('Error sending message:', error);
+        logger.error('Error sending message', { 
+            error: error instanceof Error ? error.message : String(error),
+            recipient: redactPhone(recipient)
+        });
         throw new Error('Failed to send message via WhatsApp');
     }
 };

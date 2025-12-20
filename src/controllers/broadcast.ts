@@ -25,6 +25,7 @@ import {
     loadNaturalDelayConfig,
     NaturalDelayResult,
 } from '../services/naturalDelay';
+import { redactPhone } from '../utils/logRedaction';
 
 // Constants untuk retry mechanism
 const MAX_ATTEMPTS = 5;
@@ -129,7 +130,7 @@ async function sendMessageWithRetry(
             }
 
             if (!result.success) {
-                logger.warn({ jid, attempt, error: result.error }, 'Message send failed');
+                logger.warn({ jid: redactPhone(jid), attempt, error: result.error }, 'Message send failed');
                 
                 // Check if it's a rate limit error
                 const errorStr = String(result.error || '').toLowerCase();
@@ -137,7 +138,7 @@ async function sendMessageWithRetry(
                 
                 if (attempt < maxRetries) {
                     const waitTime = getRetryDelay(attempt, BASE_RETRY_DELAY);
-                    logger.warn({ jid, attempt, waitTime }, `Retrying in ${waitTime}ms...`);
+                    logger.warn({ jid: redactPhone(jid), attempt, waitTime }, `Retrying in ${waitTime}ms...`);
                     await delayMs(waitTime);
                     continue;
                 }
@@ -154,7 +155,7 @@ async function sendMessageWithRetry(
 
             logger.error(
                 { 
-                    jid, 
+                    jid: redactPhone(jid), 
                     attempt, 
                     maxRetries,
                     isRateLimit, 
@@ -169,7 +170,7 @@ async function sendMessageWithRetry(
             if (!isLastAttempt && (isRateLimit || isTransient)) {
                 const waitTime = getRetryDelay(attempt, BASE_RETRY_DELAY);
                 logger.warn(
-                    { jid, attempt, waitTime, isRateLimit, isTransient },
+                    { jid: redactPhone(jid), attempt, waitTime, isRateLimit, isTransient },
                     `Retrying in ${waitTime}ms...`
                 );
                 await delayMs(waitTime);

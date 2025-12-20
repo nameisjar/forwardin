@@ -5,22 +5,32 @@ import { BufferJSON, initAuthCreds } from '@whiskeysockets/baileys';
 import prisma from './db';
 import logger from '../config/logger';
 import { PrismaClientKnownRequestError } from '@prisma/client/runtime/library';
+import { encrypt, decrypt, isEncryptionEnabled } from './encryption';
 
 const fixId = (id: string) => id.replace(/\//g, '__').replace(/:/g, '-');
 
 export async function useSession(sessionId: string, deviceId: number) {
     const model = prisma.session;
 
+    /**
+     * Write session data to database with encryption
+     * Data sensitif (credentials, keys) akan dienkripsi sebelum disimpan
+     */
     const write = async (data: any, id: string) => {
-        data = JSON.stringify(data, BufferJSON.replacer);
+        // Serialize data
+        let serialized = JSON.stringify(data, BufferJSON.replacer);
+        
+        // 🔐 Encrypt sensitive session data before storing
+        // Credentials dan signal keys berisi private keys yang harus dilindungi
+        serialized = encrypt(serialized);
+        
         id = fixId(id);
         try {
             await model.upsert({
                 select: { pkId: true },
-                create: { data, id, sessionId, deviceId },
-                update: { data },
+                create: { data: serialized, id, sessionId, deviceId },
+                update: { data: serialized },
                 where: { sessionId_id: { id, sessionId } },
-                // where: { sessionId },
             });
         } catch (e: any) {
             logger.info(id);
@@ -28,14 +38,21 @@ export async function useSession(sessionId: string, deviceId: number) {
         }
     };
 
+    /**
+     * Read session data from database with decryption
+     * Mendukung backward compatibility dengan data legacy (tidak terenkripsi)
+     */
     const read = async (id: string) => {
         try {
             const { data } = await model.findUniqueOrThrow({
                 select: { data: true },
                 where: { sessionId_id: { id: fixId(id), sessionId } },
-                // where: { sessionId },
             });
-            return JSON.parse(data, BufferJSON.reviver);
+            
+            // 🔐 Decrypt data (gracefully handles legacy unencrypted data)
+            const decrypted = decrypt(data);
+            
+            return JSON.parse(decrypted, BufferJSON.reviver);
         } catch (e) {
             if (e instanceof PrismaClientKnownRequestError && e.code === 'P2025') {
                 logger.info({ id }, 'Trying to read non existent session data');

@@ -4,6 +4,7 @@ import logger from '../config/logger';
 import { sendDocument } from '../services/whatsapp';
 import { generateMonthlyFeedbackPDFWithPuppeteer } from '../services/pdfGenerator';
 import { executeWithRateLimit, RateLimitResult, setDeviceAsPersonal, setDeviceAsShared } from '../services/rateLimiter';
+import { redactPhone } from '../utils/logRedaction';
 
 // 🔥 Environment variables untuk role checking
 const ADMIN_ID = Number(process.env.ADMIN_ID);
@@ -121,7 +122,7 @@ export const sendMonthlyFeedback: RequestHandler = async (req, res) => {
         } = req.body;
 
         // Log hanya field penting (bukan full request body)
-        logger.info('Request:', { studentName, courseName, month, deviceId, recipientCount: recipients?.length || (recipientPhone ? 1 : 0) });
+        logger.info('Request:', { studentName: studentName?.substring(0, 2) + '***', courseName, month, deviceId, recipientCount: recipients?.length || (recipientPhone ? 1 : 0) });
 
         const rawRecipientList = recipients && Array.isArray(recipients) && recipients.length > 0 
             ? recipients 
@@ -215,7 +216,7 @@ Jika ada hal yang ingin ditanyakan mengenai hasil ini atau tentang perkembangan 
 
         for (const recipient of recipientList) {
             try {
-                logger.info('Sending to:', recipient);
+                logger.info('Sending to:', redactPhone(recipient));
                 
                 // 🔥 Menggunakan rate limiter untuk pengiriman WhatsApp
                 const { result: sendResult, rateLimitInfo } = await executeWithRateLimit(
@@ -241,13 +242,13 @@ Jika ada hal yang ingin ditanyakan mengenai hasil ini atau tentang perkembangan 
                 
                 // Log info rate limit jika ada delay
                 if (rateLimitInfo.delayed) {
-                    logger.info(`✅ Sent to ${recipient} (delayed ${Math.round(rateLimitInfo.delayMs/1000)}s)`);
+                    logger.info(`✅ Sent to ${redactPhone(recipient)} (delayed ${Math.round(rateLimitInfo.delayMs/1000)}s)`);
                 } else {
-                    logger.info('✅ Sent to:', recipient);
+                    logger.info('✅ Sent to:', redactPhone(recipient));
                 }
                 
             } catch (sendError) {
-                logger.error('❌ Failed to send to:', recipient, sendError);
+                logger.error('❌ Failed to send to:', redactPhone(recipient), sendError);
                 sendResults.push({ 
                     recipient, 
                     status: 'failed', 

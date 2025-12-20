@@ -12,6 +12,7 @@ import { error } from 'console';
 import { internalServerErrorHandler, notFoundHandler } from './middleware/errorHandler';
 import { warmupBrowser } from './services/pdfGenerator';
 import { shutdownRateLimiter } from './services/rateLimiter';
+import { validateEncryptionSetup, isEncryptionEnabled } from './utils/encryption';
 
 // Import scheduler untuk memastikan broadcast scheduler berjalan
 import './controllers/broadcast';
@@ -63,6 +64,25 @@ prisma
     });
 
 (async () => {
+    // 🔐 Validate encryption setup before initializing WhatsApp sessions
+    const encryptionStatus = validateEncryptionSetup();
+    if (!encryptionStatus.valid) {
+        logger.error(`[Security] ${encryptionStatus.message}`);
+        logger.error('[Security] Please set SESSION_ENCRYPTION_KEY environment variable');
+        logger.error('[Security] Generate a key with: node -e "console.log(require(\'crypto\').randomBytes(32).toString(\'hex\'))"');
+        // In production, you might want to exit here:
+        // process.exit(1);
+    } else {
+        logger.info(`[Security] ${encryptionStatus.message}`);
+    }
+
+    // Warn if encryption is disabled in production
+    if (process.env.NODE_ENV === 'production' && !isEncryptionEnabled()) {
+        logger.warn('[Security] ⚠️ SESSION ENCRYPTION IS DISABLED IN PRODUCTION!');
+        logger.warn('[Security] ⚠️ WhatsApp credentials are stored in PLAINTEXT');
+        logger.warn('[Security] ⚠️ Set SESSION_ENCRYPTION_KEY to enable encryption');
+    }
+
     await init();
     
     // 🔥 Pre-warm Puppeteer browser for PDF generation

@@ -15,6 +15,7 @@ import fs from 'fs';
 import path from 'path';
 import { getSocketIO } from '../socket';
 import { Server } from 'socket.io';
+import { safeMessageContext, redactPhone, redactMessageObject } from '../utils/logRedaction';
 
 const getKeyAuthor = (key: WAMessageKey | undefined | null) =>
     (key?.fromMe ? 'me' : key?.participant || key?.remoteJid) || '';
@@ -101,7 +102,14 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                             const io: Server = getSocketIO();
 
                             if (message.key.fromMe) {
-                                logger.warn({ sessionId, data }, 'outgoing messages');
+                                // 🔒 Log tanpa data sensitif (message content)
+                                logger.debug(
+                                    safeMessageContext(sessionId, message.key, {
+                                        status: data.status,
+                                        messageType: redactMessageObject(data.message as any),
+                                    }),
+                                    'outgoing message event'
+                                );
 
                                 let status = 'pending';
                                 if (data.status >= 2) status = 'server_ack';
@@ -182,7 +190,13 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                                     );
                                 }
                             } else {
-                                logger.warn({ sessionId, data }, 'incoming messages');
+                                // 🔒 Log tanpa data sensitif (message content)
+                                logger.debug(
+                                    safeMessageContext(sessionId, message.key, {
+                                        messageType: redactMessageObject(data.message as any),
+                                    }),
+                                    'incoming message event'
+                                );
                                 if (!jid.includes('@g.us')) {
                                     // Run both replies but don't block the main flow; catch rejections
                                     Promise.allSettled([
