@@ -250,9 +250,19 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
             try {
                 if (key.remoteJid !== 'status@broadcast') {
                     await prisma.$transaction(async (tx) => {
+                        // 🔧 FIX: Tambah select untuk readBy dan isGroup
+                        const selectFields = {
+                            pkId: true,
+                            status: true,
+                            waMessageId: true,
+                            isGroup: true,
+                            readBy: true,
+                        };
+
                         // Prefer matching by WhatsApp message id (new, reliable)
                         const outgoingByWaId = await tx.outgoingMessage.findFirst({
                             where: { waMessageId: key.id!, sessionId },
+                            select: selectFields,
                         });
 
                         // Legacy fallbacks (older rows)
@@ -260,12 +270,14 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                             ? null
                             : await tx.outgoingMessage.findFirst({
                                   where: { id: key.id!, sessionId },
+                                  select: selectFields,
                               });
 
                         const prevOutMessagesByComposite =
                             !outgoingByWaId && !prevOutMessages
                                 ? await tx.outgoingMessage.findFirst({
                                       where: { id: key.id!, to: key.remoteJid!, sessionId },
+                                      select: selectFields,
                                   })
                                 : null;
 
@@ -345,10 +357,27 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                                     'Updating outgoing message status to higher level',
                                 );
 
+                                // 🔧 FIX: Untuk pesan individual, catat reader saat status = read
+                                const updateData: any = { 
+                                    status, 
+                                    waMessageId: outgoingMessage.waMessageId || key.id!, 
+                                    updatedAt: new Date() 
+                                };
+
+                                // Jika status read dan bukan grup, catat remoteJid sebagai reader
+                                if (status === 'read' && !outgoingMessage.isGroup && key.remoteJid) {
+                                    const prev = Array.isArray(outgoingMessage.readBy) 
+                                        ? (outgoingMessage.readBy as string[]) 
+                                        : [];
+                                    const readerSet = new Set<string>(prev);
+                                    readerSet.add(key.remoteJid);
+                                    updateData.readBy = Array.from(readerSet);
+                                }
+
                                 // Always update by pkId to avoid ambiguity
                                 await tx.outgoingMessage.update({
                                     where: { pkId: outgoingMessage.pkId },
-                                    data: { status, waMessageId: outgoingMessage.waMessageId || key.id!, updatedAt: new Date() },
+                                    data: updateData,
                                 });
                             } else {
                                 logger.debug(
@@ -442,7 +471,7 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                         });
                     }
 
-                    // === Track group read count for outgoing messages ===
+                    // === Track read receipts for outgoing messages (both group & individual) ===
                     if (!key.fromMe) return;
                     if (!key.id) return;
 
@@ -460,11 +489,11 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                             isGroup: true,
                             readBy: true,
                             waMessageId: true,
+                            to: true,
                         },
                     });
 
                     if (!outgoing) return;
-                    if (!outgoing.isGroup) return;
 
                     const receiptType = String(
                         (receipt as any)?.receipt || (receipt as any)?.type || '',
@@ -484,8 +513,16 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                     const prev = Array.isArray(outgoing.readBy) ? (outgoing.readBy as any[]) : [];
                     const set = new Set<string>(prev.map((x) => String(x)));
 
+                    // 🔧 FIX: Track reader untuk SEMUA pesan (group & individual)
                     const readerJid = (receipt as any)?.userJid;
-                    if (hasRead && readerJid) set.add(String(readerJid));
+                    if (hasRead) {
+                        if (readerJid) {
+                            set.add(String(readerJid));
+                        } else if (!outgoing.isGroup && outgoing.to) {
+                            // Untuk pesan individual tanpa userJid, gunakan recipient (to)
+                            set.add(String(outgoing.to));
+                        }
+                    }
 
                     const statusHierarchy: Record<string, number> = {
                         pending: 1,
