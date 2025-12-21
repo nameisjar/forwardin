@@ -126,7 +126,92 @@ export async function createInstance(options: createInstanceOptions) {
         logger.info({ deviceId, sessionId }, 'SSE connection registered');
     }
 
-    // back here: delete temporary folders
+    // 🔧 REFACTORED: Helper functions untuk cleaner destroy logic (Issue 3.4)
+    
+    /**
+     * Cleanup database records - nullify sessionId untuk messages
+     */
+    const cleanupDatabaseRecords = async (): Promise<{ success: boolean; errors: string[] }> => {
+        const errors: string[] = [];
+        
+        const operations = [
+            { name: 'Message', fn: () => prisma.message.updateMany({ where: { sessionId }, data: { sessionId: null } }) },
+            { name: 'IncomingMessage', fn: () => prisma.incomingMessage.updateMany({ where: { sessionId }, data: { sessionId: null } }) },
+            { name: 'OutgoingMessage', fn: () => prisma.outgoingMessage.updateMany({ where: { sessionId }, data: { sessionId: null } }) },
+            { name: 'Session', fn: () => prisma.session.deleteMany({ where: { sessionId } }) },
+        ];
+        
+        const results = await Promise.allSettled(operations.map(op => op.fn()));
+        
+        results.forEach((result, index) => {
+            if (result.status === 'rejected') {
+                const errorMsg = `${operations[index].name}: ${result.reason?.message || 'Unknown error'}`;
+                errors.push(errorMsg);
+                logger.error({ error: result.reason, operation: operations[index].name, sessionId }, 'Database cleanup failed');
+            }
+        });
+        
+        return { success: errors.length === 0, errors };
+    };
+    
+    /**
+     * Cleanup media files - delete session media directory
+     */
+    const cleanupMediaFiles = async (): Promise<{ success: boolean; error?: string }> => {
+        const subDirectoryPath = `media/S${sessionId}`;
+        
+        return new Promise((resolve) => {
+            fs.rm(subDirectoryPath, { recursive: true }, (err) => {
+                if (err) {
+                    if (err.code !== 'ENOENT') {
+                        logger.error({ error: err, path: subDirectoryPath }, 'Error deleting media directory');
+                        resolve({ success: false, error: err.message });
+                    } else {
+                        logger.debug({ path: subDirectoryPath }, 'Media directory does not exist, skipping deletion');
+                        resolve({ success: true }); // Not an error if doesn't exist
+                    }
+                } else {
+                    logger.info({ path: subDirectoryPath }, 'Media directory deleted successfully');
+                    resolve({ success: true });
+                }
+            });
+        });
+    };
+    
+    /**
+     * Cleanup WhatsApp groups from database
+     */
+    const cleanupWhatsAppGroups = async (): Promise<{ success: boolean; error?: string }> => {
+        try {
+            await WhatsAppGroupService.clearWhatsAppGroups(deviceId, sessionId);
+            logger.info({ sessionId, deviceId }, 'WhatsApp groups cleared on session destroy');
+            return { success: true };
+        } catch (error: any) {
+            logger.error({ error, sessionId, deviceId }, 'Failed to clear WhatsApp groups on destroy');
+            return { success: false, error: error?.message || 'Unknown error' };
+        }
+    };
+    
+    /**
+     * Logout from WhatsApp
+     */
+    const cleanupWhatsAppSession = async (shouldLogout: boolean): Promise<{ success: boolean; error?: string }> => {
+        if (!shouldLogout) return { success: true };
+        
+        try {
+            await sock.logout();
+            return { success: true };
+        } catch (err: any) {
+            // Ignore "Connection Closed" error karena memang expected saat destroy
+            if (err?.message === 'Connection Closed') {
+                return { success: true }; // Expected, not an error
+            }
+            logger.error({ error: err, sessionId }, 'Error during logout');
+            return { success: false, error: err?.message || 'Unknown error' };
+        }
+    };
+
+    // Main destroy function - orchestrates all cleanup
     const destroy = async (logout = true) => {
         // 🔧 CRITICAL FIX: Delete dari Maps FIRST (before any async operations)
         // Ini mencegah race condition di mana destroy() lama menghapus entry baru
@@ -138,70 +223,56 @@ export async function createInstance(options: createInstanceOptions) {
         removeSessionState(sessionId); // 🔧 FIX: Cleanup centralized state
         logger.info({ sessionId }, '🔧 [RACE CONDITION FIX] Instance and state removed from maps BEFORE async cleanup');
         
-        try {
-            const subDirectoryPath = `media/S${sessionId}`;
-
-            // 🆕 Close SSE stream jika ada
-            if (sseCleanup) {
-                sseCleanup();
-            }
-
-            // Clear WhatsApp groups saat destroy session
+        // 🆕 Close SSE stream jika ada
+        if (sseCleanup) {
             try {
-                await WhatsAppGroupService.clearWhatsAppGroups(deviceId, sessionId);
-                logger.info({ sessionId, deviceId }, 'WhatsApp groups cleared on session destroy');
-            } catch (groupError) {
-                logger.error(
-                    { error: groupError, sessionId, deviceId },
-                    'Failed to clear WhatsApp groups on destroy'
-                );
+                sseCleanup();
+            } catch (e) {
+                logger.error({ error: e, sessionId }, 'Error closing SSE stream');
             }
-
-            await Promise.all([
-                // Logout dengan error handling untuk koneksi yang sudah terputus
-                logout && sock.logout().catch((err) => {
-                    // Ignore "Connection Closed" error karena memang expected saat destroy
-                    if (err?.message !== 'Connection Closed') {
-                        logger.error({ error: err, sessionId }, 'Error during logout');
-                    }
-                }),
-
-                prisma.message.updateMany({ where: { sessionId }, data: { sessionId: null } }),
-                prisma.incomingMessage.updateMany({
-                    where: { sessionId },
-                    data: {
-                        sessionId: null,
-                    },
-                }),
-                prisma.outgoingMessage.updateMany({
-                    where: { sessionId },
-                    data: {
-                        sessionId: null,
-                    },
-                }),
-                prisma.session.deleteMany({ where: { sessionId } }),
-
-                // Delete media folder dengan proper error handling untuk ENOENT
-                new Promise<void>((resolve) => {
-                    fs.rm(subDirectoryPath, { recursive: true }, (err) => {
-                        if (err) {
-                            // Hanya log error jika bukan ENOENT (file not found)
-                            if (err.code !== 'ENOENT') {
-                                logger.error({ error: err, path: subDirectoryPath }, 'Error deleting media directory');
-                            } else {
-                                logger.debug({ path: subDirectoryPath }, 'Media directory does not exist, skipping deletion');
-                            }
-                        } else {
-                            logger.info({ path: subDirectoryPath }, 'Media directory deleted successfully');
-                        }
-                        resolve();
-                    });
-                }),
-            ]);
-            
+        }
+        
+        // 🔧 REFACTORED: Run all cleanup operations in parallel with individual error handling
+        const cleanupResults = await Promise.allSettled([
+            cleanupWhatsAppSession(logout),
+            cleanupWhatsAppGroups(),
+            cleanupDatabaseRecords(),
+            cleanupMediaFiles(),
+        ]);
+        
+        // 🔧 Log summary of cleanup results
+        const [logoutResult, groupsResult, dbResult, mediaResult] = cleanupResults;
+        
+        const failures: string[] = [];
+        
+        if (logoutResult.status === 'fulfilled' && !logoutResult.value.success) {
+            failures.push(`Logout: ${logoutResult.value.error}`);
+        } else if (logoutResult.status === 'rejected') {
+            failures.push(`Logout: ${logoutResult.reason?.message || 'Unknown error'}`);
+        }
+        
+        if (groupsResult.status === 'fulfilled' && !groupsResult.value.success) {
+            failures.push(`WhatsApp Groups: ${groupsResult.value.error}`);
+        } else if (groupsResult.status === 'rejected') {
+            failures.push(`WhatsApp Groups: ${groupsResult.reason?.message || 'Unknown error'}`);
+        }
+        
+        if (dbResult.status === 'fulfilled' && !dbResult.value.success) {
+            failures.push(`Database: ${dbResult.value.errors.join(', ')}`);
+        } else if (dbResult.status === 'rejected') {
+            failures.push(`Database: ${dbResult.reason?.message || 'Unknown error'}`);
+        }
+        
+        if (mediaResult.status === 'fulfilled' && !mediaResult.value.success) {
+            failures.push(`Media Files: ${mediaResult.value.error}`);
+        } else if (mediaResult.status === 'rejected') {
+            failures.push(`Media Files: ${mediaResult.reason?.message || 'Unknown error'}`);
+        }
+        
+        if (failures.length > 0) {
+            logger.warn({ sessionId, deviceId, failures }, '⚠️ Session destroy completed with some failures');
+        } else {
             logger.info({ sessionId, deviceId }, '✅ Session destroy completed successfully');
-        } catch (e) {
-            logger.error(e, 'An error occurred during session destroy');
         }
     };
 
