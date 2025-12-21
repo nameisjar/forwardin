@@ -8,6 +8,10 @@ import { diskUpload, memoryUpload } from '../config/multer';
 import { isUUID } from '../utils/uuidChecker';
 import fs from 'fs';
 import { addWeeks, format } from 'date-fns'; // Anda bisa menggunakan date-fns atau moment.js untuk manipulasi tanggal
+import { sendDocument } from '../services/whatsapp';
+import { generateMonthlyFeedbackPDFWithPuppeteer } from '../services/pdfGenerator';
+import { executeWithRateLimit, RateLimitResult, setDeviceAsPersonal, setDeviceAsShared } from '../services/rateLimiter';
+import { redactPhone } from '../utils/logRedaction';
 
 export const sendMessages: RequestHandler = async (req, res) => {
     try {
@@ -2551,5 +2555,297 @@ export const createBroadcastReminderAlgo: RequestHandler = async (req, res) => {
     } catch (error) {
         logger.error(error);
         res.status(500).json({ message: 'Internal server error' });
+    }
+};
+
+// ============================================
+// MONTHLY FEEDBACK (deviceApi pattern)
+// ============================================
+
+// Environment variables untuk role checking
+const ADMIN_ID = Number(process.env.ADMIN_ID);
+const SUPER_ADMIN_ID = Number(process.env.SUPER_ADMIN_ID);
+
+// Helper function untuk check apakah user adalah admin
+function isAdminUser(privilegeId: number | undefined): boolean {
+    if (!privilegeId) return false;
+    return privilegeId === ADMIN_ID || privilegeId === SUPER_ADMIN_ID;
+}
+
+// Helper function untuk set device rate limit berdasarkan role user
+function configureDeviceRateLimit(deviceId: string, privilegeId: number | undefined): void {
+    if (isAdminUser(privilegeId)) {
+        setDeviceAsShared(deviceId);
+        logger.info(`[RateLimit] Device ${deviceId} configured as SHARED (Admin user)`);
+    } else {
+        setDeviceAsPersonal(deviceId);
+        logger.info(`[RateLimit] Device ${deviceId} configured as PERSONAL (Tutor user)`);
+    }
+}
+
+// Helper function untuk expand label menjadi daftar nomor kontak
+async function expandLabelToContacts(labelName: string, deviceId: string): Promise<string[]> {
+    try {
+        const contactsWithLabel = await prisma.contact.findMany({
+            where: {
+                ContactLabel: {
+                    some: {
+                        label: {
+                            name: {
+                                equals: labelName,
+                                mode: 'insensitive'
+                            }
+                        }
+                    }
+                },
+                contactDevices: {
+                    some: {
+                        device: {
+                            id: deviceId
+                        }
+                    }
+                }
+            },
+            select: {
+                phone: true
+            }
+        });
+
+        const phones = contactsWithLabel
+            .map(contact => contact.phone)
+            .filter((phone): phone is string => !!phone && phone.length > 0);
+
+        logger.info(`Label "${labelName}" expanded to ${phones.length} contacts for device ${deviceId}`);
+        return phones;
+    } catch (error) {
+        logger.error(`Error expanding label "${labelName}":`, error);
+        return [];
+    }
+}
+
+// Helper function untuk memproses recipients (expand label jika ada)
+async function processRecipientsForFeedback(recipients: string[], deviceId: string): Promise<string[]> {
+    const processedRecipients: string[] = [];
+
+    for (const recipient of recipients) {
+        if (typeof recipient === 'string' && recipient.toLowerCase().startsWith('label_')) {
+            const labelName = recipient.slice(6);
+            logger.info(`Expanding label: ${labelName}`);
+            const labelContacts = await expandLabelToContacts(labelName, deviceId);
+            processedRecipients.push(...labelContacts);
+        } else {
+            processedRecipients.push(recipient);
+        }
+    }
+
+    const uniqueRecipients = [...new Set(processedRecipients)];
+    logger.info(`Processed recipients: ${recipients.length} input -> ${uniqueRecipients.length} unique recipients`);
+    
+    return uniqueRecipients;
+}
+
+// Send monthly feedback with PDF (deviceApi pattern - uses req.authenticatedDevice)
+export const sendMonthlyFeedbackDevice: RequestHandler = async (req, res) => {
+    try {
+        logger.info('=== Starting monthly feedback send (deviceApi) ===');
+        
+        // Get device from authenticated token (NOT from body)
+        // deviceId is INT (pkId), deviceUuid is string (UUID) - added by middleware
+        const devicePkId = req.authenticatedDevice.deviceId;
+        const deviceUuid = (req.authenticatedDevice as any).deviceUuid as string;
+        const user = req.authenticatedUser; // User is set separately by middleware
+        
+        const {
+            studentName,
+            courseName,
+            month,
+            duration,
+            level,
+            code,
+            topicModule,
+            result,
+            skillsAcquired,
+            youtubeLink,
+            referralLink,
+            tutorComment,
+            recipientPhone,
+            recipients,
+            rating,
+            reportBy
+        } = req.body;
+
+        logger.info('Request:', { 
+            studentName: studentName?.substring(0, 2) + '***', 
+            courseName, 
+            month, 
+            deviceId: deviceUuid, 
+            recipientCount: recipients?.length || (recipientPhone ? 1 : 0) 
+        });
+
+        const rawRecipientList = recipients && Array.isArray(recipients) && recipients.length > 0 
+            ? recipients 
+            : (recipientPhone ? [recipientPhone] : []);
+
+        if (!studentName || !courseName || !month || rawRecipientList.length === 0 || !tutorComment) {
+            logger.warn('Missing required fields');
+            return res.status(400).json({ 
+                message: 'Missing required fields',
+                details: {
+                    studentName: !studentName ? 'required' : 'ok',
+                    courseName: !courseName ? 'required' : 'ok',
+                    month: !month ? 'required' : 'ok',
+                    recipients: rawRecipientList.length === 0 ? 'required (at least 1)' : 'ok',
+                    tutorComment: !tutorComment ? 'required' : 'ok'
+                }
+            });
+        }
+
+        // Device already verified by deviceTokenOnly middleware - no need to check again
+        logger.info('Device authenticated via token:', deviceUuid);
+
+        // Configure device rate limit based on user role
+        const privilegeId = (user as any)?.privilege?.pkId;
+        configureDeviceRateLimit(deviceUuid, privilegeId);
+
+        // Process recipients - expand labels to actual phone numbers
+        const recipientList = await processRecipientsForFeedback(rawRecipientList, deviceUuid);
+
+        if (recipientList.length === 0) {
+            logger.warn('No valid recipients after processing labels');
+            return res.status(400).json({ 
+                message: 'No valid recipients found. Labels may be empty or contacts not found.',
+                originalRecipients: rawRecipientList
+            });
+        }
+
+        // Generate PDF
+        logger.info('Generating PDF with Puppeteer...');
+        const pdfBuffer = await generateMonthlyFeedbackPDFWithPuppeteer({
+            studentName,
+            courseName,
+            month: Number(month),
+            duration: duration || `Bulan ke-${month}`,
+            level: level || '',
+            code: code || '',
+            topicModule: topicModule || '',
+            result: result || '',
+            skillsAcquired: skillsAcquired || '',
+            youtubeLink: youtubeLink || '',
+            referralLink: referralLink || '',
+            tutorComment: tutorComment || '',
+            rating: rating || 5,
+            reportBy: reportBy || 'Tutor'
+        });
+        logger.info('PDF generated successfully, size:', pdfBuffer.length, 'bytes');
+
+        const fileName = `Feedback_${studentName.replace(/\s+/g, '_')}_${courseName.replace(/\s+/g, '_')}_Bulan${month}.pdf`;
+        
+        const tutorName = reportBy || 'Tutor';
+        const caption = `Halo, Ayah/Bunda dari ${studentName}! 👋
+
+Saya ${tutorName}, tutor ${studentName} di Sekolah Pemrograman Internasional Algorithmics.
+
+Saya ingin berbagi kabar tentang perkembangan ${studentName} selama satu bulan terakhir. Kami telah menilai kemajuan ${studentName} berdasarkan keterampilan yang dipelajari di kelas, serta upaya yang telah ditunjukkan dalam menyelesaikan berbagai tugas. 😊 Hasil lengkapnya bisa Anda lihat pada lampiran yang sudah kami sediakan 📄.
+
+Penilaian ini meliputi bintang dan poin yang diperoleh ${studentName} atas kinerja dalam berbagai keterampilan utama yang diajarkan di kelas. Bintang tersebut merefleksikan seberapa baik ${studentName} menguasai materi dan menerapkan keterampilannya, baik dalam tugas rumah maupun tugas kelas. Poin tambahan juga diberikan sebagai penghargaan atas kerja keras dan ketekunan yang ditunjukkan oleh ${studentName}.
+
+Jika ada hal yang ingin ditanyakan mengenai hasil ini atau tentang perkembangan ${studentName}, saya siap membantu menjelaskan lebih lanjut. Terima kasih atas dukungan Anda dalam proses belajar ${studentName}, dan mari kita terus bekerja sama untuk mencapai hasil yang lebih baik ke depannya! 💜`;
+        
+        logger.info('Sending document to', recipientList.length, 'recipient(s)...');
+        
+        const sendResults: Array<{
+            recipient: string;
+            status: string;
+            error?: string;
+            rateLimitInfo?: RateLimitResult;
+        }> = [];
+
+        for (const recipient of recipientList) {
+            try {
+                logger.info('Sending to:', redactPhone(recipient));
+                
+                const { result: sendResult, rateLimitInfo } = await executeWithRateLimit(
+                    deviceUuid,
+                    async () => {
+                        await sendDocument(
+                            deviceUuid, // sendDocument expects string UUID
+                            recipient,
+                            pdfBuffer,
+                            fileName,
+                            caption
+                        );
+                        return { success: true };
+                    },
+                    `feedback-${studentName}-${recipient}-${Date.now()}`
+                );
+                
+                sendResults.push({ 
+                    recipient, 
+                    status: 'success',
+                    rateLimitInfo
+                });
+                
+                if (rateLimitInfo.delayed) {
+                    logger.info(`✅ Sent to ${redactPhone(recipient)} (delayed ${Math.round(rateLimitInfo.delayMs/1000)}s)`);
+                } else {
+                    logger.info('✅ Sent to:', redactPhone(recipient));
+                }
+                
+            } catch (sendError) {
+                logger.error('❌ Failed to send to:', redactPhone(recipient), sendError);
+                sendResults.push({ 
+                    recipient, 
+                    status: 'failed', 
+                    error: sendError instanceof Error ? sendError.message : 'Unknown error' 
+                });
+            }
+        }
+
+        // Log to database
+        try {
+            const userId = (user as any)?.id;
+            if (userId) {
+                for (const result of sendResults) {
+                    if (result.status === 'success') {
+                        await prisma.monthlyFeedbackLog.create({
+                            data: {
+                                studentName,
+                                courseName,
+                                month: Number(month),
+                                recipientPhone: result.recipient,
+                                sentBy: userId,
+                                sentAt: new Date()
+                            }
+                        });
+                    }
+                }
+            }
+        } catch (err) {
+            logger.error('Error logging to database:', err);
+        }
+
+        const successCount = sendResults.filter(r => r.status === 'success').length;
+        const failedCount = sendResults.filter(r => r.status === 'failed').length;
+
+        logger.info(`=== Monthly feedback sent: ${successCount} success, ${failedCount} failed ===`);
+        
+        res.status(200).json({ 
+            message: `Monthly feedback sent to ${successCount} recipient(s)`,
+            fileName,
+            results: sendResults,
+            summary: {
+                total: recipientList.length,
+                success: successCount,
+                failed: failedCount
+            }
+        });
+    } catch (error) {
+        logger.error('=== Error sending monthly feedback ===');
+        logger.error('Error:', error instanceof Error ? error.message : 'Unknown error');
+        
+        res.status(500).json({ 
+            message: 'Failed to send monthly feedback',
+            error: error instanceof Error ? error.message : 'Unknown error'
+        });
     }
 };

@@ -8,6 +8,7 @@ import {
     verifyInstance,
     markSSEAborted,
     getActiveSSEConnections, // 🆕 Import untuk akses Map
+    markManualLogout, // 🆕 Import untuk manual logout tracking
 } from '../whatsapp';
 import prisma from '../utils/db';
 import { generateUuid } from '../utils/keyGenerator';
@@ -263,11 +264,34 @@ export const getSessionsByDeviceApiKey: RequestHandler = async (req, res) => {
 //to do: get session logs
 
 export const deleteSession: RequestHandler = async (req, res) => {
-    await deleteInstance(req.params.sessionId);
-
     if (!isUUID(req.params.sessionId)) {
         return res.status(400).json({ message: 'Invalid sessionId' });
     }
+
+    // 🆕 Get device ID dan mark sebagai manual logout
+    // This prevents false positive "forced_logout" signal recording
+    try {
+        const device = await prisma.device.findFirst({
+            where: { 
+                sessions: { 
+                    some: { sessionId: req.params.sessionId } 
+                } 
+            },
+            select: { pkId: true },
+        });
+        
+        if (device) {
+            markManualLogout(device.pkId);
+            logger.info(
+                { sessionId: req.params.sessionId, devicePkId: device.pkId },
+                'Manual logout initiated - marked to skip signal recording'
+            );
+        }
+    } catch (err) {
+        logger.warn({ err }, 'Failed to mark manual logout, continuing with delete');
+    }
+
+    await deleteInstance(req.params.sessionId);
 
     res.status(200).json({ message: 'Session deleted' });
 };

@@ -13,6 +13,7 @@ import { internalServerErrorHandler, notFoundHandler } from './middleware/errorH
 import { warmupBrowser } from './services/pdfGenerator';
 import { shutdownRateLimiter } from './services/rateLimiter';
 import { validateEncryptionSetup, isEncryptionEnabled } from './utils/encryption';
+import { shutdownScheduledJobs } from './controllers/device';
 
 // Import scheduler untuk memastikan broadcast scheduler berjalan
 import './controllers/broadcast';
@@ -122,6 +123,9 @@ prisma
 // Graceful shutdown handler
 const gracefulShutdown = async (signal: string) => {
     logger.info(`[Server] ${signal} received - starting graceful shutdown...`);
+    
+    // Shutdown scheduled jobs (prevents memory leaks)
+    shutdownScheduledJobs();
     
     // Shutdown rate limiter
     await shutdownRateLimiter();

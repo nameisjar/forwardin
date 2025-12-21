@@ -26,6 +26,7 @@ import {
     NaturalDelayResult,
 } from '../services/naturalDelay';
 import { redactPhone } from '../utils/logRedaction';
+import { canDeviceSend, incrementMessageCount, recordRateLimitWithError } from '../services/signalDetector';
 
 // Constants untuk retry mechanism
 const MAX_ATTEMPTS = 5;
@@ -203,6 +204,14 @@ export const createBroadcast: RequestHandler = async (req, res) => {
             const { name, deviceId, recipients, message, schedule } = req.body;
             const delay = Number(req.body.delay) ?? 5000;
 
+            // Validate recipients array
+            if (!recipients || !Array.isArray(recipients) || recipients.length === 0) {
+                return res.status(400).json({ message: 'Recipients must be a non-empty array' });
+            }
+            if (!recipients.every((r: unknown) => typeof r === 'string')) {
+                return res.status(400).json({ message: 'All recipients must be strings' });
+            }
+
             const normalizedName =
                 typeof name === 'string' && name.trim() ? name.trim() : 'Broadcast';
 
@@ -294,13 +303,17 @@ export const createBroadcastFeedback: RequestHandler = async (req, res) => {
             });
         }
 
-        const device = await prisma.device.findUnique({
-            where: { id: deviceId },
+        // Verify device exists AND belongs to current user (IDOR protection)
+        const device = await prisma.device.findFirst({
+            where: { 
+                id: deviceId,
+                userId: req.authenticatedUser.pkId,
+            },
             include: { sessions: { select: { sessionId: true } } },
         });
 
         if (!device) {
-            return res.status(404).json({ message: 'Device not found' });
+            return res.status(404).json({ message: 'Device not found or access denied' });
         }
         if (!device.sessions[0]) {
             return res.status(404).json({ message: 'Session not found' });
@@ -378,13 +391,17 @@ export const createBroadcastReminder: RequestHandler = async (req, res) => {
                 });
             }
 
-            const device = await prisma.device.findUnique({
-                where: { id: deviceId },
+            // Verify device exists AND belongs to current user (IDOR protection)
+            const device = await prisma.device.findFirst({
+                where: { 
+                    id: deviceId,
+                    userId: req.authenticatedUser.pkId,
+                },
                 include: { sessions: { select: { sessionId: true } } },
             });
 
             if (!device) {
-                return res.status(404).json({ message: 'Device not found' });
+                return res.status(404).json({ message: 'Device not found or access denied' });
             }
             if (!device.sessions[0]) {
                 return res.status(404).json({ message: 'Session not found' });
@@ -1347,6 +1364,20 @@ schedule.scheduleJob('* * * * *', async () => {
                 continue;
             }
 
+            // 🔥 Check if device is healthy enough to send messages
+            const deviceCanSend = await canDeviceSend(broadcast.device.pkId);
+            if (!deviceCanSend.allowed) {
+                logger.warn(
+                    { 
+                        broadcastId: broadcast.id, 
+                        deviceId: broadcast.device.id,
+                        reason: deviceCanSend.reason 
+                    },
+                    'Device is paused or unhealthy, skipping broadcast'
+                );
+                continue;
+            }
+
             // 🔥 Reset cluster state untuk broadcast baru
             resetClusterState(broadcast.device.id);
 
@@ -1369,6 +1400,11 @@ schedule.scheduleJob('* * * * *', async () => {
             let failCount = 0;
             let rateLimitCount = 0;
             const errors: string[] = [];
+            
+            // 🔥 QUICK WIN: Consecutive failure detection untuk early ban detection
+            let consecutiveFailures = 0;
+            const MAX_CONSECUTIVE_FAILURES = 5;
+            let broadcastStopped = false;
 
             // 🔥 ATOMIC PROCESSING: Query pending recipients from BroadcastRecipient table
             // This ensures crash recovery - only pending recipients will be processed on retry
@@ -1508,14 +1544,48 @@ schedule.scheduleJob('* * * * *', async () => {
                 );
 
                 if (!result.success) {
+                    consecutiveFailures++;
+                    
                     if (result.isRateLimit) {
                         rateLimitCount++;
                         errors.push(`Rate limit: ${jid}`);
+                        
+                        // 🔥 Record rate limit signal with error details for better classification
+                        recordRateLimitWithError(broadcast.device.pkId, result.error).catch((err) => {
+                            logger.error({ err }, 'Failed to record rate limit signal');
+                        });
                     } else {
                         errors.push(`Failed: ${jid} - ${result.error?.message || 'Unknown'}`);
                     }
                     
                     failCount++;
+
+                    // 🔥 QUICK WIN: Stop broadcast jika 5x gagal berturut-turut
+                    if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+                        logger.error(
+                            { 
+                                broadcastId: broadcast.id, 
+                                deviceId: broadcast.device.id,
+                                consecutiveFailures,
+                                lastError: result.error?.message,
+                                processedCount: i + 1,
+                                totalCount: pendingRecipients.length
+                            },
+                            '🛑 BROADCAST STOPPED: 5 consecutive failures detected - likely device issue or ban'
+                        );
+                        
+                        // Record sebagai critical signal untuk tracking
+                        recordRateLimitWithError(broadcast.device.pkId, {
+                            message: `Broadcast stopped: ${consecutiveFailures} consecutive failures - possible ban`,
+                            data: 500
+                        }).catch((err) => {
+                            logger.error({ err }, 'Failed to record consecutive failure signal');
+                        });
+                        
+                        errors.push(`STOPPED: ${consecutiveFailures} consecutive failures detected`);
+                        broadcastStopped = true;
+                        break; // EXIT LOOP
+                    }
 
                     // 🔥 ATOMIC: Update recipient status to 'failed'
                     await prisma.broadcastRecipient.update({
@@ -1543,6 +1613,9 @@ schedule.scheduleJob('* * * * *', async () => {
                     }
                     continue;
                 }
+                
+                // 🔥 Reset consecutive failures on success
+                consecutiveFailures = 0;
 
                 const messageId = result.messageId!;
                 logger.info(
@@ -1598,6 +1671,9 @@ schedule.scheduleJob('* * * * *', async () => {
                         },
                     });
 
+                    // 🔥 Increment device message count for health tracking
+                    await incrementMessageCount(broadcast.device.pkId);
+
                     successCount++;
                 } catch (dbError) {
                     logger.error(
@@ -1646,11 +1722,30 @@ schedule.scheduleJob('* * * * *', async () => {
                     successCount,
                     failCount,
                     rateLimitCount,
+                    consecutiveFailures,
+                    broadcastStopped,
                     attempt: currentAttempt,
                     maxAttempts: MAX_ATTEMPTS,
                 },
-                'Broadcast processing completed'
+                broadcastStopped 
+                    ? '🛑 Broadcast stopped due to consecutive failures' 
+                    : 'Broadcast processing completed'
             );
+
+            // 🔥 If broadcast was stopped due to consecutive failures, mark as failed
+            if (broadcastStopped) {
+                await prisma.broadcast.update({
+                    where: { id: broadcast.id },
+                    data: {
+                        sentCount: successCount,
+                        failedCount: failCount,
+                        lastError: `STOPPED: ${MAX_CONSECUTIVE_FAILURES} consecutive failures - possible device issue or ban`,
+                        isSent: true, // Mark as processed (not pending)
+                        updatedAt: new Date(),
+                    },
+                });
+                continue; // Skip to next broadcast
+            }
 
             // Update broadcast status
             const updateData: any = {

@@ -195,7 +195,20 @@ export const updateGroupStatus = async (req: Request, res: Response) => {
       });
     }
 
-    await WhatsAppGroupService.updateGroupStatus(groupId, parseInt(deviceId), isActive);
+    // Resolve device pkId from UUID (fix: parseInt on UUID returns NaN)
+    const device = await prisma.device.findUnique({
+      where: { id: deviceId },
+      select: { pkId: true },
+    });
+
+    if (!device) {
+      return res.status(404).json({
+        status: false,
+        message: 'Device not found',
+      });
+    }
+
+    await WhatsAppGroupService.updateGroupStatus(groupId, device.pkId, isActive);
     
     res.json({
       status: true,
@@ -221,7 +234,20 @@ export const deleteGroup = async (req: Request, res: Response) => {
       });
     }
 
-    await WhatsAppGroupService.deleteGroup(groupId, parseInt(deviceId));
+    // Resolve device pkId from UUID (fix: parseInt on UUID returns NaN)
+    const device = await prisma.device.findUnique({
+      where: { id: deviceId },
+      select: { pkId: true },
+    });
+
+    if (!device) {
+      return res.status(404).json({
+        status: false,
+        message: 'Device not found',
+      });
+    }
+
+    await WhatsAppGroupService.deleteGroup(groupId, device.pkId);
     
     res.json({
       status: true,

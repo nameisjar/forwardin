@@ -79,6 +79,14 @@ export const addMemberToGroup: RequestHandler = async (req, res) => {
     try {
         const { groupId, contactIds } = req.body;
 
+        // Validate contactIds is a non-empty array of strings
+        if (!contactIds || !Array.isArray(contactIds) || contactIds.length === 0) {
+            return res.status(400).json({ message: 'contactIds must be a non-empty array' });
+        }
+        if (!contactIds.every((id: unknown) => typeof id === 'string')) {
+            return res.status(400).json({ message: 'All contactIds must be strings' });
+        }
+
         const group = await prisma.group.findUnique({
             where: { id: groupId },
         });
@@ -147,6 +155,14 @@ export const addMemberToGroup: RequestHandler = async (req, res) => {
 export const removeMembersFromGroup: RequestHandler = async (req, res) => {
     try {
         const { groupId, contactIds } = req.body;
+
+        // Validate contactIds is a non-empty array of strings
+        if (!contactIds || !Array.isArray(contactIds) || contactIds.length === 0) {
+            return res.status(400).json({ message: 'contactIds must be a non-empty array' });
+        }
+        if (!contactIds.every((id: unknown) => typeof id === 'string')) {
+            return res.status(400).json({ message: 'All contactIds must be strings' });
+        }
 
         const group = await prisma.group.findUnique({
             where: { id: groupId },

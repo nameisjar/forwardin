@@ -13,4 +13,10 @@ router.put('/:deviceId', controller.updateDevice);
 router.delete('/', controller.deleteDevices);
 router.post('/:deviceId/access-token', controller.issueDeviceAccessToken);
 
+// Health monitoring endpoints
+router.get('/:id/health', controller.getDeviceHealthStatus);
+router.get('/:id/signals', controller.getDeviceSignals);
+router.post('/:id/pause', controller.pauseDeviceManually);
+router.post('/:id/resume', controller.resumeDeviceManually);
+
 export default router;

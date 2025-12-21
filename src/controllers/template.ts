@@ -54,6 +54,14 @@ export const getTemplates: RequestHandler = async (req, res) => {
 export const deleteTemplates: RequestHandler = async (req, res) => {
     const templateIds = req.body.templateIds;
 
+    // Validate templateIds is a non-empty array of strings
+    if (!templateIds || !Array.isArray(templateIds) || templateIds.length === 0) {
+        return res.status(400).json({ message: 'templateIds must be a non-empty array' });
+    }
+    if (!templateIds.every((id: unknown) => typeof id === 'string' && id.trim())) {
+        return res.status(400).json({ message: 'All templateIds must be non-empty strings' });
+    }
+
     try {
         const templatePromises = templateIds.map(async (templateId: string) => {
             await prisma.template.delete({

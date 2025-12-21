@@ -147,13 +147,17 @@ export const sendMonthlyFeedback: RequestHandler = async (req, res) => {
             return res.status(400).json({ message: 'Device ID is required' });
         }
 
-        const device = await prisma.device.findUnique({
-            where: { id: deviceId }
+        // Verify device exists AND belongs to current user (IDOR protection)
+        const device = await prisma.device.findFirst({
+            where: { 
+                id: deviceId,
+                userId: req.authenticatedUser.pkId,
+            }
         });
 
         if (!device) {
-            logger.error('Device not found:', deviceId);
-            return res.status(404).json({ message: 'Device not found', deviceId });
+            logger.error('Device not found or access denied:', deviceId);
+            return res.status(404).json({ message: 'Device not found or access denied', deviceId });
         }
 
         logger.info('Device found:', device.name);

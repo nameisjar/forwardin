@@ -15,6 +15,7 @@ router.post('/messages/broadcasts/scheduled', apiBroadcastRateLimit, controller.
 router.post('/messages/broadcasts/reminder', apiBroadcastRateLimit, controller.createBroadcastReminder);
 router.post('/messages/broadcasts/feedback', apiBroadcastRateLimit, controller.createBroadcastFeedback);
 router.post('/messages/broadcasts/reminder-algo', apiBroadcastRateLimit, controller.createBroadcastReminderAlgo);
+router.post('/messages/monthly-feedback/send', apiBroadcastRateLimit, controller.sendMonthlyFeedbackDevice);
 // router.post('/messages/broadcasts/recurring', controller.createBroadcastRecurring);  //testing
 router.post('/messages/auto-replies', controller.createAutoReplies);
 router.get('/messages', controller.getConversationMessages);

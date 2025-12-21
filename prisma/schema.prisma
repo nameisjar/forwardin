@@ -183,6 +183,17 @@ model Device {
   CustomerService CustomerService?
   DeviceLog       DeviceLog[]
   whatsappGroups  WhatsAppGroup[]
+
+  // Health monitoring fields
+  healthStatus    String           @default("healthy") @map("health_status") @db.VarChar(20) // healthy, warning, critical, paused, banned
+  pausedAt        DateTime?        @map("paused_at")
+  pauseReason     String?          @map("pause_reason") @db.VarChar(255)
+  resumeAt        DateTime?        @map("resume_at")
+  todayMessageCount Int            @default(0) @map("today_message_count")
+  todayMessageDate  DateTime?      @map("today_message_date") @db.Date
+  
+  // Relations
+  deviceSignals   DeviceSignal[]
 }
 
 model DeviceLog {
@@ -194,6 +205,27 @@ model DeviceLog {
   device    Device   @relation(fields: [deviceId], references: [pkId], onDelete: Cascade)
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @default(now()) @map("updated_at")
+}
+
+/// WhatsApp signal detection for ban prevention
+/// Tracks rate limits, disconnects, and other warning signs from WhatsApp
+model DeviceSignal {
+  pkId        Int      @id @default(autoincrement())
+  id          String   @unique @default(uuid()) @db.Uuid
+  deviceId    Int      @map("device_id")
+  device      Device   @relation(fields: [deviceId], references: [pkId], onDelete: Cascade)
+  signalType  String   @map("signal_type") @db.VarChar(50) // rate_limit, forced_logout, connection_error, delivery_failed, banned
+  code        Int?     // HTTP/WA status code (429, 401, etc)
+  message     String?  @db.Text
+  severity    String   @default("warning") @db.VarChar(20) // info, warning, critical
+  confidence  String   @default("medium") @db.VarChar(20) // high, medium, low - how confident we are in the classification
+  action      String?  @db.VarChar(50) // auto_paused, manual_paused, resumed, none
+  metadata    Json?    // Additional context
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  @@index([deviceId, createdAt], map: "idx_device_signal_device_time")
+  @@index([deviceId, signalType], map: "idx_device_signal_type")
+  @@map("device_signals")
 }
 
 model Session {

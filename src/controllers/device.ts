@@ -9,6 +9,13 @@ import schedule from 'node-schedule';
 import { isUUID } from '../utils/uuidChecker';
 import { generateDeviceAccessToken } from '../utils/jwtGenerator';
 import { verifyInstance } from '../whatsapp';
+import { 
+    getDeviceHealth, 
+    pauseDevice, 
+    resumeDevice, 
+    checkAutoResume,
+    cleanupOldSignals,
+} from '../services/signalDetector';
 
 export const getDevices: RequestHandler = async (req, res) => {
     const pkId = req.authenticatedUser.pkId;
@@ -463,28 +470,288 @@ export const issueDeviceAccessToken: RequestHandler = async (req, res) => {
     }
 };
 
-schedule.scheduleJob('*', async () => {
+// ============================================
+// Device Health Monitoring Endpoints
+// ============================================
+
+/**
+ * Get device health status and recent signals
+ * GET /devices/:id/health
+ */
+export const getDeviceHealthStatus: RequestHandler = async (req, res) => {
     try {
-        const deviceLabels = await prisma.deviceLabel.findMany({ select: { labelId: true } });
-        const contactLabels = await prisma.contactLabel.findMany({
-            select: { labelId: true, contactId: true },
-        });
-        const labels = deviceLabels.map((dl) => dl.labelId);
-        contactLabels.map((cl) => labels.push(cl.labelId));
+        const deviceId = req.params.id;
 
-        const contactDevices = await prisma.contactDevice.findMany({
-            select: { deviceId: true, contactId: true },
-        });
-        const contactGroups = await prisma.contactGroup.findMany({
-            select: { groupId: true, contactId: true },
-        });
-        const contacts = contactDevices.map((cd) => cd.contactId);
-        contactGroups.map((cg) => contacts.push(cg.contactId));
+        if (!isUUID(deviceId)) {
+            return res.status(400).json({ message: 'Invalid device ID' });
+        }
 
-        await prisma.label.deleteMany({ where: { pkId: { notIn: labels } } });
-        await prisma.contact.deleteMany({ where: { pkId: { notIn: contacts } } });
-        logger.info('Database cleanup executed successfully.');
+        // Verify device belongs to user
+        const device = await prisma.device.findFirst({
+            where: {
+                id: deviceId,
+                userId: req.authenticatedUser.pkId,
+            },
+            select: { pkId: true },
+        });
+
+        if (!device) {
+            return res.status(404).json({ message: 'Device not found' });
+        }
+
+        const health = await getDeviceHealth(deviceId);
+
+        if (!health) {
+            return res.status(404).json({ message: 'Device health info not found' });
+        }
+
+        // Add convenience fields for frontend
+        res.status(200).json({
+            ...health,
+            isPaused: health.healthStatus === 'paused',
+            todayMessages: health.todayMessageCount,
+            recentRateLimits: health.stats?.rateLimitCount24h || 0,
+            recentConnectionErrors: health.stats?.errorCount24h || 0,
+            recommendations: health.recommendation ? [health.recommendation] : [],
+        });
     } catch (error) {
-        logger.error('Error executing database cleanup:', error);
+        logger.error(error);
+        res.status(500).json({ message: 'Internal server error' });
     }
-});
+};
+
+/**
+ * Pause a device manually
+ * POST /devices/:id/pause
+ */
+export const pauseDeviceManually: RequestHandler = async (req, res) => {
+    try {
+        const deviceId = req.params.id;
+        const { reason, durationMinutes } = req.body;
+
+        if (!isUUID(deviceId)) {
+            return res.status(400).json({ message: 'Invalid device ID' });
+        }
+
+        // Validate durationMinutes (0-1440 minutes = 0-24 hours)
+        if (durationMinutes !== undefined) {
+            const duration = Number(durationMinutes);
+            if (isNaN(duration) || duration < 0 || duration > 1440) {
+                return res.status(400).json({ 
+                    message: 'Invalid durationMinutes. Must be a number between 0 and 1440 (24 hours)' 
+                });
+            }
+        }
+
+        // Verify device belongs to user
+        const device = await prisma.device.findFirst({
+            where: {
+                id: deviceId,
+                userId: req.authenticatedUser.pkId,
+            },
+            select: { pkId: true, healthStatus: true },
+        });
+
+        if (!device) {
+            return res.status(404).json({ message: 'Device not found' });
+        }
+
+        if (device.healthStatus === 'banned') {
+            return res.status(400).json({ message: 'Device is banned and cannot be paused' });
+        }
+
+        const durationMs = durationMinutes ? Number(durationMinutes) * 60 * 1000 : 0;
+        const pauseReason = reason || 'Manual pause oleh user';
+
+        await pauseDevice(device.pkId, pauseReason, durationMs);
+
+        res.status(200).json({ 
+            message: 'Device paused successfully',
+            resumeAt: durationMs > 0 ? new Date(Date.now() + durationMs) : null,
+        });
+    } catch (error) {
+        logger.error(error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};
+
+/**
+ * Resume a paused device
+ * POST /devices/:id/resume
+ */
+export const resumeDeviceManually: RequestHandler = async (req, res) => {
+    try {
+        const deviceId = req.params.id;
+
+        if (!isUUID(deviceId)) {
+            return res.status(400).json({ message: 'Invalid device ID' });
+        }
+
+        // Verify device belongs to user
+        const device = await prisma.device.findFirst({
+            where: {
+                id: deviceId,
+                userId: req.authenticatedUser.pkId,
+            },
+            select: { pkId: true, healthStatus: true },
+        });
+
+        if (!device) {
+            return res.status(404).json({ message: 'Device not found' });
+        }
+
+        if (device.healthStatus === 'banned') {
+            return res.status(400).json({ 
+                message: 'Device terdeteksi banned oleh WhatsApp. Tidak dapat di-resume.',
+            });
+        }
+
+        if (device.healthStatus !== 'paused') {
+            return res.status(400).json({ message: 'Device is not paused' });
+        }
+
+        await resumeDevice(device.pkId);
+
+        res.status(200).json({ message: 'Device resumed successfully' });
+    } catch (error) {
+        logger.error(error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};
+
+/**
+ * Get signal history for a device
+ * GET /devices/:id/signals
+ */
+export const getDeviceSignals: RequestHandler = async (req, res) => {
+    try {
+        const deviceId = req.params.id;
+        const limit = parseInt(req.query.limit as string) || 50;
+        const page = parseInt(req.query.page as string) || 1;
+
+        if (!isUUID(deviceId)) {
+            return res.status(400).json({ message: 'Invalid device ID' });
+        }
+
+        // Verify device belongs to user
+        const device = await prisma.device.findFirst({
+            where: {
+                id: deviceId,
+                userId: req.authenticatedUser.pkId,
+            },
+            select: { pkId: true },
+        });
+
+        if (!device) {
+            return res.status(404).json({ message: 'Device not found' });
+        }
+
+        const [signals, total] = await Promise.all([
+            prisma.deviceSignal.findMany({
+                where: { deviceId: device.pkId },
+                orderBy: { createdAt: 'desc' },
+                skip: (page - 1) * limit,
+                take: limit,
+                select: {
+                    id: true,
+                    signalType: true,
+                    code: true,
+                    message: true,
+                    severity: true,
+                    confidence: true,
+                    action: true,
+                    createdAt: true,
+                },
+            }),
+            prisma.deviceSignal.count({
+                where: { deviceId: device.pkId },
+            }),
+        ]);
+
+        res.status(200).json({
+            signals,
+            pagination: {
+                page,
+                limit,
+                total,
+                totalPages: Math.ceil(total / limit),
+            },
+        });
+    } catch (error) {
+        logger.error(error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};
+
+// ============================================
+// SCHEDULED JOBS
+// Store references for graceful shutdown cleanup
+// ============================================
+
+const scheduledJobs: schedule.Job[] = [];
+
+// Database cleanup job (every minute)
+scheduledJobs.push(
+    schedule.scheduleJob('*', async () => {
+        try {
+            const deviceLabels = await prisma.deviceLabel.findMany({ select: { labelId: true } });
+            const contactLabels = await prisma.contactLabel.findMany({
+                select: { labelId: true, contactId: true },
+            });
+            const labels = deviceLabels.map((dl) => dl.labelId);
+            contactLabels.map((cl) => labels.push(cl.labelId));
+
+            const contactDevices = await prisma.contactDevice.findMany({
+                select: { deviceId: true, contactId: true },
+            });
+            const contactGroups = await prisma.contactGroup.findMany({
+                select: { groupId: true, contactId: true },
+            });
+            const contacts = contactDevices.map((cd) => cd.contactId);
+            contactGroups.map((cg) => contacts.push(cg.contactId));
+
+            await prisma.label.deleteMany({ where: { pkId: { notIn: labels } } });
+            await prisma.contact.deleteMany({ where: { pkId: { notIn: contacts } } });
+            logger.info('Database cleanup executed successfully.');
+        } catch (error) {
+            logger.error('Error executing database cleanup:', error);
+        }
+    })
+);
+
+// Auto-resume paused devices (every 5 minutes)
+scheduledJobs.push(
+    schedule.scheduleJob('*/5 * * * *', async () => {
+        try {
+            await checkAutoResume();
+        } catch (error) {
+            logger.error('Error checking auto-resume:', error);
+        }
+    })
+);
+
+// Cleanup old signals (once per day at 3 AM)
+scheduledJobs.push(
+    schedule.scheduleJob('0 3 * * *', async () => {
+        try {
+            await cleanupOldSignals();
+        } catch (error) {
+            logger.error('Error cleaning up old signals:', error);
+        }
+    })
+);
+
+/**
+ * Cleanup scheduled jobs on graceful shutdown
+ * Prevents memory leaks and ensures clean process termination
+ */
+export function shutdownScheduledJobs(): void {
+    logger.info(`[Device] Shutting down ${scheduledJobs.length} scheduled jobs...`);
+    for (const job of scheduledJobs) {
+        if (job) {
+            job.cancel();
+        }
+    }
+    scheduledJobs.length = 0;
+    logger.info('[Device] All scheduled jobs cancelled');
+}

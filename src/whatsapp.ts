@@ -31,6 +31,11 @@ import {
     getLastDisconnect,
     removeSessionState,
 } from './utils/sessionState';
+import {
+    recordConnectionError,
+    recordReconnection,
+    canDeviceSend,
+} from './services/signalDetector';
 
 type Instance = WASocket & {
     destroy: () => Promise<void>;
@@ -42,6 +47,31 @@ const retries = new Map<string, number>();
 const SSEQRGenerations = new Map<string, number>();
 // 🆕 Track active SSE connections to prevent conflicts
 const activeSSEConnections = new Map<number, { sessionId: string; aborted: boolean }>();
+// 🆕 Track manual logout to prevent false positive signal recording
+const manualLogoutInProgress = new Set<number>();
+
+/**
+ * Mark a device as undergoing manual logout (user-initiated)
+ * This prevents false positive "forced_logout" signal recording
+ */
+export function markManualLogout(devicePkId: number): void {
+    manualLogoutInProgress.add(devicePkId);
+    logger.info({ devicePkId }, 'Device marked for manual logout - will skip signal recording');
+}
+
+/**
+ * Clear manual logout flag after processing
+ */
+export function clearManualLogout(devicePkId: number): void {
+    manualLogoutInProgress.delete(devicePkId);
+}
+
+/**
+ * Check if device is undergoing manual logout
+ */
+export function isManualLogout(devicePkId: number): boolean {
+    return manualLogoutInProgress.has(devicePkId);
+}
 
 const RECONNECT_INTERVAL = Number(process.env.RECONNECT_INTERVAL || 0);
 const MAX_RECONNECT_RETRIES = Number(process.env.MAX_RECONNECT_RETRIES || 5);
@@ -300,6 +330,23 @@ export async function createInstance(options: createInstanceOptions) {
             'Connection closed - evaluating reconnection'
         );
 
+        // 🔥 Record connection error signal for ban detection
+        // Skip jika ini manual logout (user sengaja logout via API)
+        if (code && code !== DisconnectReason.restartRequired && code !== 515) {
+            if (isManualLogout(deviceId)) {
+                logger.info(
+                    { sessionId, deviceId, code },
+                    'Skipping signal recording - manual logout detected'
+                );
+                clearManualLogout(deviceId);
+            } else {
+                const errorMessage = (lastDisconnect?.error as Boom)?.message || 'Connection closed';
+                recordConnectionError(deviceId, code, errorMessage).catch((err) => {
+                    logger.error({ err }, 'Failed to record connection error signal');
+                });
+            }
+        }
+
         // 🆕 Jika logout, langsung destroy tanpa reconnect
         if (code === DisconnectReason.loggedOut) {
             logger.info({ sessionId, deviceId }, 'User logged out - destroying session without reconnect');
@@ -520,6 +567,11 @@ export async function createInstance(options: createInstanceOptions) {
 
             // 🔧 FIX: Mark connection successful di centralized state
             markConnectionSuccessful(sessionId);
+
+            // 🔥 Record successful reconnection for health tracking
+            recordReconnection(deviceId).catch((err) => {
+                logger.error({ err }, 'Failed to record reconnection signal');
+            });
 
             // ?back here: forbid duplicate phone numbers
             const phone = sock.user?.id.split(':')[0];

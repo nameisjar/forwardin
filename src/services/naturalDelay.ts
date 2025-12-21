@@ -19,6 +19,7 @@
  */
 
 import logger from '../config/logger';
+import { redactPhone } from '../utils/logRedaction';
 
 // ============================================
 // CONFIGURATION (from Environment Variables)
@@ -370,13 +371,13 @@ export async function showTypingIndicator(
     try {
         if (!showIndicator) {
             // 🔥 TYPING_INDICATOR_ENABLED=false: Hanya delay tanpa tampilkan "sedang mengetik..."
-            logger.debug({ jid, duration }, '[NaturalDelay] Typing delay only (no indicator)');
+            logger.debug({ jid: redactPhone(jid), duration }, '[NaturalDelay] Typing delay only (no indicator)');
             await new Promise(resolve => setTimeout(resolve, duration));
             return;
         }
         
         // 🔥 TYPING_INDICATOR_ENABLED=true: Tampilkan "sedang mengetik..." + delay
-        logger.debug({ jid, duration }, '[NaturalDelay] Showing typing indicator');
+        logger.debug({ jid: redactPhone(jid), duration }, '[NaturalDelay] Showing typing indicator');
         
         // Tampilkan "sedang mengetik..."
         await session.sendPresenceUpdate('composing', jid);
@@ -387,12 +388,12 @@ export async function showTypingIndicator(
         // Kembali ke status available
         await session.sendPresenceUpdate('available', jid);
         
-        logger.debug({ jid }, '[NaturalDelay] Typing indicator finished');
+        logger.debug({ jid: redactPhone(jid) }, '[NaturalDelay] Typing indicator finished');
         
     } catch (error: any) {
         // Jangan throw error jika gagal, cukup log warning
         logger.warn(
-            { error: error.message, jid },
+            { error: error.message, jid: redactPhone(jid) },
             '[NaturalDelay] Failed to show typing indicator, continuing...'
         );
         // Tetap tunggu delay meskipun indicator gagal
