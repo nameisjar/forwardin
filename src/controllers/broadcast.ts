@@ -1115,12 +1115,28 @@ export const updateBroadcastStatus: RequestHandler = async (req, res) => {
     try {
         const id = req.params.id;
         const status = req.body.status;
+        const userId = req.authenticatedUser.pkId;
+        const privilegeId = req.privilege.pkId;
+        const isSuperAdmin = privilegeId === Number(process.env.SUPER_ADMIN_ID);
 
         if (!isUUID(id)) {
             return res.status(400).json({ message: 'Invalid broadcastId' });
         }
+
+        // Verify ownership through device relationship
+        const broadcast = await prisma.broadcast.findFirst({
+            where: {
+                id,
+                device: isSuperAdmin ? undefined : { userId },
+            },
+        });
+
+        if (!broadcast) {
+            return res.status(404).json({ message: 'Broadcast not found' });
+        }
+
         const updatedBroadcast = await prisma.broadcast.update({
-            where: { id },
+            where: { pkId: broadcast.pkId },
             data: {
                 status,
                 updatedAt: new Date(),

@@ -410,14 +410,23 @@ export const updateContact: RequestHandler = async (req, res) => {
         const contactId = req.params.contactId;
         const { firstName, lastName, email, gender, dob, labels, deviceId } = req.body;
         const phone = req.body.phone ? formatPhoneNumber(req.body.phone) : undefined;
+        const userId = req.authenticatedUser.pkId;
+        const privilegeId = req.privilege.pkId;
+        const isSuperAdmin = privilegeId === Number(process.env.SUPER_ADMIN_ID);
 
         if (!isUUID(contactId)) {
             return res.status(400).json({ message: 'Invalid contactId' });
         }
 
         await prisma.$transaction(async (transaction) => {
-            const existingContact = await transaction.contact.findUnique({
-                where: { id: contactId },
+            // Verify ownership through device relationship
+            const existingContact = await transaction.contact.findFirst({
+                where: {
+                    id: contactId,
+                    contactDevices: isSuperAdmin ? undefined : {
+                        some: { device: { userId } },
+                    },
+                },
                 include: { contactDevices: { select: { id: true } } },
             });
 

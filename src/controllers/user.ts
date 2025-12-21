@@ -369,10 +369,19 @@ export const changePassword: RequestHandler = async (req, res) => {
     try {
         const userId = req.params.userId;
         const { password } = req.body as { password?: string };
+        const authenticatedUserId = req.authenticatedUser.id;
+        const privilegeId = req.privilege.pkId;
+        const isSuperAdmin = privilegeId === Number(process.env.SUPER_ADMIN_ID);
 
         if (!isUUID(userId)) {
             return res.status(400).json({ message: 'Invalid userId' });
         }
+
+        // Verify authorization: user can only change their own password (unless super admin)
+        if (!isSuperAdmin && userId !== authenticatedUserId) {
+            return res.status(403).json({ message: 'Forbidden: Cannot change another user\'s password' });
+        }
+
         if (!password || password.length < 6) {
             return res.status(400).json({ message: 'Password must be at least 6 characters' });
         }

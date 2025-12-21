@@ -346,6 +346,9 @@ export const updateDevice: RequestHandler = async (req, res) => {
 export const deleteDevices: RequestHandler = async (req, res) => {
     try {
         const deviceIds = req.body.deviceIds;
+        const userId = req.authenticatedUser.pkId;
+        const privilegeId = req.privilege.pkId;
+        const isSuperAdmin = privilegeId === Number(process.env.SUPER_ADMIN_ID);
 
         if (!deviceIds || !Array.isArray(deviceIds) || deviceIds.length === 0) {
             return res.status(400).json({ message: 'Invalid deviceIds' });
@@ -355,9 +358,11 @@ export const deleteDevices: RequestHandler = async (req, res) => {
         const { deleteInstance, verifyInstance } = require('../whatsapp');
 
         const devicePromises = deviceIds.map(async (deviceId: string) => {
-            const device = await prisma.device.findUnique({
+            // Verify ownership before deletion
+            const device = await prisma.device.findFirst({
                 where: {
                     id: deviceId,
+                    ...(isSuperAdmin ? {} : { userId }),
                 },
             });
 
