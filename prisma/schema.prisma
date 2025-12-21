@@ -357,12 +357,37 @@ model Broadcast {
   createdAt     DateTime @default(now()) @map("created_at")
   updatedAt     DateTime @default(now()) @map("updated_at")
 
+  // Relation to per-recipient tracking
+  broadcastRecipients BroadcastRecipient[]
+
   @@index([deviceId, schedule], map: "idx_broadcast_device_schedule")
   @@index([deviceId, name], map: "idx_broadcast_device_name")
   @@index([deviceId, status, isSent, schedule], map: "idx_broadcast_device_status_sent_schedule")
 
   /// NOTE: Search optimization (ILIKE/contains) uses pg_trgm + GIN index created via SQL migration.
   /// Prisma doesn't support gin_trgm_ops in schema; do NOT add @@index(type: Gin) here.
+}
+
+/// Per-recipient tracking for atomic broadcast processing
+/// Enables crash recovery without re-sending to already-sent recipients
+model BroadcastRecipient {
+  pkId        Int       @id @default(autoincrement())
+  broadcastId Int       @map("broadcast_id")
+  broadcast   Broadcast @relation(fields: [broadcastId], references: [pkId], onDelete: Cascade)
+  phone       String    @db.VarChar(30)
+  jid         String?   @db.VarChar(50) // Resolved JID (e.g., 628xxx@s.whatsapp.net)
+  status      String    @default("pending") @db.VarChar(20) // pending, sending, sent, failed
+  sentAt      DateTime? @map("sent_at")
+  errorMsg    String?   @map("error_msg") @db.Text
+  messageId   String?   @map("message_id") @db.VarChar(128)
+  retryCount  Int       @default(0) @map("retry_count")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @default(now()) @updatedAt @map("updated_at")
+
+  @@unique([broadcastId, phone], map: "idx_broadcast_recipient_unique")
+  @@index([broadcastId, status], map: "idx_broadcast_recipient_status")
+  @@index([status, updatedAt], map: "idx_broadcast_recipient_batch")
+  @@map("broadcast_recipients")
 }
 
 model AutoReply {

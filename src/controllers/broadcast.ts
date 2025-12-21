@@ -231,7 +231,8 @@ export const createBroadcast: RequestHandler = async (req, res) => {
             }
 
             await prisma.$transaction(async (transaction) => {
-                await transaction.broadcast.create({
+                // Create broadcast
+                const broadcast = await transaction.broadcast.create({
                     data: {
                         name: normalizedName,
                         message,
@@ -244,6 +245,27 @@ export const createBroadcast: RequestHandler = async (req, res) => {
                         mediaPath: req.file?.path,
                     },
                 });
+
+                // Resolve recipients and create BroadcastRecipient records
+                const resolvedRecipients = await getRecipients({
+                    recipients,
+                    deviceId: device.pkId,
+                });
+
+                // De-duplicate recipients
+                const uniqueRecipients = Array.from(new Set(resolvedRecipients));
+
+                if (uniqueRecipients.length > 0) {
+                    await transaction.broadcastRecipient.createMany({
+                        data: uniqueRecipients.map((phone) => ({
+                            broadcastId: broadcast.pkId,
+                            phone: String(phone),
+                            status: 'pending',
+                        })),
+                        skipDuplicates: true,
+                    });
+                }
+
                 await useBroadcast(transaction, subscription);
                 res.status(201).json({ message: 'Broadcast created successfully' });
             });
@@ -1348,30 +1370,94 @@ schedule.scheduleJob('* * * * *', async () => {
             let rateLimitCount = 0;
             const errors: string[] = [];
 
-            // Get & de-duplicate recipients
-            const rawRecipients = await getRecipients(broadcast);
-            const uniqueRecipients = Array.from(new Set(rawRecipients));
-            
-            if (uniqueRecipients.length !== rawRecipients.length) {
-                logger.info(
-                    { 
-                        broadcastId: broadcast.id, 
-                        original: rawRecipients.length, 
-                        deduped: uniqueRecipients.length 
-                    },
-                    'Recipients de-duplicated'
-                );
+            // 🔥 ATOMIC PROCESSING: Query pending recipients from BroadcastRecipient table
+            // This ensures crash recovery - only pending recipients will be processed on retry
+            const pendingRecipients = await prisma.broadcastRecipient.findMany({
+                where: {
+                    broadcastId: broadcast.pkId,
+                    status: { in: ['pending', 'failed'] }, // Retry failed ones too
+                },
+                orderBy: { pkId: 'asc' },
+            });
+
+            // Fallback: If no BroadcastRecipient records exist (old broadcasts), create them
+            if (pendingRecipients.length === 0) {
+                const rawRecipients = await getRecipients(broadcast);
+                const uniqueRecipients = Array.from(new Set(rawRecipients));
+                
+                if (uniqueRecipients.length > 0) {
+                    // Check if any records exist at all (could be all sent already)
+                    const existingCount = await prisma.broadcastRecipient.count({
+                        where: { broadcastId: broadcast.pkId },
+                    });
+
+                    if (existingCount === 0) {
+                        // Old broadcast without BroadcastRecipient records - migrate
+                        logger.info(
+                            { broadcastId: broadcast.id, recipientCount: uniqueRecipients.length },
+                            'Migrating old broadcast: creating BroadcastRecipient records'
+                        );
+                        await prisma.broadcastRecipient.createMany({
+                            data: uniqueRecipients.map((phone) => ({
+                                broadcastId: broadcast.pkId,
+                                phone: String(phone),
+                                status: 'pending',
+                            })),
+                            skipDuplicates: true,
+                        });
+                        // Re-fetch after creation
+                        const newPendingRecipients = await prisma.broadcastRecipient.findMany({
+                            where: {
+                                broadcastId: broadcast.pkId,
+                                status: 'pending',
+                            },
+                            orderBy: { pkId: 'asc' },
+                        });
+                        pendingRecipients.push(...newPendingRecipients);
+                    } else {
+                        // All recipients already processed - mark as complete
+                        logger.info(
+                            { broadcastId: broadcast.id },
+                            'All recipients already processed - marking broadcast as sent'
+                        );
+                        await prisma.broadcast.update({
+                            where: { id: broadcast.id },
+                            data: { isSent: true, updatedAt: new Date() },
+                        });
+                        continue;
+                    }
+                }
             }
 
             logger.info(
-                { broadcastId: broadcast.id, recipientCount: uniqueRecipients.length },
-                `Processing ${uniqueRecipients.length} unique recipients`
+                { broadcastId: broadcast.id, pendingCount: pendingRecipients.length },
+                `Processing ${pendingRecipients.length} pending recipients`
             );
 
-            for (let i = 0; i < uniqueRecipients.length; i++) {
-                const recipient = uniqueRecipients[i];
-                const isLastRecipient = i === uniqueRecipients.length - 1;
+            // Skip if no pending recipients
+            if (pendingRecipients.length === 0) {
+                logger.info(
+                    { broadcastId: broadcast.id },
+                    'No pending recipients - marking broadcast as sent'
+                );
+                await prisma.broadcast.update({
+                    where: { id: broadcast.id },
+                    data: { isSent: true, updatedAt: new Date() },
+                });
+                continue;
+            }
+
+            for (let i = 0; i < pendingRecipients.length; i++) {
+                const recipientRecord = pendingRecipients[i];
+                const recipient = recipientRecord.phone;
+                const isLastRecipient = i === pendingRecipients.length - 1;
                 const jid = getJid(recipient);
+
+                // 🔥 Mark as 'sending' before attempting (crash protection)
+                await prisma.broadcastRecipient.update({
+                    where: { pkId: recipientRecord.pkId },
+                    data: { status: 'sending', jid, updatedAt: new Date() },
+                });
 
                 const variables = {
                     firstName:
@@ -1430,6 +1516,17 @@ schedule.scheduleJob('* * * * *', async () => {
                     }
                     
                     failCount++;
+
+                    // 🔥 ATOMIC: Update recipient status to 'failed'
+                    await prisma.broadcastRecipient.update({
+                        where: { pkId: recipientRecord.pkId },
+                        data: {
+                            status: 'failed',
+                            errorMsg: result.error?.message || 'Send failed',
+                            retryCount: { increment: 1 },
+                            updatedAt: new Date(),
+                        },
+                    });
                     
                     // 🔥 Gunakan natural delay meskipun gagal
                     if (!isLastRecipient) {
@@ -1489,12 +1586,37 @@ schedule.scheduleJob('* * * * *', async () => {
                         },
                     });
 
+                    // 🔥 ATOMIC: Update recipient status to 'sent'
+                    await prisma.broadcastRecipient.update({
+                        where: { pkId: recipientRecord.pkId },
+                        data: {
+                            status: 'sent',
+                            sentAt: new Date(),
+                            messageId,
+                            errorMsg: null,
+                            updatedAt: new Date(),
+                        },
+                    });
+
                     successCount++;
                 } catch (dbError) {
                     logger.error(
                         { error: dbError, messageId, recipient: jid },
                         'Failed to save OutgoingMessage'
                     );
+
+                    // 🔥 ATOMIC: Even if DB save fails, message was sent - mark as sent with warning
+                    await prisma.broadcastRecipient.update({
+                        where: { pkId: recipientRecord.pkId },
+                        data: {
+                            status: 'sent',
+                            sentAt: new Date(),
+                            messageId,
+                            errorMsg: 'Message sent but failed to save to OutgoingMessage',
+                            updatedAt: new Date(),
+                        },
+                    });
+
                     failCount++;
                 }
 
