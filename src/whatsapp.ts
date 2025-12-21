@@ -1093,3 +1093,22 @@ export {
     getActiveSessionIds,
     getSessionCount,
 } from './utils/sessionState';
+
+/**
+ * 🔧 Get connected sessions info for monitoring
+ * Returns array of sessionId and phone number for connected sessions
+ */
+export function getConnectedSessionsInfo(): Array<{ sessionId: string; phone: string }> {
+    const result: Array<{ sessionId: string; phone: string }> = [];
+    
+    for (const [sessionId, instance] of instances.entries()) {
+        if (instance?.user) {
+            result.push({
+                sessionId,
+                phone: instance.user.id?.split(':')[0] || 'unknown'
+            });
+        }
+    }
+    
+    return result;
+}

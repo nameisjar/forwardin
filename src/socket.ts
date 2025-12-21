@@ -1,8 +1,18 @@
 import http from 'http';
 import { Server } from 'socket.io';
+import jwt from 'jsonwebtoken';
 import logger from './config/logger';
+import { getComprehensivePDFStatus } from './services/pdfGenerator';
+import { jwtSecretKey } from './utils/jwtGenerator';
+import prisma from './utils/db';
 
 let io: Server;
+
+// Monitoring broadcast interval
+let monitoringInterval: NodeJS.Timeout | null = null;
+
+// 🔐 Admin privilege ID from environment
+const SUPER_ADMIN_ID = Number(process.env.SUPER_ADMIN_ID) || 1;
 
 // 🔐 Socket.IO CORS Configuration with fail-safe defaults (Issue 4.5)
 function getSocketCorsOrigin(): string[] | boolean {
@@ -33,24 +43,81 @@ export function initSocketServer(app: Express.Application): http.Server {
             methods: ['GET', 'POST'],
         },
     });
+
+    // 🔐 Socket authentication middleware
+    io.use(async (socket, next) => {
+        const token = socket.handshake.auth.token;
+        
+        // Allow connection without token (for non-admin features)
+        // But mark socket as unauthenticated
+        if (!token) {
+            socket.data.authenticated = false;
+            socket.data.isAdmin = false;
+            return next();
+        }
+        
+        try {
+            const decoded = jwt.verify(token, jwtSecretKey) as any;
+            
+            // Find user by email
+            const user = await prisma.user.findUnique({
+                where: { email: decoded.email },
+                include: { privilege: true }
+            });
+            
+            if (user) {
+                socket.data.authenticated = true;
+                socket.data.user = user;
+                socket.data.isAdmin = user.privilege?.pkId === SUPER_ADMIN_ID;
+            } else {
+                socket.data.authenticated = false;
+                socket.data.isAdmin = false;
+            }
+            
+            next();
+        } catch (err) {
+            // Invalid token - allow connection but mark as unauthenticated
+            socket.data.authenticated = false;
+            socket.data.isAdmin = false;
+            next();
+        }
+    });
+
     io.on('connection', (socket) => {
-        logger.info(socket.id);
+        logger.info(`[Socket] Client connected: ${socket.id} (admin: ${socket.data.isAdmin})`);
 
-        // const data = {
-        //     deviceId: '8631e4e7-b399-4b71-b741-a865a60df877',
-        //     status: 'connecting',
-        // };
-        // socket.emit('statusUpdate', data);
+        // 🔐 Handle monitoring room subscription (admin only)
+        socket.on('monitoring:subscribe', () => {
+            // Check if user is authenticated admin
+            if (!socket.data.authenticated || !socket.data.isAdmin) {
+                socket.emit('error', { 
+                    code: 'ACCESS_DENIED',
+                    message: 'Monitoring requires admin privileges' 
+                });
+                logger.warn(`[Socket] Unauthorized monitoring subscribe attempt from ${socket.id}`);
+                return;
+            }
+            
+            socket.join('monitoring');
+            logger.info(`[Socket] Admin ${socket.id} subscribed to monitoring`);
+            
+            // Send initial status immediately
+            emitMonitoringUpdate();
+        });
 
-        // socket.on('message', (message) => {
-        //     logger.warn(`WebSocket client sent a message: ${message}`);
-        //     socket.send(`WebSocket server received: ${message}`);
-        // });
+        socket.on('monitoring:unsubscribe', () => {
+            socket.leave('monitoring');
+            logger.info(`[Socket] Client ${socket.id} unsubscribed from monitoring`);
+        });
 
         socket.on('close', () => {
             // console.log('WebSocket client disconnected');
         });
     });
+
+    // 🔧 Start monitoring broadcast (every 10 seconds)
+    startMonitoringBroadcast();
+
     return server;
 }
 
@@ -59,4 +126,65 @@ export function getSocketIO(): Server {
         throw new Error('Socket.IO server not initialized.');
     }
     return io;
+}
+
+/**
+ * 🔧 Start periodic monitoring broadcast to subscribed clients
+ */
+function startMonitoringBroadcast() {
+    if (monitoringInterval) {
+        clearInterval(monitoringInterval);
+    }
+
+    // Broadcast monitoring updates every 10 seconds
+    monitoringInterval = setInterval(async () => {
+        const room = io.sockets.adapter.rooms.get('monitoring');
+        if (room && room.size > 0) {
+            await emitMonitoringUpdate();
+        }
+    }, 10000);
+
+    logger.info('[Socket] Monitoring broadcast started (10s interval)');
+}
+
+/**
+ * 🔧 Emit monitoring update to all subscribed clients
+ */
+async function emitMonitoringUpdate() {
+    try {
+        const pdfStatus = await getComprehensivePDFStatus();
+        
+        io.to('monitoring').emit('monitoring:update', {
+            pdfGenerator: pdfStatus,
+            timestamp: new Date().toISOString()
+        });
+    } catch (error) {
+        logger.error('[Socket] Failed to emit monitoring update:', error);
+    }
+}
+
+/**
+ * 🔧 Emit device status change to monitoring clients
+ */
+export function emitDeviceStatusChange(deviceId: string, status: string, isConnected: boolean) {
+    if (!io) return;
+    
+    io.to('monitoring').emit('monitoring:device', {
+        deviceId,
+        status,
+        isConnected,
+        timestamp: new Date().toISOString()
+    });
+}
+
+/**
+ * 🔧 Emit message sent event to monitoring clients
+ */
+export function emitMessageSent(data: { deviceId: string; status: string; broadcastType?: string }) {
+    if (!io) return;
+    
+    io.to('monitoring').emit('monitoring:message', {
+        ...data,
+        timestamp: new Date().toISOString()
+    });
 }

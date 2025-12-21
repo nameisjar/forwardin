@@ -26,12 +26,16 @@ import tutorsRoutes from './tutors';
 import whatsappGroupRoutes from './whatsappGroups';
 import algorithmicsRoutes from './algorithmics';
 import deviceApiExternal from './deviceApiExternal';
+import healthRoutes from './health';
 
 const router = Router();
 
 router.get('/', (req: Request, res: Response) => {
     res.send('Forwardin Jaya Jaya Jaya!');
 });
+
+// 🔧 Health check endpoints (no auth for basic health, auth for detailed stats)
+router.use('/health', healthRoutes);
 
 router.use('/auth', authRoutes);
 router.use('/sessions', authMiddleware, sessionRoutes);

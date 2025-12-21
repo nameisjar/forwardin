@@ -80,6 +80,7 @@ interface QueueItem {
     resolve: (value: Buffer) => void;
     reject: (error: Error) => void;
     addedAt: number;
+    priority: number; // Higher = processed first (0 = normal, 1 = retry/priority)
 }
 
 class PDFGeneratorQueue {
@@ -100,7 +101,7 @@ class PDFGeneratorQueue {
         logger.info(`[PDFQueue] Initialized (concurrent: ${this.maxConcurrent}, maxQueue: ${this.maxQueueSize})`);
     }
 
-    async add(task: () => Promise<Buffer>, taskId?: string): Promise<Buffer> {
+    async add(task: () => Promise<Buffer>, taskId?: string, priority: number = 0): Promise<Buffer> {
         const id = taskId || `pdf-${Date.now()}`;
         
         // Reject new tasks if shutting down
@@ -124,7 +125,8 @@ class PDFGeneratorQueue {
                 task,
                 resolve,
                 reject,
-                addedAt: Date.now()
+                addedAt: Date.now(),
+                priority
             };
 
             this.queue.push(item);
@@ -151,6 +153,19 @@ class PDFGeneratorQueue {
                 originalReject(error);
             };
 
+            // 🔧 OPTIMIZATION: Insert sorted by priority (higher priority first)
+            if (priority > 0 && this.queue.length > 0) {
+                // Find position to insert (after items with same or higher priority)
+                const insertIndex = this.queue.findIndex(q => q.priority < priority);
+                if (insertIndex === -1) {
+                    this.queue.push(item);
+                } else {
+                    this.queue.splice(insertIndex, 0, item);
+                }
+            } else {
+                this.queue.push(item);
+            }
+
             this.processQueue();
         });
     }
@@ -160,6 +175,7 @@ class PDFGeneratorQueue {
             return;
         }
 
+        // Queue is already sorted by priority, just take first item
         const item = this.queue.shift();
         if (!item) return;
 
@@ -254,6 +270,79 @@ let browserLastUsed: number = 0;
 const BROWSER_IDLE_TIMEOUT = 5 * 60 * 1000; // 5 minutes
 const MAX_BROWSER_AGE = 30 * 60 * 1000; // 30 minutes - force restart after this
 let browserCreatedAt: number = 0;
+
+// 🔧 FIX: Health check tracking (Issue 5.4)
+let consecutiveFailures: number = 0;
+const MAX_CONSECUTIVE_FAILURES = 3;
+let lastHealthCheck: number = 0;
+let lastDeepHealthCheck: number = 0;
+const HEALTH_CHECK_INTERVAL = 60 * 1000; // Lightweight check every 1 minute
+const DEEP_HEALTH_CHECK_INTERVAL = 10 * 1000; // Deep check at most every 10 seconds
+
+/**
+ * 🔧 FIX: Browser health check (Issue 5.4)
+ * Uses lightweight connection check; only creates test page if needed
+ */
+const isBrowserHealthy = async (deepCheck: boolean = false): Promise<boolean> => {
+    if (!browserInstance) return false;
+    
+    try {
+        // Quick connection check (lightweight)
+        if (!browserInstance.isConnected()) {
+            logger.warn('[Puppeteer] Health check: Browser disconnected');
+            return false;
+        }
+        
+        // Deep check: Create test page to verify browser responsiveness
+        // Only run this before actual PDF generation, not in periodic checks
+        if (deepCheck) {
+            const testPage = await browserInstance.newPage();
+            await testPage.setContent('<html><body>health</body></html>', { timeout: 5000 });
+            await testPage.close();
+        }
+        
+        return true;
+    } catch (error) {
+        logger.warn('[Puppeteer] Health check failed:', error instanceof Error ? error.message : String(error));
+        return false;
+    }
+};
+
+/**
+ * 🔧 FIX: Auto-restart browser if unhealthy (Issue 5.4)
+ * @param deepCheck - If true, creates a test page (use before PDF generation)
+ * Rate-limited: Deep checks skip if performed < 10 seconds ago
+ */
+const ensureBrowserHealth = async (deepCheck: boolean = false): Promise<void> => {
+    const now = Date.now();
+    
+    // Skip lightweight checks if recently checked
+    if (!deepCheck && now - lastHealthCheck < HEALTH_CHECK_INTERVAL && browserInstance) {
+        return;
+    }
+    
+    // 🔧 OPTIMIZATION: Skip deep check if recently performed (rate limiting)
+    // This prevents overhead when many requests come in rapid succession
+    if (deepCheck && now - lastDeepHealthCheck < DEEP_HEALTH_CHECK_INTERVAL && browserInstance?.isConnected()) {
+        return; // Browser was verified healthy recently, skip expensive check
+    }
+    
+    lastHealthCheck = now;
+    if (deepCheck) {
+        lastDeepHealthCheck = now;
+    }
+    
+    if (!browserInstance) return;
+    
+    const isHealthy = await isBrowserHealthy(deepCheck);
+    
+    if (!isHealthy) {
+        logger.warn('[Puppeteer] Browser unhealthy - initiating auto-restart...');
+        await closeBrowserInternal();
+        consecutiveFailures = 0; // Reset after intentional restart
+        lastDeepHealthCheck = 0; // Force next request to do deep check
+    }
+};
 
 /**
  * Get or create a browser instance (singleton pattern with auto-cleanup)
@@ -372,8 +461,84 @@ export const cleanupIdleBrowser = async (): Promise<void> => {
     }
 };
 
+/**
+ * 🔧 FIX: Periodic health check (Issue 5.4)
+ * Runs in background to detect and recover from browser crashes
+ * Only runs lightweight check (isConnected) - no page creation overhead
+ */
+const runPeriodicHealthCheck = async (): Promise<void> => {
+    // Skip if browser not running or idle for too long
+    if (!browserInstance) return;
+    
+    const idleTime = Date.now() - browserLastUsed;
+    // Don't bother checking if browser has been idle > 2 minutes
+    // (cleanupIdleBrowser will close it anyway)
+    if (idleTime > 2 * 60 * 1000) return;
+    
+    try {
+        // Use lightweight check only (no page creation)
+        await ensureBrowserHealth(false);
+    } catch (error) {
+        logger.error('[Puppeteer] Periodic health check error:', error);
+    }
+};
+
+/**
+ * 🔧 FIX: Get browser health status for monitoring (Issue 5.4)
+ * Uses lightweight check by default
+ */
+export const getBrowserHealthStatus = async (): Promise<{
+    isRunning: boolean;
+    isHealthy: boolean;
+    ageMs: number;
+    idleMs: number;
+    consecutiveFailures: number;
+    lastHealthCheck: number;
+    lastDeepHealthCheck: number;
+}> => {
+    const now = Date.now();
+    const isRunning = browserInstance !== null;
+    let isHealthy = false;
+    
+    if (isRunning) {
+        // Use lightweight check for monitoring endpoint
+        isHealthy = await isBrowserHealthy(false);
+    }
+    
+    return {
+        isRunning,
+        isHealthy,
+        ageMs: isRunning ? now - browserCreatedAt : 0,
+        idleMs: isRunning ? now - browserLastUsed : 0,
+        consecutiveFailures,
+        lastHealthCheck,
+        lastDeepHealthCheck,
+    };
+};
+
+/**
+ * 🔧 OPTIMIZATION: Comprehensive PDF system status for monitoring dashboard
+ * Combines queue stats and browser health
+ */
+export const getComprehensivePDFStatus = async () => {
+    const [browserHealth, queueStats] = await Promise.all([
+        getBrowserHealthStatus(),
+        Promise.resolve(getPDFQueueStats())
+    ]);
+    
+    return {
+        browser: browserHealth,
+        queue: queueStats,
+        status: browserHealth.isHealthy && !queueStats.isShuttingDown ? 'healthy' : 'degraded',
+        timestamp: new Date().toISOString()
+    };
+};
+
 // Setup periodic cleanup (every 2 minutes)
 setInterval(cleanupIdleBrowser, 2 * 60 * 1000);
+
+// 🔧 FIX: Setup periodic health check (every 1 minute) (Issue 5.4)
+setInterval(runPeriodicHealthCheck, HEALTH_CHECK_INTERVAL);
 
 // Cleanup on process exit with graceful shutdown
 process.on('exit', () => closeBrowser());
@@ -580,11 +745,23 @@ const generatePDFInternal = async (data: MonthlyFeedbackData): Promise<Buffer> =
  * Generate PDF using Puppeteer with SMART RETRY mechanism
  * - Attempt 1-2: Retry tanpa restart browser (mungkin hanya page yang bermasalah)
  * - Attempt 3-5: Retry dengan restart browser (browser mungkin bermasalah)
+ * 🔧 FIX: Added health check and consecutive failure tracking (Issue 5.4)
  */
 export const generateMonthlyFeedbackPDFWithPuppeteer = async (data: MonthlyFeedbackData): Promise<Buffer> => {
     return pdfQueue.add(async () => {
         const maxRetries = 5;
         let lastError: Error | null = null;
+        
+        // 🔧 FIX: Check browser health before starting (Issue 5.4)
+        // Use deep check (with page creation) before actual PDF generation
+        await ensureBrowserHealth(true);
+        
+        // 🔧 FIX: Auto-restart browser if too many consecutive failures (Issue 5.4)
+        if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+            logger.warn(`[Puppeteer] ${consecutiveFailures} consecutive failures detected - force restarting browser`);
+            await closeBrowser();
+            consecutiveFailures = 0;
+        }
         
         for (let attempt = 1; attempt <= maxRetries; attempt++) {
             try {
@@ -594,6 +771,9 @@ export const generateMonthlyFeedbackPDFWithPuppeteer = async (data: MonthlyFeedb
                 }
                 
                 const result = await generatePDFInternal(data);
+                
+                // 🔧 FIX: Reset failure counter on success (Issue 5.4)
+                consecutiveFailures = 0;
                 
                 // Log success only if it was a retry
                 if (attempt > 1) {
@@ -617,8 +797,11 @@ export const generateMonthlyFeedbackPDFWithPuppeteer = async (data: MonthlyFeedb
             }
         }
         
+        // 🔧 FIX: Track consecutive failures (Issue 5.4)
+        consecutiveFailures++;
+        
         // All retries failed
-        logger.error(`[Puppeteer] All ${maxRetries} attempts failed for: ${data.studentName?.substring(0, 2)}*** - ${lastError?.message}`);
+        logger.error(`[Puppeteer] All ${maxRetries} attempts failed for: ${data.studentName?.substring(0, 2)}*** - ${lastError?.message} (consecutive failures: ${consecutiveFailures})`);
         throw lastError || new Error('PDF generation failed after all retries');
     }, `pdf-${data.studentName?.substring(0, 2)}***-${Date.now()}`);
 };
@@ -689,9 +872,9 @@ export const generateMonthlyFeedbackPDF = async (data: MonthlyFeedbackData): Pro
                 }
             });
 
-            const chunks: Buffer[] = [];
+            const chunks: Uint8Array[] = [];
 
-            doc.on('data', (chunk) => chunks.push(chunk));
+            doc.on('data', (chunk: Uint8Array) => chunks.push(chunk));
             doc.on('end', () => resolve(Buffer.concat(chunks)));
             doc.on('error', reject);
 
