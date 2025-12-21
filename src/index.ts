@@ -24,15 +24,43 @@ app.set('trust proxy', true);
 
 app.use(pinoHttp({ logger }));
 
-// Tighten CORS in production (allow configured client origins only)
+// 🔐 CORS Configuration with fail-safe defaults (Issue 4.5)
 const allowedOrigins = [process.env.CLIENT_URL1, process.env.CLIENT_URL2].filter(Boolean) as string[];
+const isProduction = process.env.NODE_ENV === 'production';
+const isDevelopment = process.env.NODE_ENV === 'development' || !process.env.NODE_ENV;
+
+// Warn if no origins configured
+if (allowedOrigins.length === 0) {
+    if (isProduction) {
+        logger.error('[Security] ❌ CORS: No CLIENT_URL configured in production!');
+        logger.error('[Security] ❌ CORS: Set CLIENT_URL1 and/or CLIENT_URL2 environment variables');
+        logger.error('[Security] ❌ CORS: All cross-origin requests will be BLOCKED');
+    } else {
+        logger.warn('[Security] ⚠️ CORS: No CLIENT_URL configured - allowing all origins (dev mode only)');
+    }
+}
+
 app.use(
     cors({
         origin: (origin, cb) => {
-            // allow same-origin or non-browser clients with no Origin header
+            // Allow same-origin or non-browser clients with no Origin header
             if (!origin) return cb(null, true);
-            if (allowedOrigins.length === 0) return cb(null, true);
+            
+            // 🔐 FIX: Fail-safe default - only allow all origins in development
+            if (allowedOrigins.length === 0) {
+                if (isDevelopment) {
+                    // Development: permissive for convenience
+                    return cb(null, true);
+                } else {
+                    // Production: block if not configured (fail-safe)
+                    logger.warn({ origin }, '[Security] CORS blocked - no allowed origins configured');
+                    return cb(new Error('CORS not configured - request blocked'));
+                }
+            }
+            
             if (allowedOrigins.includes(origin)) return cb(null, true);
+            
+            logger.warn({ origin, allowedOrigins }, '[Security] CORS blocked - origin not in allowlist');
             return cb(new Error('Not allowed by CORS'));
         },
         credentials: false,
