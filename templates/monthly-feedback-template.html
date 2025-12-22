@@ -163,6 +163,7 @@
             grid-template-columns: 1fr 1fr;
             gap: 6px;
             margin-bottom: 6px;
+            align-items: stretch;
         }
 
         .yellow-box-half {
@@ -172,6 +173,7 @@
             padding: 0;
             display: flex;
             flex-direction: column;
+            height: 100%;
         }
 
         .yellow-box-half.white-bg {
@@ -185,17 +187,17 @@
             margin-top: auto;
         }
 
-        .yellow-content-wrapper .yellow-text {
+        /* .yellow-content-wrapper .yellow-text {
             margin: 1px 0;
-        }
+        } */
 
-        .yellow-content-wrapper .link-row {
+        /* .yellow-content-wrapper .link-row {
             margin-top: 2px;
-        }
+        } */
 
         .icon-img-inline {
-            width: 18px;
-            height: 18px;
+            width: 14px;
+            height: 14px;
             object-fit: contain;
             margin-right: 0;
             background: transparent !important;
@@ -253,6 +255,11 @@
             gap: 5px;
             margin-bottom: 0;
             padding: 10px 8px 10px 8px;
+        }
+
+        /* Only yellow box headers should expand to push content to bottom */
+        .yellow-box-half .yellow-header-centered {
+            flex: 1;
         }
 
         .yellow-header-centered h3,

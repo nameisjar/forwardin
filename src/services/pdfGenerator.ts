@@ -645,6 +645,16 @@ const generatePDFInternal = async (data: MonthlyFeedbackData): Promise<Buffer> =
         month: data.month 
     });
     
+    // 🔧 Determine if compact mode is needed based on text length
+    const totalTextLength = (
+        (data.tutorComment?.length || 0) +
+        (data.skillsAcquired?.length || 0) +
+        (data.result?.length || 0) +
+        (data.topicModule?.length || 0)
+    );
+    const needsCompactMode = totalTextLength > 800; // Threshold for compact mode
+    logger.info(`[Puppeteer] Text length: ${totalTextLength}, compact mode: ${needsCompactMode}`);
+    
     let page: Page | null = null;
     
     try {
@@ -677,6 +687,14 @@ const generatePDFInternal = async (data: MonthlyFeedbackData): Promise<Buffer> =
             .replace(/\{\{freeLessonGiftIcon\}\}/g, images.cellImage_1836760394_3 || '')
             .replace(/\{\{aboutModuleIcon\}\}/g, images.cellImage_1836760394_5 || '')
             .replace(/\{\{feedbackIcon\}\}/g, images.cellImage_1836760394_7 || '');
+        
+        // 🔧 Add compact-mode class to template if needed
+        if (needsCompactMode) {
+            htmlContent = htmlContent.replace(
+                'class="pdf-template"',
+                'class="pdf-template compact-mode"'
+            );
+        }
         
         // Get browser (pooled)
         const browser = await getBrowser();
@@ -711,7 +729,32 @@ const generatePDFInternal = async (data: MonthlyFeedbackData): Promise<Buffer> =
         // Small delay to ensure rendering is complete
         await sleep(300);
         
-        // Generate PDF
+        // 🔧 Scale down content to fit in 1 A4 page if needed
+        const scaleFactor = await page.evaluate(() => {
+            const template = document.querySelector('.pdf-template') as HTMLElement;
+            if (!template) return 1;
+            
+            const contentHeight = template.scrollHeight;
+            const maxHeight = 1123; // A4 height in pixels at 96dpi
+            
+            if (contentHeight > maxHeight) {
+                // Calculate scale factor to fit content in 1 page
+                const scale = maxHeight / contentHeight;
+                // Apply CSS transform to scale down
+                template.style.transformOrigin = 'top center';
+                template.style.transform = `scale(${scale})`;
+                template.style.height = `${maxHeight}px`;
+                return scale;
+            }
+            return 1;
+        });
+        
+        logger.info(`[Puppeteer] Scale factor applied: ${scaleFactor}`);
+        
+        // Small delay after scaling
+        await sleep(100);
+        
+        // Generate PDF - single A4 page
         const pdfBuffer = await page.pdf({
             format: 'A4',
             printBackground: true,
@@ -721,11 +764,12 @@ const generatePDFInternal = async (data: MonthlyFeedbackData): Promise<Buffer> =
                 left: '0mm',
                 right: '0mm'
             },
+            pageRanges: '1', // Force only first page
             timeout: 30000 // 30 second timeout
         });
         
         const duration = Date.now() - startTime;
-        logger.info(`[Puppeteer] PDF generated successfully in ${duration}ms, size: ${pdfBuffer.length} bytes`);
+        logger.info(`[Puppeteer] PDF generated successfully in ${duration}ms, size: ${pdfBuffer.length} bytes, compact: ${needsCompactMode}`);
         
         return Buffer.from(pdfBuffer);
         
