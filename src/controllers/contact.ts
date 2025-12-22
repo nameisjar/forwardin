@@ -750,6 +750,16 @@ export const getContacts: RequestHandler = async (req, res) => {
                 { lastName: { contains: String(q), mode: 'insensitive' } },
                 { phone: { contains: String(q) } },
                 { email: { contains: String(q), mode: 'insensitive' } },
+                // 🆕 Search by label name
+                {
+                    ContactLabel: {
+                        some: {
+                            label: {
+                                name: { contains: String(q), mode: 'insensitive' },
+                            },
+                        },
+                    },
+                },
             ];
         }
 
@@ -867,36 +877,62 @@ export const getContactLabels: RequestHandler = async (req, res) => {
     try {
         const pkId = req.authenticatedUser.pkId;
         const privilegeId = req.privilege.pkId;
-        const { deviceId } = req.query;
+        const { deviceId, q, page = '1', pageSize = '100' } = req.query;
 
-        const labels = await prisma.label.findMany({
-            where: {
-                ContactLabel: {
-                    some: {
-                        contact: {
-                            contactDevices: {
-                                some: {
-                                    device: {
-                                        id: deviceId ? String(deviceId) : undefined,
-                                        userId: privilegeId !== Number(process.env.SUPER_ADMIN_ID) ? pkId : undefined,
-                                    },
+        const pageNum = parseInt(page as string, 10) || 1;
+        const limitNum = parseInt(pageSize as string, 10) || 100;
+        const skip = (pageNum - 1) * limitNum;
+
+        const whereClause: any = {
+            ContactLabel: {
+                some: {
+                    contact: {
+                        contactDevices: {
+                            some: {
+                                device: {
+                                    id: deviceId ? String(deviceId) : undefined,
+                                    userId: privilegeId !== Number(process.env.SUPER_ADMIN_ID) ? pkId : undefined,
                                 },
                             },
                         },
                     },
                 },
             },
-            include: {
-                _count: {
-                    select: {
-                        ContactLabel: true,
+        };
+
+        // 🆕 Search by label name
+        if (q) {
+            whereClause.name = { contains: String(q), mode: 'insensitive' };
+        }
+
+        const [labels, total] = await Promise.all([
+            prisma.label.findMany({
+                where: whereClause,
+                include: {
+                    _count: {
+                        select: {
+                            ContactLabel: true,
+                        },
                     },
                 },
-            },
-            orderBy: { name: 'asc' },
-        });
+                orderBy: { name: 'asc' },
+                skip,
+                take: limitNum,
+            }),
+            prisma.label.count({ where: whereClause }),
+        ]);
 
-        res.status(200).json({ labels });
+        const totalPages = Math.ceil(total / limitNum);
+
+        res.status(200).json({
+            labels,
+            metadata: {
+                totalLabels: total,
+                currentPage: pageNum,
+                totalPages,
+                hasMore: pageNum < totalPages,
+            },
+        });
     } catch (error) {
         logger.error(error);
         res.status(500).json({ message: 'Internal server error' });

@@ -122,6 +122,53 @@ export class WhatsAppGroupService {
   }
 
   /**
+   * 🆕 Mengambil grup dengan pagination dan search
+   */
+  static async getActiveGroupsPaginated(
+    deviceId: number,
+    options: {
+      skip?: number;
+      take?: number;
+      search?: string;
+      includeInactive?: boolean;
+    } = {}
+  ) {
+    try {
+      const { skip = 0, take = 50, search, includeInactive = false } = options;
+
+      const whereClause: any = {
+        deviceId: deviceId,
+        ...(includeInactive ? {} : { isActive: true }),
+      };
+
+      // 🆕 Search by group name
+      if (search) {
+        whereClause.groupName = {
+          contains: search,
+          mode: 'insensitive',
+        };
+      }
+
+      const [groups, total] = await Promise.all([
+        prisma.whatsAppGroup.findMany({
+          where: whereClause,
+          orderBy: {
+            groupName: 'asc',
+          },
+          skip,
+          take,
+        }),
+        prisma.whatsAppGroup.count({ where: whereClause }),
+      ]);
+
+      return { groups, total };
+    } catch (error) {
+      // console.error('Error fetching paginated groups:', error);
+      return { groups: [], total: 0 };
+    }
+  }
+
+  /**
    * Mengambil semua grup (aktif dan tidak aktif) untuk device
    */
   static async getAllGroups(deviceId: number) {

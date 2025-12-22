@@ -11,6 +11,13 @@ export const getActiveGroups = async (req: Request, res: Response) => {
     const privilegeId = (req as any).privilege?.pkId;
     const isSuperAdmin = privilegeId === Number(process.env.SUPER_ADMIN_ID);
 
+    // 🆕 Pagination and search parameters
+    const { q, page = '1', pageSize = '50' } = req.query;
+    const pageNum = parseInt(page as string, 10) || 1;
+    const limitNum = parseInt(pageSize as string, 10) || 50;
+    const skip = (pageNum - 1) * limitNum;
+    const searchTerm = q ? String(q) : undefined;
+
     if (!deviceId) {
       return res.status(400).json({
         status: false,
@@ -39,11 +46,16 @@ export const getActiveGroups = async (req: Request, res: Response) => {
       });
     }
 
-    // ✅ When WhatsApp is offline, groups might be marked isActive=false by design.
-    // For schedule display we still need the cached groupName from DB.
-    const groups = shouldIncludeInactive
-      ? await WhatsAppGroupService.getAllGroups(device.pkId)
-      : await WhatsAppGroupService.getActiveGroups(device.pkId);
+    // 🆕 Use pagination and search from service
+    const { groups, total } = await WhatsAppGroupService.getActiveGroupsPaginated(
+      device.pkId,
+      {
+        skip,
+        take: limitNum,
+        search: searchTerm,
+        includeInactive: shouldIncludeInactive,
+      }
+    );
 
     // Get WhatsApp instance to fetch profile pictures (optional)
     let instance: any = null;
@@ -84,10 +96,17 @@ export const getActiveGroups = async (req: Request, res: Response) => {
     });
 
     const transformedGroups = await Promise.all(transformedGroupsPromises);
+    const totalPages = Math.ceil(total / limitNum);
 
     res.json({
       status: true,
       data: transformedGroups,
+      metadata: {
+        totalGroups: total,
+        currentPage: pageNum,
+        totalPages,
+        hasMore: pageNum < totalPages,
+      },
     });
   } catch (error) {
     res.status(500).json({
