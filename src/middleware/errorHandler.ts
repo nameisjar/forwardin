@@ -1,4 +1,5 @@
 import { Request, Response, NextFunction } from 'express';
+import logger from '../config/logger';
 
 export const internalServerErrorHandler = (
     err: Error,
@@ -6,10 +7,26 @@ export const internalServerErrorHandler = (
     res: Response,
     next: NextFunction,
 ) => {
-    console.error(err); // Log the error for debugging purposes
+    // 🔧 Structured logging with pino instead of console.error
+    logger.error({
+        err: {
+            message: err.message,
+            stack: err.stack,
+            name: err.name,
+        },
+        method: req.method,
+        url: req.url,
+        ip: req.ip,
+    }, '[Error] Internal Server Error');
 
-    // Handle other types of errors
-    return res.status(500).json({ error: 'Internal Server Error' });
+    // Return error details only in development
+    return res.status(500).json({ 
+        error: 'Internal Server Error',
+        ...(process.env.NODE_ENV === 'development' && { 
+            message: err.message,
+            stack: err.stack 
+        })
+    });
 };
 
 export const notFoundHandler = (req: Request, res: Response, next: NextFunction) => {

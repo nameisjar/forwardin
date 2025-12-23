@@ -2,3 +2,9 @@ node_modules/
 dist/
 .env
 .tmp/
+
+# Internal documentation (not for public)
+docs/PERFORMANCE_REVIEW.md
+docs/class.md
+docs/erd-frontend.md
+docs/erd.mmd

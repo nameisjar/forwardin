@@ -695,29 +695,126 @@ export const getDeviceSignals: RequestHandler = async (req, res) => {
 
 const scheduledJobs: schedule.Job[] = [];
 
-// Database cleanup job (every minute)
+// Batch size for paginated cleanup queries
+const CLEANUP_BATCH_SIZE = 1000;
+
+/**
+ * Cleanup orphaned labels and contacts using cursor-based pagination
+ * Prevents memory spikes with large datasets
+ */
+async function cleanupOrphanedData(): Promise<void> {
+    const validLabelIds = new Set<number>();
+    const validContactIds = new Set<number>();
+
+    // Collect valid label IDs from deviceLabels with pagination
+    let labelCursor: number | undefined;
+    while (true) {
+        const batch = await prisma.deviceLabel.findMany({
+            take: CLEANUP_BATCH_SIZE,
+            skip: labelCursor ? 1 : 0,
+            cursor: labelCursor ? { pkId: labelCursor } : undefined,
+            select: { pkId: true, labelId: true },
+            orderBy: { pkId: 'asc' },
+        });
+        if (batch.length === 0) break;
+        batch.forEach((item) => validLabelIds.add(item.labelId));
+        labelCursor = batch[batch.length - 1].pkId;
+        if (batch.length < CLEANUP_BATCH_SIZE) break;
+    }
+
+    // Collect valid label IDs from contactLabels with pagination
+    // Note: ContactLabel uses 'id' field instead of 'pkId'
+    let contactLabelCursor: number | undefined;
+    while (true) {
+        const batch = await prisma.contactLabel.findMany({
+            take: CLEANUP_BATCH_SIZE,
+            skip: contactLabelCursor ? 1 : 0,
+            cursor: contactLabelCursor ? { id: contactLabelCursor } : undefined,
+            select: { id: true, labelId: true },
+            orderBy: { id: 'asc' },
+        });
+        if (batch.length === 0) break;
+        batch.forEach((item) => validLabelIds.add(item.labelId));
+        contactLabelCursor = batch[batch.length - 1].id;
+        if (batch.length < CLEANUP_BATCH_SIZE) break;
+    }
+
+    // Collect valid contact IDs from contactDevices with pagination
+    let contactDeviceCursor: number | undefined;
+    while (true) {
+        const batch = await prisma.contactDevice.findMany({
+            take: CLEANUP_BATCH_SIZE,
+            skip: contactDeviceCursor ? 1 : 0,
+            cursor: contactDeviceCursor ? { pkId: contactDeviceCursor } : undefined,
+            select: { pkId: true, contactId: true },
+            orderBy: { pkId: 'asc' },
+        });
+        if (batch.length === 0) break;
+        batch.forEach((item) => validContactIds.add(item.contactId));
+        contactDeviceCursor = batch[batch.length - 1].pkId;
+        if (batch.length < CLEANUP_BATCH_SIZE) break;
+    }
+
+    // Collect valid contact IDs from contactGroups with pagination
+    let contactGroupCursor: number | undefined;
+    while (true) {
+        const batch = await prisma.contactGroup.findMany({
+            take: CLEANUP_BATCH_SIZE,
+            skip: contactGroupCursor ? 1 : 0,
+            cursor: contactGroupCursor ? { pkId: contactGroupCursor } : undefined,
+            select: { pkId: true, contactId: true },
+            orderBy: { pkId: 'asc' },
+        });
+        if (batch.length === 0) break;
+        batch.forEach((item) => validContactIds.add(item.contactId));
+        contactGroupCursor = batch[batch.length - 1].pkId;
+        if (batch.length < CLEANUP_BATCH_SIZE) break;
+    }
+
+    // Delete orphaned labels in batches
+    let deletedLabels = 0;
+    while (true) {
+        const orphanedLabels = await prisma.label.findMany({
+            where: { pkId: { notIn: Array.from(validLabelIds) } },
+            take: CLEANUP_BATCH_SIZE,
+            select: { pkId: true },
+        });
+        if (orphanedLabels.length === 0) break;
+        await prisma.label.deleteMany({
+            where: { pkId: { in: orphanedLabels.map((l) => l.pkId) } },
+        });
+        deletedLabels += orphanedLabels.length;
+        // Yield to event loop
+        await new Promise((resolve) => setImmediate(resolve));
+    }
+
+    // Delete orphaned contacts in batches
+    let deletedContacts = 0;
+    while (true) {
+        const orphanedContacts = await prisma.contact.findMany({
+            where: { pkId: { notIn: Array.from(validContactIds) } },
+            take: CLEANUP_BATCH_SIZE,
+            select: { pkId: true },
+        });
+        if (orphanedContacts.length === 0) break;
+        await prisma.contact.deleteMany({
+            where: { pkId: { in: orphanedContacts.map((c) => c.pkId) } },
+        });
+        deletedContacts += orphanedContacts.length;
+        // Yield to event loop
+        await new Promise((resolve) => setImmediate(resolve));
+    }
+
+    if (deletedLabels > 0 || deletedContacts > 0) {
+        logger.info({ deletedLabels, deletedContacts }, 'Database cleanup completed');
+    }
+}
+
+// Database cleanup job - every 5 minutes (was: every second '*')
 scheduledJobs.push(
-    schedule.scheduleJob('*', async () => {
+    schedule.scheduleJob('*/5 * * * *', async () => {
         try {
-            const deviceLabels = await prisma.deviceLabel.findMany({ select: { labelId: true } });
-            const contactLabels = await prisma.contactLabel.findMany({
-                select: { labelId: true, contactId: true },
-            });
-            const labels = deviceLabels.map((dl) => dl.labelId);
-            contactLabels.map((cl) => labels.push(cl.labelId));
-
-            const contactDevices = await prisma.contactDevice.findMany({
-                select: { deviceId: true, contactId: true },
-            });
-            const contactGroups = await prisma.contactGroup.findMany({
-                select: { groupId: true, contactId: true },
-            });
-            const contacts = contactDevices.map((cd) => cd.contactId);
-            contactGroups.map((cg) => contacts.push(cg.contactId));
-
-            await prisma.label.deleteMany({ where: { pkId: { notIn: labels } } });
-            await prisma.contact.deleteMany({ where: { pkId: { notIn: contacts } } });
-            logger.info('Database cleanup executed successfully.');
+            await cleanupOrphanedData();
         } catch (error) {
             logger.error('Error executing database cleanup:', error);
         }

@@ -1,5 +1,7 @@
 import express from 'express';
 import cors from 'cors';
+import helmet from 'helmet';
+import rateLimit from 'express-rate-limit';
 import routes from './routes';
 import logger from './config/logger';
 import pinoHttp from 'pino-http';
@@ -22,6 +24,12 @@ const app = express();
 
 // Trust reverse proxy (Cloudflare) so req.ip uses CF-Connecting-IP / X-Forwarded-For.
 app.set('trust proxy', true);
+
+// 🛡️ Security headers (Helmet.js)
+app.use(helmet({
+    contentSecurityPolicy: false, // Disable CSP for API (no HTML responses)
+    crossOriginEmbedderPolicy: false, // Allow embedding for WebSocket
+}));
 
 app.use(pinoHttp({ logger }));
 
@@ -68,8 +76,35 @@ app.use(
     }),
 );
 
-app.use(bodyParser.json({ limit: '500mb' }));
-app.use(bodyParser.urlencoded({ extended: true, limit: '500mb' }));
+// 🛡️ Global Rate Limiter - 100 requests per minute per IP
+const globalLimiter = rateLimit({
+    windowMs: 1 * 60 * 1000, // 1 minute
+    max: 100, // max 100 requests per IP per minute
+    message: { error: 'Too many requests, please try again later.', retryAfter: 60 },
+    standardHeaders: true,
+    legacyHeaders: false,
+    handler: (req, res) => {
+        logger.warn({ ip: req.ip, path: req.path }, '[Security] Rate limit exceeded');
+        res.status(429).json({ error: 'Too many requests, please try again later.' });
+    },
+});
+app.use(globalLimiter);
+
+// 🔐 Stricter rate limiter for auth endpoints - 10 attempts per 15 minutes
+const authLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000, // 15 minutes
+    max: 10, // max 10 attempts per 15 minutes
+    message: { error: 'Too many login attempts, please try again later.', retryAfter: 900 },
+    standardHeaders: true,
+    legacyHeaders: false,
+    skipSuccessfulRequests: true, // Only count failed attempts
+});
+app.use('/auth/login', authLimiter);
+app.use('/auth/register', authLimiter);
+
+// 🔧 Body limit reduced from 500mb to 10mb for security
+app.use(bodyParser.json({ limit: '10mb' }));
+app.use(bodyParser.urlencoded({ extended: true, limit: '10mb' }));
 app.use(express.json());
 
 app.use('/', routes);
@@ -139,5 +174,16 @@ const gracefulShutdown = async (signal: string) => {
 
 process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+
+// 🛡️ Handle unhandled promise rejections
+process.on('unhandledRejection', (reason: unknown, promise: Promise<unknown>) => {
+    logger.error({ reason, promise: String(promise) }, '[Process] Unhandled Promise Rejection');
+});
+
+// 🛡️ Handle uncaught exceptions - must exit as state is unreliable
+process.on('uncaughtException', (error: Error) => {
+    logger.fatal({ err: error }, '[Process] Uncaught Exception - shutting down');
+    process.exit(1);
+});
 
 export default app;

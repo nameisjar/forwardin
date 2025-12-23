@@ -3,6 +3,45 @@ import path from 'path';
 import fs from 'fs';
 import prisma from '../utils/db'; // lightweight import (already pooled)
 
+// 🔒 Allowed MIME types for file upload security
+const ALLOWED_MIME_TYPES = [
+    // Images
+    'image/jpeg',
+    'image/png',
+    'image/gif',
+    'image/webp',
+    // Videos
+    'video/mp4',
+    'video/quicktime',
+    'video/webm',
+    // Audio
+    'audio/mpeg',
+    'audio/ogg',
+    'audio/wav',
+    'audio/webm',
+    // Documents
+    'application/pdf',
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', // xlsx
+    'application/vnd.ms-excel', // xls
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document', // docx
+    'application/msword', // doc
+    'text/csv',
+    'text/plain',
+];
+
+// 🔒 File size limits
+const MAX_FILE_SIZE = 25 * 1024 * 1024; // 25MB per file
+const MAX_FILES = 10; // Max 10 files per request
+
+// 🔒 File filter to validate MIME types
+const fileFilter = (req: Express.Request, file: Express.Multer.File, cb: multer.FileFilterCallback) => {
+    if (ALLOWED_MIME_TYPES.includes(file.mimetype)) {
+        cb(null, true); // Accept file
+    } else {
+        cb(new Error(`File type '${file.mimetype}' is not allowed. Allowed types: images, videos, audio, PDF, Excel, Word, CSV, TXT`));
+    }
+};
+
 // using buffer
 const memoryStorage = multer.memoryStorage();
 
@@ -43,7 +82,22 @@ const diskStorage = multer.diskStorage({
     },
 });
 
-const memoryUpload = multer({ storage: memoryStorage });
-const diskUpload = multer({ storage: diskStorage });
+const memoryUpload = multer({ 
+    storage: memoryStorage,
+    fileFilter,
+    limits: {
+        fileSize: MAX_FILE_SIZE,
+        files: MAX_FILES,
+    }
+});
+
+const diskUpload = multer({ 
+    storage: diskStorage,
+    fileFilter,
+    limits: {
+        fileSize: MAX_FILE_SIZE,
+        files: MAX_FILES,
+    }
+});
 
 export { memoryUpload, diskUpload };
