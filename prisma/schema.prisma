@@ -34,6 +34,7 @@ model User {
   Subscription     Subscription[]
   Template         Template[]
   notifications    Notification[]
+  codeSnippets     CodeSnippet[]
 }
 
 model CustomerService {
@@ -681,5 +682,26 @@ model MonthlyFeedbackLog {
   @@index([sentBy])
   @@index([courseName])
   @@index([sentAt])
+}
+
+/// Code Snippet untuk tutor share kode ke murid
+model CodeSnippet {
+  pkId        Int       @id @default(autoincrement())
+  id          String    @unique @default(uuid()) @db.Uuid
+  title       String    @db.VarChar(255)
+  description String?   @db.Text
+  code        String    @db.Text
+  language    String    @db.VarChar(50)
+  shareToken  String    @unique @map("share_token") @db.VarChar(64)
+  isPublic    Boolean   @default(true) @map("is_public")
+  viewCount   Int       @default(0) @map("view_count")
+  userId      Int       @map("user_id")
+  user        User      @relation(fields: [userId], references: [pkId], onDelete: Cascade)
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @default(now()) @map("updated_at")
+
+  @@index([userId])
+  @@index([shareToken])
+  @@map("code_snippets")
 }
 

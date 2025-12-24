@@ -27,6 +27,8 @@ import whatsappGroupRoutes from './whatsappGroups';
 import algorithmicsRoutes from './algorithmics';
 import deviceApiExternal from './deviceApiExternal';
 import healthRoutes from './health';
+import codeSnippetRoutes from './codeSnippets';
+import { getSnippetByShareToken } from '../controllers/codeSnippet';
 
 const router = Router();
 
@@ -64,6 +66,9 @@ router.use('/algorithmics', authMiddleware, algorithmicsRoutes);
 router.use('/course', authMiddleware, courseRoutes); // 🔥 Tambahkan ini!
 router.use('/tutors', tutorsRoutes);
 router.use('/whatsapp-groups', whatsappGroupRoutes);
+router.use('/code-snippets', authMiddleware, codeSnippetRoutes);
+// Public route for viewing shared snippets (no auth required)
+router.get('/snippets/share/:token', getSnippetByShareToken);
 router.use('/media', express.static('media'));
 
 export default router;
