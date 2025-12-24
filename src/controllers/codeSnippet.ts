@@ -59,39 +59,91 @@ export const createSnippet: RequestHandler = async (req, res) => {
     }
 };
 
-// Get all snippets for current user
+// Get all snippets for current user (with pagination)
 export const getSnippets: RequestHandler = async (req, res) => {
     try {
         const userId = req.authenticatedUser.pkId;
-        const { search, language } = req.query;
+        const { search, language, page = '1', limit = '25' } = req.query;
 
-        const snippets = await prisma.codeSnippet.findMany({
-            where: {
-                userId,
-                ...(search && {
-                    OR: [
-                        { title: { contains: String(search), mode: 'insensitive' } },
-                        { description: { contains: String(search), mode: 'insensitive' } },
-                    ],
-                }),
-                ...(language && { language: String(language) }),
+        const pageNum = Math.max(1, parseInt(String(page), 10) || 1);
+        const limitNum = Math.min(100, Math.max(1, parseInt(String(limit), 10) || 25));
+        const skip = (pageNum - 1) * limitNum;
+
+        const whereClause = {
+            userId,
+            ...(search && {
+                OR: [
+                    { title: { contains: String(search), mode: 'insensitive' as const } },
+                    { description: { contains: String(search), mode: 'insensitive' as const } },
+                    { code: { contains: String(search), mode: 'insensitive' as const } },
+                ],
+            }),
+            ...(language && { language: String(language) }),
+        };
+
+        const [snippets, total] = await Promise.all([
+            prisma.codeSnippet.findMany({
+                where: whereClause,
+                select: {
+                    id: true,
+                    title: true,
+                    description: true,
+                    code: true,
+                    language: true,
+                    shareToken: true,
+                    isPublic: true,
+                    viewCount: true,
+                    createdAt: true,
+                    updatedAt: true,
+                },
+                orderBy: { createdAt: 'desc' },
+                skip,
+                take: limitNum,
+            }),
+            prisma.codeSnippet.count({ where: whereClause }),
+        ]);
+
+        // Return code preview (first 300 chars) instead of full code for list view
+        const snippetsWithPreview = snippets.map((snippet) => ({
+            ...snippet,
+            codePreview: snippet.code.length > 300 ? snippet.code.substring(0, 300) + '...' : snippet.code,
+            code: undefined, // Don't send full code in list view
+        }));
+
+        res.status(200).json({
+            data: snippetsWithPreview,
+            pagination: {
+                page: pageNum,
+                limit: limitNum,
+                total,
+                totalPages: Math.ceil(total / limitNum),
             },
-            select: {
-                id: true,
-                title: true,
-                description: true,
-                code: true,
-                language: true,
-                shareToken: true,
-                isPublic: true,
-                viewCount: true,
-                createdAt: true,
-                updatedAt: true,
-            },
-            orderBy: { createdAt: 'desc' },
         });
+    } catch (error) {
+        logger.error(error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};
 
-        res.status(200).json(snippets);
+// Get stats for current user (total snippets, views, public count)
+export const getSnippetStats: RequestHandler = async (req, res) => {
+    try {
+        const userId = req.authenticatedUser.pkId;
+
+        const [totalSnippets, publicSnippets, viewsResult] = await Promise.all([
+            prisma.codeSnippet.count({ where: { userId } }),
+            prisma.codeSnippet.count({ where: { userId, isPublic: true } }),
+            prisma.codeSnippet.aggregate({
+                where: { userId },
+                _sum: { viewCount: true },
+            }),
+        ]);
+
+        res.status(200).json({
+            totalSnippets,
+            publicSnippets,
+            totalViews: viewsResult._sum.viewCount || 0,
+        });
     } catch (error) {
         logger.error(error);
         res.status(500).json({ message: 'Internal server error' });
