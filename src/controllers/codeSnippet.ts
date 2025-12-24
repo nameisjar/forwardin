@@ -5,9 +5,9 @@ import crypto from 'crypto';
 
 const MAX_CODE_SIZE = 50 * 1024; // 50KB limit per snippet
 
-// Generate random share token
+// Generate random share token (12 bytes = 16 chars base64url, secure enough for snippets)
 const generateShareToken = (): string => {
-    return crypto.randomBytes(32).toString('hex'); // 64 chars
+    return crypto.randomBytes(12).toString('base64url'); // ~16 chars, URL-safe
 };
 
 // Create a new code snippet
