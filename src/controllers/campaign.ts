@@ -755,7 +755,7 @@ export const updateCampaignMessage: RequestHandler = async (req, res) => {
                 return res.status(400).json({ message: 'Error uploading file' });
             }
             const { name, message, schedule, campaignId } = req.body;
-            const delay = Number(req.body.delay) ?? 5000;
+            const delay = Number(req.body.delay) || 5000;
 
             const campaign = await prisma.campaign.findUnique({
                 where: { id: campaignId },
@@ -831,7 +831,7 @@ export const updateCampaign: RequestHandler = async (req, res) => {
                 recipients,
                 deviceId,
             } = req.body;
-            const delay = Number(req.body.delay) ?? 5000;
+            const delay = Number(req.body.delay) || 5000;
 
             if (
                 recipients.includes('all') &&

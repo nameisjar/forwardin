@@ -12,6 +12,7 @@ import { sendDocument } from '../services/whatsapp';
 import { generateMonthlyFeedbackPDFWithPuppeteer } from '../services/pdfGenerator';
 import { executeWithRateLimit, RateLimitResult, setDeviceAsPersonal, setDeviceAsShared } from '../services/rateLimiter';
 import { redactPhone } from '../utils/logRedaction';
+import { encryptMessage, decryptOutgoingMessage, decryptOutgoingMessages, decryptBroadcast, decryptBroadcasts } from '../utils/messageEncryption';
 
 export const sendMessages: RequestHandler = async (req, res) => {
     try {
@@ -711,8 +712,16 @@ export const getConversationMessages: RequestHandler = async (req, res) => {
         const totalPages = Math.ceil(totalMessages / Number(pageSize));
         const hasMore = currentPage * Number(pageSize) < totalMessages;
 
+        // Decrypt messages before returning
+        const decryptedMessages = messages.map((m) => {
+            if ('message' in m && m.message) {
+                return decryptOutgoingMessage(m);
+            }
+            return m;
+        });
+
         res.status(200).json({
-            data: messages.map((m) => serializePrisma(m)),
+            data: decryptedMessages.map((m) => serializePrisma(m)),
             metadata: {
                 totalMessages,
                 currentPage,
@@ -1013,7 +1022,7 @@ export const updateMessage: RequestHandler = async (req, res) => {
                     results.push({ index, result: updateMessageResult });
                     await prisma.outgoingMessage.update({
                         where: { sessionId: sessionId, id: messageId } as any,
-                        data: { message: newText },
+                        data: { message: encryptMessage(newText) },
                     });
                 } else {
                     throw new Error('messageId is required to update a message');
@@ -1270,7 +1279,7 @@ export const createBroadcast: RequestHandler = async (req, res) => {
                 await transaction.broadcast.create({
                     data: {
                         name: name.includes('[Broadcast]') ? name : `${name} [Broadcast]`,
-                        message,
+                        message: encryptMessage(message),
                         schedule,
                         deviceId: device.pkId,
                         delay,
@@ -1370,7 +1379,7 @@ export const getBroadcasts: RequestHandler = async (req, res) => {
         const broadcasts = await prisma.broadcast.findMany({
             where: { deviceId },
         });
-        res.status(200).json(broadcasts);
+        res.status(200).json(decryptBroadcasts(broadcasts));
     } catch (error) {
         logger.error(error);
         res.status(500).json({ message: 'Internal server error' });
@@ -1400,7 +1409,7 @@ export const getBroadcastsName: RequestHandler = async (req, res) => {
             ),
         );
 
-        res.status(200).json(uniqueBroadcasts);
+        res.status(200).json(decryptBroadcasts(uniqueBroadcasts));
     } catch (error) {
         logger.error(error);
         res.status(500).json({ message: 'Internal server error' });
@@ -1983,7 +1992,7 @@ export const createBroadcastFeedback: RequestHandler = async (req, res) => {
             const { name, courseName, startLesson = 1, recipients } = req.body;
             // Terima juga startDate dari frontend (ISO string)
             const startDateRaw = req.body.startDate || req.body.schedule || '';
-            const delay = Number(req.body.delay) ?? 5000;
+            const delay = Number(req.body.delay) || 5000;
 
             if (!name || !courseName || !recipients) {
                 return res
@@ -2058,7 +2067,7 @@ export const createBroadcastFeedback: RequestHandler = async (req, res) => {
                     await transaction.broadcast.create({
                         data: {
                             name: `${name} - ${courseName}`, // Store as "feedbackName - courseName"
-                            message: feedback.message,
+                            message: encryptMessage(feedback.message),
                             schedule,
                             deviceId: device.pkId,
                             delay,
@@ -2182,7 +2191,7 @@ export const createBroadcastReminder: RequestHandler = async (req, res) => {
 
             const { deviceId } = req.authenticatedDevice;
             const { courseName, startLesson = 1, recipients } = req.body;
-            const delay = Number(req.body.delay) ?? 5000;
+            const delay = Number(req.body.delay) || 5000;
 
             if (!courseName || !recipients) {
                 return res.status(400).json({ message: 'Missing required fields' });
@@ -2237,7 +2246,7 @@ export const createBroadcastReminder: RequestHandler = async (req, res) => {
                     await transaction.broadcast.create({
                         data: {
                             name: `${courseName} - Recipients ${recipients}`,
-                            message: reminder.message,
+                            message: encryptMessage(reminder.message),
                             schedule,
                             deviceId: device.pkId,
                             delay,
@@ -2267,7 +2276,7 @@ export const createBroadcastScheduled: RequestHandler = async (req, res) => {
 
             const { deviceId } = req.authenticatedDevice;
             const { name, message, recurrence, interval, startDate, endDate } = req.body;
-            const delay = Number(req.body.delay) ?? 5000;
+            const delay = Number(req.body.delay) || 5000;
 
             // Pastikan recipients berbentuk array
             const recipients = Array.isArray(req.body.recipients)
@@ -2332,7 +2341,7 @@ export const createBroadcastScheduled: RequestHandler = async (req, res) => {
             while (current <= end) {
                 broadcasts.push({
                     name: name.includes('[Recurrence]') ? name : `${name} [Recurrence]`,
-                    message,
+                    message: encryptMessage(message),
                     schedule: new Date(current),
                     deviceId: device.pkId,
                     delay,
@@ -2471,7 +2480,7 @@ export const createBroadcastReminderAlgo: RequestHandler = async (req, res) => {
             const { name, message, lessons, recipients } = req.body;
             // Terima juga schedule dari frontend (ISO string)
             const scheduleRaw = req.body.schedule || '';
-            const delay = Number(req.body.delay) ?? 5000;
+            const delay = Number(req.body.delay) || 5000;
 
             if (!name || !message || !lessons || !recipients) {
                 return res.status(400).json({
@@ -2532,7 +2541,7 @@ export const createBroadcastReminderAlgo: RequestHandler = async (req, res) => {
                         data: {
                             // name: `${name} - [Reminder]`, // Store as "reminderName - Lesson 1, 2, 3, etc"
                             name: name.includes('[Reminder]') ? name : `${name} [Reminder]`,
-                            message,
+                            message: encryptMessage(message),
                             schedule,
                             deviceId: device.pkId,
                             delay,

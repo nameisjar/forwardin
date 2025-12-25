@@ -2,7 +2,12 @@ import jwt from 'jsonwebtoken';
 import 'dotenv/config';
 import { accessTokenPayload, refreshTokenPayload } from '../types';
 
-export const jwtSecretKey = process.env.JWT_SECRET_KEY!;
+// Validate JWT secret at startup
+if (!process.env.JWT_SECRET_KEY) {
+    throw new Error('CRITICAL: JWT_SECRET_KEY environment variable is not set. Server cannot start securely.');
+}
+
+export const jwtSecretKey = process.env.JWT_SECRET_KEY;
 
 export type DeviceAccessTokenPayload = {
     deviceId: string;

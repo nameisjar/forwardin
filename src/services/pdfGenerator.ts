@@ -129,7 +129,7 @@ class PDFGeneratorQueue {
                 priority
             };
 
-            this.queue.push(item);
+            // Note: item will be added to queue in the priority handling block below
             
             const timeoutId = setTimeout(() => {
                 const index = this.queue.findIndex(q => q.id === id);

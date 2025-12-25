@@ -9,6 +9,7 @@ import schedule from 'node-schedule';
 import { isUUID } from '../utils/uuidChecker';
 import { generateDeviceAccessToken } from '../utils/jwtGenerator';
 import { verifyInstance } from '../whatsapp';
+import { hashApiKey } from '../utils/apiKeyHash';
 import { 
     getDeviceHealth, 
     pauseDevice, 
@@ -133,15 +134,19 @@ export const generateApiKeyDevice: RequestHandler = async (req, res) => {
             return res.status(404).json({ message: 'Device not found' });
         }
 
-        const apiKey = generateUuid();
+        // Generate plain API key for user, hash for storage
+        const plainApiKey = generateUuid();
+        const hashedApiKey = hashApiKey(plainApiKey);
 
         await prisma.device.update({
             where: { pkId: device.pkId },
             data: {
-                apiKey,
+                apiKey: hashedApiKey, // Store hashed version
             },
         });
-        res.status(200).json({ apiKey });
+        
+        // Return plain key to user (only time they'll see it)
+        res.status(200).json({ apiKey: plainApiKey });
     } catch (error) {
         logger.error(error);
         res.status(500).json({ message: 'Internal server error' });

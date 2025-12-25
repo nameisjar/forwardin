@@ -1,6 +1,7 @@
 import { RequestHandler } from 'express';
 import prisma from '../utils/db';
 import { generateUuid } from '../utils/keyGenerator';
+import { hashApiKey } from '../utils/apiKeyHash';
 import bcrypt from 'bcrypt';
 import logger from '../config/logger';
 import { createSSE as createSessionSSE } from './session';
@@ -69,7 +70,7 @@ export const createTutor: RequestHandler = async (req, res) => {
                         firstName,
                         // keep lastName as-is
                         password: hashedPassword,
-                        accountApiKey: generateUuid(),
+                        accountApiKey: hashApiKey(generateUuid()),
                         emailVerifiedAt: new Date(),
                         privilegeId: csPkId,
                         deletedAt: null,
@@ -89,7 +90,7 @@ export const createTutor: RequestHandler = async (req, res) => {
                 firstName,
                 email,
                 password: hashedPassword,
-                accountApiKey: generateUuid(),
+                accountApiKey: hashApiKey(generateUuid()),
                 emailVerifiedAt: new Date(),
                 privilegeId: csPkId,
             },
@@ -699,7 +700,7 @@ export const createDeviceNoSubscription: RequestHandler = async (req, res) => {
         }
 
         const device = await prisma.device.create({
-            data: { name, apiKey: generateUuid(), user: { connect: { pkId } } },
+            data: { name, apiKey: hashApiKey(generateUuid()), user: { connect: { pkId } } },
         });
         res.status(201).json({ message: 'Device created', data: device });
     } catch (e) {

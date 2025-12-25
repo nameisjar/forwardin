@@ -198,10 +198,15 @@ export const createSSE: RequestHandler = async (req, res) => {
 
 export const getSessionStatus: RequestHandler = async (req, res) => {
     try {
-        const session = getInstance(req.params.sessionId)!;
         if (!isUUID(req.params.sessionId)) {
             return res.status(400).json({ message: 'Invalid sessionId' });
         }
+
+        const session = getInstance(req.params.sessionId);
+        if (!session) {
+            return res.status(404).json({ message: 'Session not found or not connected' });
+        }
+
         res.status(200).json({ status: getInstanceStatus(session), session });
     } catch (error) {
         logger.error(error);

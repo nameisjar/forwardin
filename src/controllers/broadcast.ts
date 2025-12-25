@@ -8,6 +8,7 @@ import { delay as delayMs } from '../utils/delay';
 import { getRecipients } from '../utils/recipients';
 import { replaceVariables } from '../utils/variableHelper';
 import { diskUpload } from '../config/multer';
+import { encryptMessage, decryptMessage, decryptBroadcast, decryptBroadcasts, decryptOutgoingMessage } from '../utils/messageEncryption';
 import { useBroadcast } from '../utils/quota';
 import { isUUID } from '../utils/uuidChecker';
 import fs from 'fs';
@@ -202,7 +203,7 @@ export const createBroadcast: RequestHandler = async (req, res) => {
                 return res.status(400).json({ message: 'Error uploading file' });
             }
             const { name, deviceId, recipients, message, schedule } = req.body;
-            const delay = Number(req.body.delay) ?? 5000;
+            const delay = Number(req.body.delay) || 5000;
 
             // Validate recipients array
             if (!recipients || !Array.isArray(recipients) || recipients.length === 0) {
@@ -217,7 +218,7 @@ export const createBroadcast: RequestHandler = async (req, res) => {
 
             if (
                 recipients.includes('all') &&
-                recipients.some((recipient: { startsWith: (arg0: string) => string }) =>
+                recipients.some((recipient: string) =>
                     recipient.startsWith('label'),
                 )
             ) {
@@ -240,11 +241,11 @@ export const createBroadcast: RequestHandler = async (req, res) => {
             }
 
             await prisma.$transaction(async (transaction) => {
-                // Create broadcast
+                // Create broadcast with encrypted message
                 const broadcast = await transaction.broadcast.create({
                     data: {
                         name: normalizedName,
-                        message,
+                        message: encryptMessage(message),
                         schedule,
                         deviceId: device.pkId,
                         delay,
@@ -288,7 +289,7 @@ export const createBroadcast: RequestHandler = async (req, res) => {
 export const createBroadcastFeedback: RequestHandler = async (req, res) => {
     try {
         const { name, courseName, startLesson = 1, schedule, recipients, deviceId } = req.body;
-        const delay = Number(req.body.delay) ?? 5000;
+        const delay = Number(req.body.delay) || 5000;
 
         if (!name || !courseName || !schedule || !recipients || !deviceId) {
             return res.status(400).json({ message: 'Missing required fields: name, courseName, schedule, recipients, deviceId' });
@@ -347,7 +348,7 @@ export const createBroadcastFeedback: RequestHandler = async (req, res) => {
                 await transaction.broadcast.create({
                     data: {
                         name: `${taggedBaseName} - Lesson ${feedback.lesson} - ${courseName}`,
-                        message: feedback.message,
+                        message: encryptMessage(feedback.message),
                         schedule: broadcastSchedule,
                         deviceId: device.pkId,
                         delay,
@@ -376,7 +377,7 @@ export const createBroadcastReminder: RequestHandler = async (req, res) => {
             }
 
             const { name, message, lessons, schedule, recipients, deviceId } = req.body;
-            const delay = Number(req.body.delay) ?? 5000;
+            const delay = Number(req.body.delay) || 5000;
 
             if (!name || !message || !lessons || !schedule || !recipients || !deviceId) {
                 return res.status(400).json({ message: 'Missing required fields: name, message, lessons, schedule, recipients, deviceId' });
@@ -422,7 +423,7 @@ export const createBroadcastReminder: RequestHandler = async (req, res) => {
                     await transaction.broadcast.create({
                         data: {
                             name: `${taggedBaseName} - Week ${i + 1}`,
-                            message,
+                            message: encryptMessage(message),
                             schedule: broadcastSchedule,
                             deviceId: device.pkId,
                             delay,
@@ -462,7 +463,7 @@ export const createBroadcastScheduled: RequestHandler = async (req, res) => {
                 endDate,
                 deviceId,
             } = req.body;
-            const delay = Number(req.body.delay) ?? 5000;
+            const delay = Number(req.body.delay) || 5000;
 
             if (
                 !recurrence ||
@@ -488,7 +489,7 @@ export const createBroadcastScheduled: RequestHandler = async (req, res) => {
 
             if (
                 recipients.includes('all') &&
-                recipients.some((recipient: { startsWith: (arg0: string) => string }) =>
+                recipients.some((recipient: string) =>
                     recipient.startsWith('label'),
                 )
             ) {
@@ -517,11 +518,12 @@ export const createBroadcastScheduled: RequestHandler = async (req, res) => {
 
             const broadcasts = [] as any[];
             let current = new Date(normalizedStartDate);
+            const encryptedMessage = encryptMessage(message);
 
             while (current <= normalizedEndDate) {
                 broadcasts.push({
                     name: taggedBaseName,
-                    message,
+                    message: encryptedMessage,
                     schedule: new Date(current),
                     deviceId: device.pkId,
                     delay,
@@ -706,7 +708,7 @@ export const getAllBroadcasts: RequestHandler = async (req, res) => {
                 select,
                 orderBy,
             });
-            return res.status(200).json(broadcasts);
+            return res.status(200).json(decryptBroadcasts(broadcasts));
         }
 
         const [total, broadcasts] = await Promise.all([
@@ -723,7 +725,7 @@ export const getAllBroadcasts: RequestHandler = async (req, res) => {
         const totalPages = Math.max(1, Math.ceil(total / pageSize));
 
         res.status(200).json({
-            data: broadcasts,
+            data: decryptBroadcasts(broadcasts),
             meta: {
                 total,
                 page,
@@ -869,7 +871,7 @@ export const getBroadcastNameGroups: RequestHandler = async (req, res) => {
                 sampleStatus: sample?.status ?? null,
                 sampleRecipients: sample?.recipients || [],
                 sampleSchedule: sample?.schedule || g._min.schedule,
-                sampleMessage: sample?.message || null,
+                sampleMessage: decryptMessage(sample?.message || null),
                 sampleMediaPath: sample?.mediaPath || null,
                 sampleIsSent: sample?.isSent || false,
                 sampleSentCount: sample?.sentCount || 0,
@@ -926,7 +928,8 @@ export const getBroadcast: RequestHandler = async (req, res) => {
             return res.status(404).json('Broadcast not found');
         }
 
-        res.status(200).json(broadcast);
+        // Decrypt message before returning
+        res.status(200).json(decryptBroadcast(broadcast));
     } catch (error) {
         logger.error(error);
     }
@@ -983,7 +986,9 @@ export const getOutgoingBroadcasts: RequestHandler = async (req, res) => {
             orderBy: { createdAt: 'desc' },
         });
 
-        res.status(200).json({ outgoingBroadcasts });
+        // Decrypt messages before returning
+        const decryptedBroadcasts = outgoingBroadcasts.map(decryptOutgoingMessage);
+        res.status(200).json({ outgoingBroadcasts: decryptedBroadcasts });
     } catch (error) {
         logger.error(error);
         res.status(500).json({ message: 'Internal server error' });
@@ -1056,11 +1061,11 @@ export const updateBroadcast: RequestHandler = async (req, res) => {
                 return res.status(400).json({ message: 'Error uploading file' });
             }
             const { name, deviceId, recipients, message, schedule } = req.body;
-            const delay = Number(req.body.delay) ?? 5000;
+            const delay = Number(req.body.delay) || 5000;
 
             if (
                 recipients.includes('all') &&
-                recipients.some((recipient: { startsWith: (arg0: string) => string }) =>
+                recipients.some((recipient: string) =>
                     recipient.startsWith('label'),
                 )
             ) {
@@ -1526,7 +1531,15 @@ schedule.scheduleJob('* * * * *', async () => {
                             ?.contact.email ?? undefined,
                 };
 
-                const textPayload = replaceVariables(broadcast.message, variables);
+                // 🔐 Decrypt message sebelum dikirim ke WhatsApp
+                let decryptedMessage = '';
+                try {
+                    decryptedMessage = decryptMessage(broadcast.message) || '';
+                } catch (err) {
+                    logger.error({ err, broadcastId: broadcast.id }, 'Failed to decrypt message, using original');
+                    decryptedMessage = broadcast.message;
+                }
+                const textPayload = replaceVariables(decryptedMessage, variables);
 
                 // 🔥 Hitung natural delay SEBELUM kirim pesan
                 // Ini termasuk: jitter, cluster, progressive, typing simulation
@@ -1663,7 +1676,7 @@ schedule.scheduleJob('* * * * *', async () => {
                             id: messageId,
                             waMessageId: messageId,
                             to: jid,
-                            message: textPayload,
+                            message: encryptMessage(textPayload),
                             schedule: new Date(),
                             status: 'pending',
                             sessionId,

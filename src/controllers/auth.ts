@@ -3,6 +3,7 @@ import { RequestHandler } from 'express';
 import passport from 'passport';
 import { Strategy as GoogleStrategy, Profile } from 'passport-google-oauth20';
 import { generateUuid } from '../utils/keyGenerator';
+import { hashApiKey, generateHashedApiKey } from '../utils/apiKeyHash';
 import { generateAccessToken, generateRefreshToken, jwtSecretKey } from '../utils/jwtGenerator';
 import { generateOTPSecret, generateOTPToken, sendEmail, verifyOTPToken } from '../utils/otpHelper';
 import bcrypt from 'bcrypt';
@@ -51,6 +52,9 @@ export const register: RequestHandler = async (req, res) => {
                 error: 'Privilege or role not found',
             });
         }
+        // Generate API key - store hashed, return plain to user
+        const { plainKey: plainApiKey, hashedKey: hashedApiKey } = generateHashedApiKey();
+        
         const newUser = await prisma.user.create({
             data: {
                 username,
@@ -59,7 +63,7 @@ export const register: RequestHandler = async (req, res) => {
                 phone,
                 email,
                 password: hashedPassword,
-                accountApiKey: generateUuid(),
+                accountApiKey: hashedApiKey, // Store hashed version
                 affiliationCode: username,
                 privilege: { connect: { pkId: role } },
             },
@@ -67,7 +71,7 @@ export const register: RequestHandler = async (req, res) => {
 
         const accessToken = generateAccessToken(newUser);
         const refreshToken = generateRefreshToken(newUser);
-        const accountApiKey = newUser.accountApiKey;
+        const accountApiKey = plainApiKey; // Return plain key to user
         const id = newUser.id;
 
         await prisma.user.update({

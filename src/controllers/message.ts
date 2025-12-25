@@ -17,6 +17,7 @@ import {
     sendVideoMessage,
     sendGenericMessage 
 } from '../services/messageSender';
+import { encryptMessage, decryptOutgoingMessage, decryptOutgoingMessages } from '../utils/messageEncryption';
 
 // 🔥 Helper untuk mendapatkan deviceId dari sessionId
 async function getDeviceIdFromSession(sessionId: string): Promise<string | null> {
@@ -29,9 +30,13 @@ async function getDeviceIdFromSession(sessionId: string): Promise<string | null>
 
 export const sendMessages: RequestHandler = async (req, res) => {
     try {
-        const session = getInstance(req.params.sessionId)!;
         if (!isUUID(req.params.sessionId)) {
             return res.status(400).json({ message: 'Invalid sessionId' });
+        }
+
+        const session = getInstance(req.params.sessionId);
+        if (!session) {
+            return res.status(404).json({ message: 'Session not found or not connected' });
         }
 
         // 🔥 Get deviceId untuk rate limiter
@@ -89,10 +94,13 @@ export const sendMessages: RequestHandler = async (req, res) => {
 
 export const sendImageMessages: RequestHandler = async (req, res) => {
     try {
-        const session = getInstance(req.params.sessionId)!;
-
         if (!isUUID(req.params.sessionId)) {
             return res.status(400).json({ message: 'Invalid sessionId' });
+        }
+
+        const session = getInstance(req.params.sessionId);
+        if (!session) {
+            return res.status(404).json({ message: 'Session not found or not connected' });
         }
 
         // 🔥 Get deviceId untuk rate limiter
@@ -158,10 +166,13 @@ export const sendImageMessages: RequestHandler = async (req, res) => {
 
 export const sendDocumentMessages: RequestHandler = async (req, res) => {
     try {
-        const session = getInstance(req.params.sessionId)!;
-
         if (!isUUID(req.params.sessionId)) {
             return res.status(400).json({ message: 'Invalid sessionId' });
+        }
+
+        const session = getInstance(req.params.sessionId);
+        if (!session) {
+            return res.status(404).json({ message: 'Session not found or not connected' });
         }
 
         // 🔥 Get deviceId untuk rate limiter
@@ -228,10 +239,13 @@ export const sendDocumentMessages: RequestHandler = async (req, res) => {
 
 export const sendAudioMessages: RequestHandler = async (req, res) => {
     try {
-        const session = getInstance(req.params.sessionId)!;
-
         if (!isUUID(req.params.sessionId)) {
             return res.status(400).json({ message: 'Invalid sessionId' });
+        }
+
+        const session = getInstance(req.params.sessionId);
+        if (!session) {
+            return res.status(404).json({ message: 'Session not found or not connected' });
         }
 
         // 🔥 Get deviceId untuk rate limiter
@@ -293,10 +307,13 @@ export const sendAudioMessages: RequestHandler = async (req, res) => {
 
 export const sendVideoMessages: RequestHandler = async (req, res) => {
     try {
-        const session = getInstance(req.params.sessionId)!;
-
         if (!isUUID(req.params.sessionId)) {
             return res.status(400).json({ message: 'Invalid sessionId' });
+        }
+
+        const session = getInstance(req.params.sessionId);
+        if (!session) {
+            return res.status(404).json({ message: 'Session not found or not connected' });
         }
 
         // 🔥 Get deviceId untuk rate limiter
@@ -359,13 +376,17 @@ export const sendVideoMessages: RequestHandler = async (req, res) => {
 
 export const sendButton: RequestHandler = async (req, res) => {
     try {
-        const session = getInstance(req.params.sessionId)!;
-        const to = req.body.to;
-        const data = req.body.data;
-
         if (!isUUID(req.params.sessionId)) {
             return res.status(400).json({ message: 'Invalid sessionId' });
         }
+
+        const session = getInstance(req.params.sessionId);
+        if (!session) {
+            return res.status(404).json({ message: 'Session not found or not connected' });
+        }
+
+        const to = req.body.to;
+        const data = req.body.data;
 
         const result = await sendButtonMessage(session, to, data);
 
@@ -681,8 +702,16 @@ export const getConversationMessages: RequestHandler = async (req, res) => {
         const totalPages = Math.ceil(totalMessages / Number(pageSize));
         const hasMore = currentPage * Number(pageSize) < totalMessages;
 
+        // Decrypt messages before returning
+        const decryptedMessages = messages.map((m) => {
+            if ('message' in m && m.message) {
+                return decryptOutgoingMessage(m);
+            }
+            return m;
+        });
+
         res.status(200).json({
-            data: messages.map((m) => serializePrisma(m)),
+            data: decryptedMessages.map((m) => serializePrisma(m)),
             metadata: {
                 totalMessages,
                 currentPage,
@@ -1358,7 +1387,7 @@ export const updateMessage: RequestHandler = async (req, res) => {
                     results.push({ index, result: updateMessageResult });
                     await prisma.outgoingMessage.update({
                         where: { sessionId: req.params.sessionId, id: messageId },
-                        data: { message: newText },
+                        data: { message: encryptMessage(newText) },
                     });
                 } else {
                     throw new Error('messageId is required to update a message');

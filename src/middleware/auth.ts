@@ -4,6 +4,7 @@ import prisma from '../utils/db';
 import { jwtSecretKey } from '../utils/jwtGenerator';
 import { User } from '@prisma/client';
 import { verifyDeviceAccessToken } from '../utils/jwtGenerator';
+import { hashApiKey, isHashedApiKey, verifyApiKey } from '../utils/apiKeyHash';
 
 export const authMiddleware: RequestHandler = (req, res, next) => {
     if (!req.header('Authorization')) {
@@ -71,17 +72,28 @@ export const accessToken: RequestHandler = (req, res, next) => {
 };
 
 export const apiKey: RequestHandler = async (req, res, next) => {
-    const apiKey = req.header('X-Forwardin-Key');
+    const plainApiKey = req.header('X-Forwardin-Key');
 
-    if (!apiKey) {
+    if (!plainApiKey) {
         return res.status(401).json({ message: 'Authentication failed: Missing API key' });
     }
-    const user = await prisma.user.findUnique({
-        where: {
-            accountApiKey: apiKey,
-        },
+
+    // Hash the input key for lookup
+    const hashedKey = hashApiKey(plainApiKey);
+    
+    // Try to find by hashed key first, then fallback to plain (backward compatibility)
+    let user = await prisma.user.findUnique({
+        where: { accountApiKey: hashedKey },
         include: { privilege: true },
     });
+    
+    // Backward compatibility: try plain key for legacy data
+    if (!user) {
+        user = await prisma.user.findUnique({
+            where: { accountApiKey: plainApiKey },
+            include: { privilege: true },
+        });
+    }
 
     if (!user) {
         return res.status(401).json({ message: 'Authentication failed: Invalid API key' });
@@ -205,17 +217,28 @@ export const isEmailVerified: RequestHandler = async (req, res, next) => {
 };
 
 export const apiKeyDevice: RequestHandler = async (req, res, next) => {
-    const apiKey = req.header('X-Forwardin-Key-Device');
+    const plainApiKey = req.header('X-Forwardin-Key-Device');
 
-    if (!apiKey) {
+    if (!plainApiKey) {
         return res.status(401).json({ message: 'Authentication failed: Missing API key' });
     }
-    const device = await prisma.device.findUnique({
-        where: {
-            apiKey,
-        },
+
+    // Hash the input key for lookup
+    const hashedKey = hashApiKey(plainApiKey);
+    
+    // Try to find by hashed key first, then fallback to plain (backward compatibility)
+    let device = await prisma.device.findUnique({
+        where: { apiKey: hashedKey },
         include: { user: true },
     });
+    
+    // Backward compatibility: try plain key for legacy data
+    if (!device) {
+        device = await prisma.device.findUnique({
+            where: { apiKey: plainApiKey },
+            include: { user: true },
+        });
+    }
 
     if (!device) {
         return res.status(401).json({ message: 'Authentication failed: Invalid API key' });

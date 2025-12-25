@@ -16,6 +16,7 @@ import path from 'path';
 import { getSocketIO } from '../socket';
 import { Server } from 'socket.io';
 import { safeMessageContext, redactPhone, redactMessageObject } from '../utils/logRedaction';
+import { encryptMessage, decryptOutgoingMessage } from '../utils/messageEncryption';
 
 const getKeyAuthor = (key: WAMessageKey | undefined | null) =>
     (key?.fromMe ? 'me' : key?.participant || key?.remoteJid) || '';
@@ -168,7 +169,7 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                                                 id: message.key.id!,
                                                 waMessageId: message.key.id!,
                                                 to: jid,
-                                                message: messageText,
+                                                message: encryptMessage(messageText),
                                                 schedule: new Date(),
                                                 status,
                                                 sessionId,
@@ -177,7 +178,7 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                                             include: { contact: true },
                                         });
 
-                                        io.emit(`message:${sessionId}`, outgoingMessage);
+                                        io.emit(`message:${sessionId}`, decryptOutgoingMessage(outgoingMessage));
                                     }
                                 } else {
                                     logger.debug(

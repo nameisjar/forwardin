@@ -2,6 +2,7 @@ import { RequestHandler } from 'express';
 import prisma from '../utils/db';
 import logger from '../config/logger';
 import { generateUuid } from '../utils/keyGenerator';
+import { hashApiKey } from '../utils/apiKeyHash';
 import { generatePassword, sendEmail } from '../utils/otpHelper';
 import bcrypt from 'bcrypt';
 import { generateAccessToken, generateRefreshToken } from '../utils/jwtGenerator';
@@ -44,7 +45,7 @@ export const addSuperAdmin: RequestHandler = async (req, res) => {
                 lastName,
                 phone,
                 email,
-                accountApiKey: generateUuid(),
+                accountApiKey: hashApiKey(generateUuid()),
                 affiliationCode: username,
                 privilege: { connect: { pkId: role } },
             },
@@ -230,7 +231,7 @@ export const createUserAdmin: RequestHandler = async (req, res) => {
                 username,
                 email,
                 phone,
-                accountApiKey: generateUuid(),
+                accountApiKey: hashApiKey(generateUuid()),
                 affiliationCode: firstName,
                 privilege: {
                     connect: {
@@ -441,7 +442,7 @@ export const updateUser: RequestHandler = async (req, res) => {
                 username,
                 email,
                 phone,
-                accountApiKey: generateUuid(),
+                accountApiKey: hashApiKey(generateUuid()),
                 affiliationCode: firstName,
                 privilege: {
                     connect: {
