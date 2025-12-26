@@ -69,6 +69,11 @@ router.use('/whatsapp-groups', whatsappGroupRoutes);
 router.use('/code-snippets', authMiddleware, codeSnippetRoutes);
 // Public route for viewing shared snippets (no auth required)
 router.get('/snippets/share/:token', getSnippetByShareToken);
-router.use('/media', express.static('media'));
+// Media static files - allow cross-origin access for frontend with caching
+router.use('/media', (req, res, next) => {
+    res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+    res.setHeader('Cache-Control', 'public, max-age=31536000, immutable'); // Cache 1 year
+    next();
+}, express.static('media'));
 
 export default router;
