@@ -1312,9 +1312,11 @@ export const bulkDeleteBroadcasts: RequestHandler = async (req, res) => {
         let mediaDeleted = 0;
         for (const p of mediaPaths) {
             try {
-                fs.unlinkSync(p);
+                await fs.promises.unlink(p);
                 mediaDeleted++;
-            } catch {}
+            } catch {
+                // File may not exist or already deleted
+            }
         }
 
         res.status(200).json({

@@ -349,6 +349,8 @@ model OutgoingMessage {
   contact     Contact? @relation(fields: [contactId], references: [pkId], onDelete: Cascade)
 
   @@unique([sessionId, to, id], map: "unique_outgoing_message_key_per_session_id")
+  @@index([broadcastId], map: "idx_outgoing_message_broadcast")
+  @@index([sessionId, createdAt], map: "idx_outgoing_message_session_time")
 }
 
 model IncomingMessage {
