@@ -69,6 +69,12 @@ export const updateUser: RequestHandler = async (req, res) => {
         return res.status(400).json({ message: 'Invalid userId' });
     }
 
+    // IDOR protection: users can only update their own profile (unless admin)
+    const isAdmin = req.privilege.pkId === Number(process.env.SUPER_ADMIN_ID);
+    if (!isAdmin && req.authenticatedUser.id !== userId) {
+        return res.status(403).json({ message: 'Forbidden: You can only update your own profile' });
+    }
+
     const existingUser = await prisma.user.findFirst({
         where: {
             username,
@@ -108,6 +114,12 @@ export const changeEmail: RequestHandler = async (req, res) => {
 
     if (!isUUID(userId)) {
         return res.status(400).json({ message: 'Invalid userId' });
+    }
+
+    // IDOR protection: users can only change their own email (unless admin)
+    const isAdmin = req.privilege.pkId === Number(process.env.SUPER_ADMIN_ID);
+    if (!isAdmin && req.authenticatedUser.id !== userId) {
+        return res.status(403).json({ message: 'Forbidden: You can only change your own email' });
     }
 
     const existingUser = await prisma.user.findFirst({
@@ -217,6 +229,12 @@ export const deleteUser: RequestHandler = async (req, res) => {
 
         if (!isUUID(userId)) {
             return res.status(400).json({ message: 'Invalid userId' });
+        }
+
+        // IDOR protection: only admin can delete users
+        const isAdmin = req.privilege.pkId === Number(process.env.SUPER_ADMIN_ID);
+        if (!isAdmin) {
+            return res.status(403).json({ message: 'Forbidden: Only admin can delete users' });
         }
 
         if (!userId) {

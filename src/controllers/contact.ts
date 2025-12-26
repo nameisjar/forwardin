@@ -945,6 +945,9 @@ export const exportContacts: RequestHandler = async (req, res) => {
         const privilegeId = req.privilege.pkId;
         const { deviceId } = req.query;
 
+        // Maximum export limit to prevent memory issues
+        const MAX_EXPORT_LIMIT = 50000;
+
         const contacts = await prisma.contact.findMany({
             where: {
                 contactDevices: {
@@ -964,6 +967,7 @@ export const exportContacts: RequestHandler = async (req, res) => {
                 },
             },
             orderBy: { createdAt: 'desc' },
+            take: MAX_EXPORT_LIMIT,
         });
 
         const workbook = new ExcelJS.Workbook();

@@ -258,6 +258,8 @@ model Contact {
   ContactLabel    ContactLabel[]
   OutgoingMessage OutgoingMessage[]
   IncomingMessage IncomingMessage[]
+
+  @@index([phone], name: "idx_contact_phone")
 }
 
 model Label {
@@ -351,6 +353,7 @@ model OutgoingMessage {
   @@unique([sessionId, to, id], map: "unique_outgoing_message_key_per_session_id")
   @@index([broadcastId], map: "idx_outgoing_message_broadcast")
   @@index([sessionId, createdAt], map: "idx_outgoing_message_session_time")
+  @@index([status], map: "idx_outgoing_message_status")
 }
 
 model IncomingMessage {
@@ -633,6 +636,9 @@ model CourseFeedback {
     message     String   @db.Text   
     createdAt   DateTime @default(now())
     updatedAt   DateTime @updatedAt
+
+    @@index([courseName], map: "idx_course_feedback_course")
+    @@index([courseName, lesson], map: "idx_course_feedback_course_lesson")
 }
 
 model WhatsAppGroup {

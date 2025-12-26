@@ -144,9 +144,29 @@ export const createFeedback: RequestHandler = async (req, res) => {
 
 export const getFeedbacks: RequestHandler = async (req, res) => {
     try {
-        const feedbacks = await prisma.courseFeedback.findMany();
+        // Support pagination to avoid fetching all records
+        const page = Math.max(1, Number(req.query.page) || 1);
+        const pageSize = Math.min(500, Math.max(1, Number(req.query.pageSize) || 100));
+        const skip = (page - 1) * pageSize;
 
-        return res.status(200).json({ feedbacks });
+        const [feedbacks, total] = await Promise.all([
+            prisma.courseFeedback.findMany({
+                orderBy: [{ courseName: 'asc' }, { lesson: 'asc' }],
+                skip,
+                take: pageSize,
+            }),
+            prisma.courseFeedback.count(),
+        ]);
+
+        return res.status(200).json({
+            feedbacks,
+            meta: {
+                total,
+                page,
+                pageSize,
+                totalPages: Math.ceil(total / pageSize),
+            },
+        });
     } catch (error: any) {
         // console.error('Error getting feedbacks:', error.message || error);
         res.status(500).json({ message: 'Internal server error.', error: error.message || error });

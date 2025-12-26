@@ -810,31 +810,62 @@ export const getAllDevicesMessageStats: RequestHandler = async (req, res) => {
             });
         }
 
-        // Use device.id (UUID) as key for frontend compatibility
+        if (devices.length === 0) {
+            return res.status(200).json({});
+        }
+
+        const devicePkIds = devices.map(d => d.pkId);
+        const now = new Date();
+
+        // 🔥 BATCH QUERY 1: Get all broadcasts for all devices in ONE query
+        const allBroadcasts = await prisma.broadcast.findMany({
+            where: { deviceId: { in: devicePkIds } },
+            select: { pkId: true, deviceId: true, schedule: true },
+        });
+
+        // Group broadcasts by deviceId
+        const broadcastsByDevice = new Map<number, { pkId: number; schedule: Date | null }[]>();
+        for (const b of allBroadcasts) {
+            if (!broadcastsByDevice.has(b.deviceId)) {
+                broadcastsByDevice.set(b.deviceId, []);
+            }
+            broadcastsByDevice.get(b.deviceId)!.push({ pkId: b.pkId, schedule: b.schedule });
+        }
+
+        // 🔥 BATCH QUERY 2: Count sent messages per broadcast in ONE query using groupBy
+        const allBroadcastIds = allBroadcasts.map(b => b.pkId);
+        let sentCountsByBroadcast = new Map<number, number>();
+        
+        if (allBroadcastIds.length > 0) {
+            const sentCounts = await prisma.outgoingMessage.groupBy({
+                by: ['broadcastId'],
+                where: { broadcastId: { in: allBroadcastIds } },
+                _count: { _all: true },
+            });
+            
+            for (const sc of sentCounts) {
+                if (sc.broadcastId !== null) {
+                    sentCountsByBroadcast.set(sc.broadcastId, sc._count._all);
+                }
+            }
+        }
+
+        // Build stats using pre-fetched data (no more N+1!)
         const stats: Record<string, { sent: number; scheduled: number; total: number }> = {};
 
         for (const device of devices) {
-            // Get all broadcast IDs for this device
-            const broadcasts = await prisma.broadcast.findMany({
-                where: { deviceId: device.pkId },
-                select: { pkId: true, schedule: true },
-            });
-
-            const broadcastIds = broadcasts.map(b => b.pkId);
-
-            // Count sent messages via broadcastId
-            // OutgoingMessage has broadcastId that links to Broadcast.pkId
+            const deviceBroadcasts = broadcastsByDevice.get(device.pkId) || [];
+            
+            // Sum sent count from all broadcasts for this device
             let sentCount = 0;
-            if (broadcastIds.length > 0) {
-                sentCount = await prisma.outgoingMessage.count({
-                    where: {
-                        broadcastId: { in: broadcastIds },
-                    },
-                });
+            for (const b of deviceBroadcasts) {
+                sentCount += sentCountsByBroadcast.get(b.pkId) || 0;
             }
 
             // Count scheduled broadcasts (future schedules only)
-            const scheduledCount = broadcasts.filter(b => b.schedule && new Date(b.schedule) > new Date()).length;
+            const scheduledCount = deviceBroadcasts.filter(
+                b => b.schedule && new Date(b.schedule) > now
+            ).length;
 
             // Use device.id (UUID) as key
             stats[device.id] = {
