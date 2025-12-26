@@ -1399,17 +1399,35 @@ schedule.scheduleJob('* * * * *', async () => {
                 continue;
             }
 
-            // 🔥 Reset cluster state untuk broadcast baru
-            resetClusterState(broadcast.device.id);
-
-            // Increment attemptCount & update lastAttemptAt SEBELUM proses
-            await prisma.broadcast.update({
-                where: { id: broadcast.id },
+            // � ATOMIC LOCK: Coba acquire lock sebelum proses
+            // Ini mencegah race condition jika scheduler run >1 menit
+            const lockAcquired = await prisma.broadcast.updateMany({
+                where: {
+                    id: broadcast.id,
+                    isSent: false,
+                    // Hanya lock jika belum diproses dalam 2 menit terakhir
+                    OR: [
+                        { lastAttemptAt: null },
+                        { lastAttemptAt: { lt: new Date(Date.now() - 2 * 60 * 1000) } }
+                    ]
+                },
                 data: {
                     attemptCount: { increment: 1 },
                     lastAttemptAt: new Date(),
                 },
             });
+
+            // Jika tidak bisa acquire lock, skip (sudah diproses oleh worker lain)
+            if (lockAcquired.count === 0) {
+                logger.info(
+                    { broadcastId: broadcast.id },
+                    'Broadcast already being processed by another worker, skipping'
+                );
+                continue;
+            }
+
+            // 🔥 Reset cluster state untuk broadcast baru
+            resetClusterState(broadcast.device.id);
 
             const currentAttempt = (broadcast.attemptCount || 0) + 1;
             logger.info(
@@ -1509,6 +1527,20 @@ schedule.scheduleJob('* * * * *', async () => {
                 const recipient = recipientRecord.phone;
                 const isLastRecipient = i === pendingRecipients.length - 1;
                 const jid = getJid(recipient);
+
+                // 🔒 DOUBLE-CHECK: Pastikan recipient belum terkirim (race condition protection)
+                const currentStatus = await prisma.broadcastRecipient.findUnique({
+                    where: { pkId: recipientRecord.pkId },
+                    select: { status: true },
+                });
+                
+                if (currentStatus?.status === 'sent' || currentStatus?.status === 'sending') {
+                    logger.debug(
+                        { broadcastId: broadcast.id, phone: recipient, status: currentStatus.status },
+                        'Recipient already sent/sending, skipping'
+                    );
+                    continue;
+                }
 
                 // 🔥 Mark as 'sending' before attempting (crash protection)
                 await prisma.broadcastRecipient.update({
@@ -1822,5 +1854,39 @@ schedule.scheduleJob('* * * * *', async () => {
         logger.debug('Broadcast job cycle completed');
     } catch (error) {
         logger.error(error, 'Error in broadcast scheduler job');
+    }
+});
+
+// ============================================================================
+// CLEANUP JOB - Reset stuck "sending" recipients every 5 minutes
+// Handles server crashes that leave recipients in "sending" state forever
+// ============================================================================
+
+schedule.scheduleJob('*/5 * * * *', async () => {
+    try {
+        // Recipients stuck in "sending" for more than 5 minutes are considered crashed
+        const stuckThreshold = new Date(Date.now() - 5 * 60 * 1000);
+
+        const updated = await prisma.broadcastRecipient.updateMany({
+            where: {
+                status: 'sending',
+                updatedAt: { lt: stuckThreshold },
+            },
+            data: {
+                status: 'pending', // Reset to pending so it gets retried
+                errorMsg: 'Reset from stuck sending state (server crash recovery)',
+                retryCount: { increment: 1 },
+                updatedAt: new Date(),
+            },
+        });
+
+        if (updated.count > 0) {
+            logger.warn(
+                { count: updated.count, threshold: '5 minutes' },
+                '🔄 Cleaned up stuck sending recipients - reset to pending for retry'
+            );
+        }
+    } catch (error) {
+        logger.error(error, 'Error in broadcast cleanup job');
     }
 });
