@@ -815,16 +815,20 @@ async function cleanupOrphanedData(): Promise<void> {
     }
 }
 
-// Database cleanup job - every 5 minutes (was: every second '*')
-scheduledJobs.push(
-    schedule.scheduleJob('*/5 * * * *', async () => {
-        try {
-            await cleanupOrphanedData();
-        } catch (error) {
-            logger.error('Error executing database cleanup:', error);
-        }
-    })
-);
+// Database cleanup job - DISABLED to prevent accidental data deletion
+// Issue: When validLabelIds is empty (e.g., DB connection issue at startup),
+// notIn: [] would delete ALL labels, causing cascade deletion of ContactLabel.
+// This happened on 26-27 Dec 2025.
+// 
+// scheduledJobs.push(
+//     schedule.scheduleJob('*/5 * * * *', async () => {
+//         try {
+//             await cleanupOrphanedData();
+//         } catch (error) {
+//             logger.error('Error executing database cleanup:', error);
+//         }
+//     })
+// );
 
 // Auto-resume paused devices (every 5 minutes)
 scheduledJobs.push(

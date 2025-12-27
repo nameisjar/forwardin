@@ -188,7 +188,7 @@ export const importContacts: RequestHandler = async (req, res) => {
             const deviceId = req.body.deviceId;
             const groupName = req.body.groupName || new Date().toISOString().slice(0, 10);
 
-            await workbook.xlsx.load(buffer);
+            await workbook.xlsx.load(buffer as unknown as ExcelJS.Buffer);
             const worksheet = workbook.getWorksheet(1);
             if (!worksheet) {
                 return res.status(400).json({ message: 'No worksheet found' });
