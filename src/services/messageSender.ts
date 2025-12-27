@@ -2,6 +2,8 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { proto } from '@whiskeysockets/baileys';
 import { executeWithRateLimit, RateLimitResult } from './rateLimiter';
+import { incrementMessageCount } from './signalDetector';
+import prisma from '../utils/db';
 import logger from '../config/logger';
 
 // ============================================
@@ -13,6 +15,32 @@ import logger from '../config/logger';
 //
 // SEMUA pengiriman pesan HARUS melalui service ini!
 // ============================================
+
+// Cache deviceId -> pkId untuk mengurangi query DB
+const devicePkIdCache = new Map<string, number>();
+
+/**
+ * Get device pkId from deviceId (UUID) with caching
+ */
+async function getDevicePkId(deviceId: string): Promise<number | null> {
+    // Check cache first
+    if (devicePkIdCache.has(deviceId)) {
+        return devicePkIdCache.get(deviceId)!;
+    }
+    
+    // Query DB
+    const device = await prisma.device.findUnique({
+        where: { id: deviceId },
+        select: { pkId: true }
+    });
+    
+    if (device) {
+        devicePkIdCache.set(deviceId, device.pkId);
+        return device.pkId;
+    }
+    
+    return null;
+}
 
 export interface SendMessageOptions {
     quoted?: any;
@@ -80,6 +108,12 @@ export async function sendTextMessage(
 
         const messageId = result?.key?.id;
         
+        // 🔥 Increment message count for health tracking
+        const devicePkId = await getDevicePkId(deviceId);
+        if (devicePkId) {
+            await incrementMessageCount(devicePkId);
+        }
+        
         logger.info(
             { deviceId, jid, messageId, delayed: rateLimitInfo.delayed },
             '[MessageSender] Text message sent'
@@ -133,6 +167,12 @@ export async function sendImageMessage(
         );
 
         const messageId = result?.key?.id;
+        
+        // 🔥 Increment message count for health tracking
+        const devicePkId = await getDevicePkId(deviceId);
+        if (devicePkId) {
+            await incrementMessageCount(devicePkId);
+        }
         
         logger.info(
             { deviceId, jid, messageId, delayed: rateLimitInfo.delayed },
@@ -191,6 +231,12 @@ export async function sendDocumentMessage(
 
         const messageId = result?.key?.id;
         
+        // 🔥 Increment message count for health tracking
+        const devicePkId = await getDevicePkId(deviceId);
+        if (devicePkId) {
+            await incrementMessageCount(devicePkId);
+        }
+        
         logger.info(
             { deviceId, jid, messageId, delayed: rateLimitInfo.delayed },
             '[MessageSender] Document message sent'
@@ -244,6 +290,12 @@ export async function sendVideoMessage(
         );
 
         const messageId = result?.key?.id;
+        
+        // 🔥 Increment message count for health tracking
+        const devicePkId = await getDevicePkId(deviceId);
+        if (devicePkId) {
+            await incrementMessageCount(devicePkId);
+        }
         
         logger.info(
             { deviceId, jid, messageId, delayed: rateLimitInfo.delayed },
@@ -300,6 +352,12 @@ export async function sendAudioMessage(
         );
 
         const messageId = result?.key?.id;
+        
+        // 🔥 Increment message count for health tracking
+        const devicePkId = await getDevicePkId(deviceId);
+        if (devicePkId) {
+            await incrementMessageCount(devicePkId);
+        }
         
         logger.info(
             { deviceId, jid, messageId, delayed: rateLimitInfo.delayed },
@@ -377,6 +435,12 @@ export async function sendGenericMessage(
         );
 
         const messageId = result?.key?.id;
+        
+        // 🔥 Increment message count for health tracking
+        const devicePkId = await getDevicePkId(deviceId);
+        if (devicePkId) {
+            await incrementMessageCount(devicePkId);
+        }
         
         logger.info(
             { deviceId, jid, messageId, delayed: rateLimitInfo.delayed },

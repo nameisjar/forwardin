@@ -1734,8 +1734,7 @@ schedule.scheduleJob('* * * * *', async () => {
                         },
                     });
 
-                    // 🔥 Increment device message count for health tracking
-                    await incrementMessageCount(broadcast.device.pkId);
+                    // Note: incrementMessageCount now handled in messageSender
 
                     successCount++;
                 } catch (dbError) {

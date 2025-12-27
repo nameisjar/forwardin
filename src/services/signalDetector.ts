@@ -909,28 +909,25 @@ export async function canDeviceSend(devicePkId: number): Promise<{ allowed: bool
 
 /**
  * Increment today's message count for a device
+ * Optimized: Single atomic query instead of findUnique + update
  */
 export async function incrementMessageCount(devicePkId: number): Promise<void> {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-
-    const device = await prisma.device.findUnique({
-        where: { pkId: devicePkId },
-        select: { todayMessageDate: true, todayMessageCount: true },
-    });
-
-    if (!device) return;
-
-    const deviceDate = device.todayMessageDate ? new Date(device.todayMessageDate) : null;
-    const isSameDay = deviceDate && deviceDate.getTime() === today.getTime();
-
-    await prisma.device.update({
-        where: { pkId: devicePkId },
-        data: {
-            todayMessageCount: isSameDay ? { increment: 1 } : 1,
-            todayMessageDate: today,
-        },
-    });
+    try {
+        // Single atomic query - reset count if different day, otherwise increment
+        await prisma.$executeRaw`
+            UPDATE "Device" 
+            SET 
+                "todayMessageCount" = CASE 
+                    WHEN DATE("todayMessageDate") = CURRENT_DATE THEN "todayMessageCount" + 1 
+                    ELSE 1 
+                END,
+                "todayMessageDate" = CURRENT_DATE
+            WHERE "pkId" = ${devicePkId}
+        `;
+    } catch (error) {
+        // Non-blocking - don't fail message send if counter fails
+        logger.warn({ error, devicePkId }, '[SignalDetector] Failed to increment message count');
+    }
 }
 
 // ============================================
