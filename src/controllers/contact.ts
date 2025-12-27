@@ -727,7 +727,7 @@ export const getContacts: RequestHandler = async (req, res) => {
     try {
         const pkId = req.authenticatedUser.pkId;
         const privilegeId = req.privilege.pkId;
-        const { deviceId, q, page = '1', pageSize = '50', sortBy = 'createdAt', sortDir = 'desc' } = req.query;
+        const { deviceId, q, label, page = '1', pageSize = '50', sortBy = 'createdAt', sortDir = 'desc' } = req.query;
 
         const pageNum = parseInt(page as string, 10) || 1;
         const limitNum = parseInt(pageSize as string, 10) || 50;
@@ -743,6 +743,17 @@ export const getContacts: RequestHandler = async (req, res) => {
                 },
             },
         };
+
+        // Filter by label name
+        if (label) {
+            whereClause.ContactLabel = {
+                some: {
+                    label: {
+                        name: String(label),
+                    },
+                },
+            };
+        }
 
         if (q) {
             whereClause.OR = [
