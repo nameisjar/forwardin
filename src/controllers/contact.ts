@@ -784,8 +784,12 @@ export const getContacts: RequestHandler = async (req, res) => {
                 where: whereClause,
                 include: {
                     ContactLabel: {
-                        include: {
-                            label: true,
+                        select: {
+                            label: {
+                                select: {
+                                    name: true,
+                                },
+                            },
                         },
                     },
                     contactDevices: {
