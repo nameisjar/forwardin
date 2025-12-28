@@ -2654,6 +2654,7 @@ async function processRecipientsForFeedback(recipients: string[], deviceId: stri
 }
 
 // Send monthly feedback with PDF (deviceApi pattern - uses req.authenticatedDevice)
+// 🆕 Updated to support multi-recipient with individual student names
 export const sendMonthlyFeedbackDevice: RequestHandler = async (req, res) => {
     try {
         logger.info('=== Starting monthly feedback send (deviceApi) ===');
@@ -2665,7 +2666,7 @@ export const sendMonthlyFeedbackDevice: RequestHandler = async (req, res) => {
         const user = req.authenticatedUser; // User is set separately by middleware
         
         const {
-            studentName,
+            studentName, // Legacy: single studentName (backward compatibility)
             courseName,
             month,
             duration,
@@ -2676,38 +2677,85 @@ export const sendMonthlyFeedbackDevice: RequestHandler = async (req, res) => {
             skillsAcquired,
             youtubeLink,
             referralLink,
-            tutorComment,
+            tutorComment, // Now can be array of comment IDs
+            commentCategories, // 🆕 Template komentar untuk replace nama
             recipientPhone,
-            recipients,
+            recipients, // 🆕 Now array of { phone, studentName }
             rating,
             reportBy
         } = req.body;
 
         logger.info('Request:', { 
-            studentName: studentName?.substring(0, 2) + '***', 
             courseName, 
             month, 
             deviceId: deviceUuid, 
-            recipientCount: recipients?.length || (recipientPhone ? 1 : 0) 
+            recipientCount: recipients?.length || (recipientPhone ? 1 : 0),
+            hasCommentCategories: !!commentCategories,
+            tutorCommentType: Array.isArray(tutorComment) ? 'array' : typeof tutorComment
         });
 
-        const rawRecipientList = recipients && Array.isArray(recipients) && recipients.length > 0 
-            ? recipients 
-            : (recipientPhone ? [recipientPhone] : []);
+        // 🆕 Handle new format: recipients is array of {phone, studentName}
+        // or legacy format: recipients is array of phone strings
+        let recipientDataList: Array<{ phone: string; studentName: string }> = [];
+        
+        if (recipients && Array.isArray(recipients) && recipients.length > 0) {
+            if (typeof recipients[0] === 'object' && recipients[0].phone) {
+                // New format: [{phone, studentName}, ...]
+                recipientDataList = recipients;
+            } else {
+                // Legacy format: ['phone1', 'phone2', ...] - use single studentName
+                recipientDataList = recipients.map((phone: string) => ({
+                    phone,
+                    studentName: studentName || 'Siswa'
+                }));
+            }
+        } else if (recipientPhone) {
+            // Single recipient (legacy)
+            recipientDataList = [{ phone: recipientPhone, studentName: studentName || 'Siswa' }];
+        }
 
-        if (!studentName || !courseName || !month || rawRecipientList.length === 0 || !tutorComment) {
+        if (!courseName || !month || recipientDataList.length === 0) {
             logger.warn('Missing required fields');
             return res.status(400).json({ 
                 message: 'Missing required fields',
                 details: {
-                    studentName: !studentName ? 'required' : 'ok',
                     courseName: !courseName ? 'required' : 'ok',
                     month: !month ? 'required' : 'ok',
-                    recipients: rawRecipientList.length === 0 ? 'required (at least 1)' : 'ok',
-                    tutorComment: !tutorComment ? 'required' : 'ok'
+                    recipients: recipientDataList.length === 0 ? 'required (at least 1)' : 'ok'
                 }
             });
         }
+
+        // 🆕 Function to build tutor comment from selected IDs and categories
+        const buildTutorComment = (selectedIds: string[], categories: any, recipientStudentName: string): string => {
+            if (!selectedIds || !Array.isArray(selectedIds) || !categories) {
+                // Fallback: tutorComment might be a plain string (legacy)
+                return typeof tutorComment === 'string' ? tutorComment : '';
+            }
+            
+            const comments: string[] = [];
+            const allCategories = ['kehadiran', 'keterlibatan', 'penyelesaian', 'custom'];
+            
+            for (const categoryKey of allCategories) {
+                const category = categories[categoryKey];
+                if (!category || !Array.isArray(category)) continue;
+                
+                for (const comment of category) {
+                    if (selectedIds.includes(comment.id)) {
+                        let text = comment.text || '';
+                        // Replace placeholder name with actual student name
+                        // Handle both "M. Alghifari Setyawan" and {{firstname}}
+                        text = text.replace(/M\. Alghifari Setyawan/g, recipientStudentName);
+                        text = text.replace(/\{\{firstname\}\}/gi, recipientStudentName);
+                        if (text.trim()) {
+                            comments.push(text);
+                        }
+                    }
+                }
+            }
+            
+            return comments.join('\n\n');
+        };
 
         // Device already verified by deviceTokenOnly middleware - no need to check again
         logger.info('Device authenticated via token:', deviceUuid);
@@ -2717,61 +2765,95 @@ export const sendMonthlyFeedbackDevice: RequestHandler = async (req, res) => {
         configureDeviceRateLimit(deviceUuid, privilegeId);
 
         // Process recipients - expand labels to actual phone numbers
-        const recipientList = await processRecipientsForFeedback(rawRecipientList, deviceUuid);
+        // 🆕 Keep mapping of original phone to studentName
+        const phoneToNameMap: Record<string, string> = {};
+        for (const rd of recipientDataList) {
+            phoneToNameMap[rd.phone] = rd.studentName;
+        }
+        
+        const rawPhones = recipientDataList.map(rd => rd.phone);
+        const processedPhones = await processRecipientsForFeedback(rawPhones, deviceUuid);
 
-        if (recipientList.length === 0) {
+        if (processedPhones.length === 0) {
             logger.warn('No valid recipients after processing labels');
             return res.status(400).json({ 
                 message: 'No valid recipients found. Labels may be empty or contacts not found.',
-                originalRecipients: rawRecipientList
+                originalRecipients: rawPhones
             });
         }
 
-        // Generate PDF
-        logger.info('Generating PDF with Puppeteer...');
-        const pdfBuffer = await generateMonthlyFeedbackPDFWithPuppeteer({
-            studentName,
-            courseName,
-            month: Number(month),
-            duration: duration || `Bulan ke-${month}`,
-            level: level || '',
-            code: code || '',
-            topicModule: topicModule || '',
-            result: result || '',
-            skillsAcquired: skillsAcquired || '',
-            youtubeLink: youtubeLink || '',
-            referralLink: referralLink || '',
-            tutorComment: tutorComment || '',
-            rating: rating || 5,
-            reportBy: reportBy || 'Tutor'
-        });
-        logger.info('PDF generated successfully, size:', pdfBuffer.length, 'bytes');
+        // 🆕 Build final recipient list with studentNames
+        // For expanded phones (from labels), use the original studentName from that label
+        const finalRecipientList: Array<{ phone: string; studentName: string }> = [];
+        for (const phone of processedPhones) {
+            // Check if this phone was in original list
+            if (phoneToNameMap[phone]) {
+                finalRecipientList.push({ phone, studentName: phoneToNameMap[phone] });
+            } else {
+                // This phone came from label expansion - find which label it came from
+                // For now, use the first available studentName as fallback
+                const fallbackName = recipientDataList[0]?.studentName || 'Siswa';
+                finalRecipientList.push({ phone, studentName: fallbackName });
+            }
+        }
 
-        const fileName = `Feedback_${studentName.replace(/\s+/g, '_')}_${courseName.replace(/\s+/g, '_')}_Bulan${month}.pdf`;
+        logger.info(`Processing ${finalRecipientList.length} recipient(s) with individual names`);
         
         const tutorName = reportBy || 'Tutor';
-        const caption = `Halo, Ayah/Bunda dari ${studentName}! 👋
-
-Saya ${tutorName}, tutor ${studentName} di Sekolah Pemrograman Internasional Algorithmics.
-
-Saya ingin berbagi kabar tentang perkembangan ${studentName} selama satu bulan terakhir. Kami telah menilai kemajuan ${studentName} berdasarkan keterampilan yang dipelajari di kelas, serta upaya yang telah ditunjukkan dalam menyelesaikan berbagai tugas. 😊 Hasil lengkapnya bisa Anda lihat pada lampiran yang sudah kami sediakan 📄.
-
-Penilaian ini meliputi bintang dan poin yang diperoleh ${studentName} atas kinerja dalam berbagai keterampilan utama yang diajarkan di kelas. Bintang tersebut merefleksikan seberapa baik ${studentName} menguasai materi dan menerapkan keterampilannya, baik dalam tugas rumah maupun tugas kelas. Poin tambahan juga diberikan sebagai penghargaan atas kerja keras dan ketekunan yang ditunjukkan oleh ${studentName}.
-
-Jika ada hal yang ingin ditanyakan mengenai hasil ini atau tentang perkembangan ${studentName}, saya siap membantu menjelaskan lebih lanjut. Terima kasih atas dukungan Anda dalam proses belajar ${studentName}, dan mari kita terus bekerja sama untuk mencapai hasil yang lebih baik ke depannya! 💜`;
-        
-        logger.info('Sending document to', recipientList.length, 'recipient(s)...');
         
         const sendResults: Array<{
             recipient: string;
+            studentName: string;
             status: string;
             error?: string;
             rateLimitInfo?: RateLimitResult;
         }> = [];
 
-        for (const recipient of recipientList) {
+        // 🆕 Generate and send PDF for each recipient with their own name
+        for (const recipientData of finalRecipientList) {
+            const { phone: recipient, studentName: recipientStudentName } = recipientData;
+            
             try {
-                logger.info('Sending to:', redactPhone(recipient));
+                logger.info(`Generating PDF for: ${recipientStudentName?.substring(0, 2)}*** -> ${redactPhone(recipient)}`);
+                
+                // Build tutor comment for this recipient
+                const finalTutorComment = Array.isArray(tutorComment) 
+                    ? buildTutorComment(tutorComment, commentCategories, recipientStudentName)
+                    : (typeof tutorComment === 'string' 
+                        ? tutorComment.replace(/M\. Alghifari Setyawan/g, recipientStudentName).replace(/\{\{firstname\}\}/gi, recipientStudentName)
+                        : '');
+                
+                // Generate PDF for this specific recipient
+                const pdfBuffer = await generateMonthlyFeedbackPDFWithPuppeteer({
+                    studentName: recipientStudentName,
+                    courseName,
+                    month: Number(month),
+                    duration: duration || `Bulan ke-${month}`,
+                    level: level || '',
+                    code: code || '',
+                    topicModule: topicModule || '',
+                    result: result || '',
+                    skillsAcquired: skillsAcquired || '',
+                    youtubeLink: youtubeLink || '',
+                    referralLink: referralLink || '',
+                    tutorComment: finalTutorComment,
+                    rating: rating || 5,
+                    reportBy: reportBy || 'Tutor'
+                });
+                
+                const fileName = `Feedback_${recipientStudentName.replace(/\s+/g, '_')}_${courseName.replace(/\s+/g, '_')}_Bulan${month}.pdf`;
+                
+                const caption = `Halo, Ayah/Bunda dari ${recipientStudentName}! 👋
+
+Saya ${tutorName}, tutor ${recipientStudentName} di Sekolah Pemrograman Internasional Algorithmics.
+
+Saya ingin berbagi kabar tentang perkembangan ${recipientStudentName} selama satu bulan terakhir. Kami telah menilai kemajuan ${recipientStudentName} berdasarkan keterampilan yang dipelajari di kelas, serta upaya yang telah ditunjukkan dalam menyelesaikan berbagai tugas. 😊 Hasil lengkapnya bisa Anda lihat pada lampiran yang sudah kami sediakan 📄.
+
+Penilaian ini meliputi bintang dan poin yang diperoleh ${recipientStudentName} atas kinerja dalam berbagai keterampilan utama yang diajarkan di kelas. Bintang tersebut merefleksikan seberapa baik ${recipientStudentName} menguasai materi dan menerapkan keterampilannya, baik dalam tugas rumah maupun tugas kelas. Poin tambahan juga diberikan sebagai penghargaan atas kerja keras dan ketekunan yang ditunjukkan oleh ${recipientStudentName}.
+
+Jika ada hal yang ingin ditanyakan mengenai hasil ini atau tentang perkembangan ${recipientStudentName}, saya siap membantu menjelaskan lebih lanjut. Terima kasih atas dukungan Anda dalam proses belajar ${recipientStudentName}, dan mari kita terus bekerja sama untuk mencapai hasil yang lebih baik ke depannya! 💜`;
+                
+                logger.info(`Sending PDF (${pdfBuffer.length} bytes) to: ${redactPhone(recipient)}`);
                 
                 const { result: sendResult, rateLimitInfo } = await executeWithRateLimit(
                     deviceUuid,
@@ -2785,25 +2867,27 @@ Jika ada hal yang ingin ditanyakan mengenai hasil ini atau tentang perkembangan 
                         );
                         return { success: true };
                     },
-                    `feedback-${studentName}-${recipient}-${Date.now()}`
+                    `feedback-${recipientStudentName}-${recipient}-${Date.now()}`
                 );
                 
                 sendResults.push({ 
-                    recipient, 
+                    recipient,
+                    studentName: recipientStudentName,
                     status: 'success',
                     rateLimitInfo
                 });
                 
                 if (rateLimitInfo.delayed) {
-                    logger.info(`✅ Sent to ${redactPhone(recipient)} (delayed ${Math.round(rateLimitInfo.delayMs/1000)}s)`);
+                    logger.info(`✅ Sent to ${redactPhone(recipient)} (${recipientStudentName}) (delayed ${Math.round(rateLimitInfo.delayMs/1000)}s)`);
                 } else {
-                    logger.info('✅ Sent to:', redactPhone(recipient));
+                    logger.info(`✅ Sent to ${redactPhone(recipient)} (${recipientStudentName})`);
                 }
                 
             } catch (sendError) {
-                logger.error('❌ Failed to send to:', redactPhone(recipient), sendError);
+                logger.error(`❌ Failed for ${recipientStudentName} -> ${redactPhone(recipient)}:`, sendError);
                 sendResults.push({ 
-                    recipient, 
+                    recipient,
+                    studentName: recipientStudentName,
                     status: 'failed', 
                     error: sendError instanceof Error ? sendError.message : 'Unknown error' 
                 });
@@ -2818,7 +2902,7 @@ Jika ada hal yang ingin ditanyakan mengenai hasil ini atau tentang perkembangan 
                     if (result.status === 'success') {
                         await prisma.monthlyFeedbackLog.create({
                             data: {
-                                studentName,
+                                studentName: result.studentName,
                                 courseName,
                                 month: Number(month),
                                 recipientPhone: result.recipient,
@@ -2840,10 +2924,9 @@ Jika ada hal yang ingin ditanyakan mengenai hasil ini atau tentang perkembangan 
         
         res.status(200).json({ 
             message: `Monthly feedback sent to ${successCount} recipient(s)`,
-            fileName,
             results: sendResults,
             summary: {
-                total: recipientList.length,
+                total: finalRecipientList.length,
                 success: successCount,
                 failed: failedCount
             }
