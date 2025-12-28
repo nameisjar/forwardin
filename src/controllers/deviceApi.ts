@@ -2592,19 +2592,49 @@ function configureDeviceRateLimit(deviceId: string, privilegeId: number | undefi
     }
 }
 
-// Helper function untuk expand label menjadi daftar nomor kontak
-async function expandLabelToContacts(labelName: string, deviceId: string): Promise<string[]> {
+// Helper function untuk expand label menjadi daftar kontak dengan firstName
+interface ExpandedContact {
+    phone: string;
+    firstName: string;
+}
+
+async function expandLabelToContacts(labelNameOrSlug: string, deviceId: string): Promise<ExpandedContact[]> {
     try {
+        logger.info(`[Label] Expanding label "${labelNameOrSlug}" for device ${deviceId}`);
+        
+        // Find the label by name OR slug (case-insensitive)
+        const label = await prisma.label.findFirst({
+            where: {
+                OR: [
+                    {
+                        name: {
+                            equals: labelNameOrSlug,
+                            mode: 'insensitive'
+                        }
+                    },
+                    {
+                        slug: {
+                            equals: labelNameOrSlug,
+                            mode: 'insensitive'
+                        }
+                    }
+                ]
+            }
+        });
+        
+        if (!label) {
+            logger.warn(`[Label] Label "${labelNameOrSlug}" not found in database (checked both name and slug)`);
+            return [];
+        }
+        
+        logger.info(`[Label] Found label: pkId=${label.pkId}, name="${label.name}", slug="${label.slug}"`);
+        
+        // Then find contacts with this label that are associated with the device
         const contactsWithLabel = await prisma.contact.findMany({
             where: {
                 ContactLabel: {
                     some: {
-                        label: {
-                            name: {
-                                equals: labelName,
-                                mode: 'insensitive'
-                            }
-                        }
+                        labelId: label.pkId
                     }
                 },
                 contactDevices: {
@@ -2616,38 +2646,93 @@ async function expandLabelToContacts(labelName: string, deviceId: string): Promi
                 }
             },
             select: {
-                phone: true
+                pkId: true,
+                phone: true,
+                firstName: true
             }
         });
 
-        const phones = contactsWithLabel
-            .map(contact => contact.phone)
-            .filter((phone): phone is string => !!phone && phone.length > 0);
+        logger.info(`[Label] Found ${contactsWithLabel.length} contacts with label "${label.name}"`);
+        
+        if (contactsWithLabel.length === 0) {
+            // Debug: check if contacts exist with this label at all
+            const allContactsWithLabel = await prisma.contactLabel.count({
+                where: { labelId: label.pkId }
+            });
+            logger.warn(`[Label] Total ContactLabel entries for this label: ${allContactsWithLabel}`);
+            
+            // Debug: check if device has any contacts
+            const deviceContacts = await prisma.contactDevice.count({
+                where: {
+                    device: { id: deviceId }
+                }
+            });
+            logger.warn(`[Label] Total contacts for device ${deviceId}: ${deviceContacts}`);
+            
+            // Debug: check intersection - contacts with label that also belong to device
+            const contactIdsWithLabel = await prisma.contactLabel.findMany({
+                where: { labelId: label.pkId },
+                select: { contactId: true }
+            });
+            const contactIds = contactIdsWithLabel.map(c => c.contactId);
+            
+            if (contactIds.length > 0) {
+                const contactsAlsoInDevice = await prisma.contactDevice.count({
+                    where: {
+                        contactId: { in: contactIds },
+                        device: { id: deviceId }
+                    }
+                });
+                logger.warn(`[Label] Contacts with this label that also belong to device: ${contactsAlsoInDevice}`);
+            }
+        }
 
-        logger.info(`Label "${labelName}" expanded to ${phones.length} contacts for device ${deviceId}`);
-        return phones;
+        // 🆕 Return both phone and firstName
+        const expandedContacts = contactsWithLabel
+            .filter(contact => contact.phone && contact.phone.length > 0)
+            .map(contact => ({
+                phone: contact.phone!,
+                firstName: contact.firstName || ''
+            }));
+
+        logger.info(`[Label] Label "${label.name}" expanded to ${expandedContacts.length} contacts: ${expandedContacts.map(c => `${c.firstName?.substring(0,3)}*** (${c.phone.substring(0,5)}***)`).join(', ')}`);
+        return expandedContacts;
     } catch (error) {
-        logger.error(`Error expanding label "${labelName}":`, error);
+        logger.error(`[Label] Error expanding label "${labelNameOrSlug}":`, error);
         return [];
     }
 }
 
-// Helper function untuk memproses recipients (expand label jika ada)
-async function processRecipientsForFeedback(recipients: string[], deviceId: string): Promise<string[]> {
-    const processedRecipients: string[] = [];
+// 🆕 Updated to return contacts with firstName
+interface ProcessedRecipient {
+    phone: string;
+    firstName: string;
+}
+
+async function processRecipientsForFeedback(recipients: string[], deviceId: string): Promise<ProcessedRecipient[]> {
+    const processedRecipients: ProcessedRecipient[] = [];
 
     for (const recipient of recipients) {
         if (typeof recipient === 'string' && recipient.toLowerCase().startsWith('label_')) {
             const labelName = recipient.slice(6);
             logger.info(`Expanding label: ${labelName}`);
             const labelContacts = await expandLabelToContacts(labelName, deviceId);
+            // Add all contacts from label with their firstName
             processedRecipients.push(...labelContacts);
         } else {
-            processedRecipients.push(recipient);
+            // Regular phone number - no firstName available from label expansion
+            processedRecipients.push({ phone: recipient, firstName: '' });
         }
     }
 
-    const uniqueRecipients = [...new Set(processedRecipients)];
+    // Remove duplicates by phone, keeping first occurrence
+    const seen = new Set<string>();
+    const uniqueRecipients = processedRecipients.filter(r => {
+        if (seen.has(r.phone)) return false;
+        seen.add(r.phone);
+        return true;
+    });
+    
     logger.info(`Processed recipients: ${recipients.length} input -> ${uniqueRecipients.length} unique recipients`);
     
     return uniqueRecipients;
@@ -2764,17 +2849,17 @@ export const sendMonthlyFeedbackDevice: RequestHandler = async (req, res) => {
         const privilegeId = (user as any)?.privilege?.pkId;
         configureDeviceRateLimit(deviceUuid, privilegeId);
 
-        // Process recipients - expand labels to actual phone numbers
-        // 🆕 Keep mapping of original phone to studentName
+        // Process recipients - expand labels to actual phone numbers with firstName
+        // 🆕 Keep mapping of original phone to studentName (from frontend)
         const phoneToNameMap: Record<string, string> = {};
         for (const rd of recipientDataList) {
             phoneToNameMap[rd.phone] = rd.studentName;
         }
         
         const rawPhones = recipientDataList.map(rd => rd.phone);
-        const processedPhones = await processRecipientsForFeedback(rawPhones, deviceUuid);
+        const processedRecipients = await processRecipientsForFeedback(rawPhones, deviceUuid);
 
-        if (processedPhones.length === 0) {
+        if (processedRecipients.length === 0) {
             logger.warn('No valid recipients after processing labels');
             return res.status(400).json({ 
                 message: 'No valid recipients found. Labels may be empty or contacts not found.',
@@ -2783,17 +2868,26 @@ export const sendMonthlyFeedbackDevice: RequestHandler = async (req, res) => {
         }
 
         // 🆕 Build final recipient list with studentNames
-        // For expanded phones (from labels), use the original studentName from that label
+        // Priority: 1) firstName from label expansion, 2) studentName from frontend, 3) fallback
         const finalRecipientList: Array<{ phone: string; studentName: string }> = [];
-        for (const phone of processedPhones) {
-            // Check if this phone was in original list
-            if (phoneToNameMap[phone]) {
+        for (const processed of processedRecipients) {
+            const { phone, firstName } = processed;
+            
+            // Priority 1: Use firstName from label expansion (kontak's actual name)
+            if (firstName && firstName.trim()) {
+                finalRecipientList.push({ phone, studentName: firstName });
+                logger.info(`[Recipient] ${phone.substring(0,5)}*** using firstName from contact: "${firstName}"`);
+            }
+            // Priority 2: Use studentName from frontend (for direct phone numbers)
+            else if (phoneToNameMap[phone] && phoneToNameMap[phone] !== 'Tidak ada nama') {
                 finalRecipientList.push({ phone, studentName: phoneToNameMap[phone] });
-            } else {
-                // This phone came from label expansion - find which label it came from
-                // For now, use the first available studentName as fallback
+                logger.info(`[Recipient] ${phone.substring(0,5)}*** using studentName from frontend: "${phoneToNameMap[phone]}"`);
+            }
+            // Priority 3: Fallback to default studentName from first recipient
+            else {
                 const fallbackName = recipientDataList[0]?.studentName || 'Siswa';
                 finalRecipientList.push({ phone, studentName: fallbackName });
+                logger.info(`[Recipient] ${phone.substring(0,5)}*** using fallback name: "${fallbackName}"`);
             }
         }
 
