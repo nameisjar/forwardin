@@ -2903,8 +2903,11 @@ export const sendMonthlyFeedbackDevice: RequestHandler = async (req, res) => {
             rateLimitInfo?: RateLimitResult;
         }> = [];
 
-        // 🆕 Generate and send PDF for each recipient with their own name
-        for (const recipientData of finalRecipientList) {
+        // 🚀 OPTIMIZED: Parallel PDF generation with concurrency limit
+        const CONCURRENCY_LIMIT = 3; // Max 3 PDFs generating at once
+        
+        // Helper function to process a single recipient
+        const processRecipient = async (recipientData: { phone: string; studentName: string }) => {
             const { phone: recipient, studentName: recipientStudentName } = recipientData;
             
             try {
@@ -2953,7 +2956,7 @@ Jika ada hal yang ingin ditanyakan mengenai hasil ini atau tentang perkembangan 
                     deviceUuid,
                     async () => {
                         await sendDocument(
-                            deviceUuid, // sendDocument expects string UUID
+                            deviceUuid,
                             recipient,
                             pdfBuffer,
                             fileName,
@@ -2964,47 +2967,66 @@ Jika ada hal yang ingin ditanyakan mengenai hasil ini atau tentang perkembangan 
                     `feedback-${recipientStudentName}-${recipient}-${Date.now()}`
                 );
                 
-                sendResults.push({ 
-                    recipient,
-                    studentName: recipientStudentName,
-                    status: 'success',
-                    rateLimitInfo
-                });
-                
                 if (rateLimitInfo.delayed) {
                     logger.info(`✅ Sent to ${redactPhone(recipient)} (${recipientStudentName}) (delayed ${Math.round(rateLimitInfo.delayMs/1000)}s)`);
                 } else {
                     logger.info(`✅ Sent to ${redactPhone(recipient)} (${recipientStudentName})`);
                 }
                 
-            } catch (sendError) {
-                logger.error(`❌ Failed for ${recipientStudentName} -> ${redactPhone(recipient)}:`, sendError);
-                sendResults.push({ 
+                return { 
                     recipient,
                     studentName: recipientStudentName,
-                    status: 'failed', 
+                    status: 'success' as const,
+                    rateLimitInfo
+                };
+                
+            } catch (sendError) {
+                logger.error(`❌ Failed for ${recipientStudentName} -> ${redactPhone(recipient)}:`, sendError);
+                return { 
+                    recipient,
+                    studentName: recipientStudentName,
+                    status: 'failed' as const, 
                     error: sendError instanceof Error ? sendError.message : 'Unknown error' 
-                });
+                };
             }
-        }
+        };
 
-        // Log to database
+        // 🚀 Process recipients in parallel batches
+        logger.info(`Starting parallel processing with concurrency limit: ${CONCURRENCY_LIMIT}`);
+        const startTime = Date.now();
+        
+        for (let i = 0; i < finalRecipientList.length; i += CONCURRENCY_LIMIT) {
+            const batch = finalRecipientList.slice(i, i + CONCURRENCY_LIMIT);
+            logger.info(`Processing batch ${Math.floor(i / CONCURRENCY_LIMIT) + 1}: ${batch.length} recipients`);
+            
+            const batchResults = await Promise.all(batch.map(processRecipient));
+            sendResults.push(...batchResults);
+        }
+        
+        const totalTime = ((Date.now() - startTime) / 1000).toFixed(1);
+        logger.info(`Parallel processing completed in ${totalTime}s`);
+
+        // 🚀 OPTIMIZED: Batch database insert instead of individual inserts
         try {
             const userId = (user as any)?.id;
             if (userId) {
-                for (const result of sendResults) {
-                    if (result.status === 'success') {
-                        await prisma.monthlyFeedbackLog.create({
-                            data: {
-                                studentName: result.studentName,
-                                courseName,
-                                month: Number(month),
-                                recipientPhone: result.recipient,
-                                sentBy: userId,
-                                sentAt: new Date()
-                            }
-                        });
-                    }
+                const successResults = sendResults.filter(r => r.status === 'success');
+                
+                if (successResults.length > 0) {
+                    const logsToCreate = successResults.map(result => ({
+                        studentName: result.studentName,
+                        courseName,
+                        month: Number(month),
+                        recipientPhone: result.recipient,
+                        sentBy: userId,
+                        sentAt: new Date()
+                    }));
+                    
+                    await prisma.monthlyFeedbackLog.createMany({
+                        data: logsToCreate
+                    });
+                    
+                    logger.info(`✅ Batch inserted ${logsToCreate.length} feedback logs`);
                 }
             }
         } catch (err) {
