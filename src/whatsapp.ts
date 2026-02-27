@@ -7,6 +7,7 @@ import makeWASocket, {
     makeCacheableSignalKeyStore,
     proto,
     fetchLatestBaileysVersion,
+    Browsers,
 } from '@whiskeysockets/baileys';
 import prisma from './utils/db';
 import { toDataURL, toString as qrToString } from 'qrcode';
@@ -579,7 +580,9 @@ export async function createInstance(options: createInstanceOptions) {
     const sock = makeWASocket({
         // printQRInTerminal removed due to deprecation; handled manually in connection.update
         version: waVersion,
-        browser: ['Autosender', 'Chrome', '20.0.04'],  // 🔧 Use realistic desktop browser fingerprint
+        // 🔧 Standard Ubuntu/Chrome fingerprint for multi-device compatibility
+        // Custom names like 'Autosender' get flagged as unofficial client on datacenter IPs
+        browser: Browsers.ubuntu('Chrome'),
         ...socketConfig,
         auth: {
             creds: state.creds,
