@@ -17,11 +17,12 @@ import { getSocketIO } from '../socket';
 import { Server } from 'socket.io';
 import { safeMessageContext, redactPhone, redactMessageObject } from '../utils/logRedaction';
 import { encryptMessage, decryptOutgoingMessage } from '../utils/messageEncryption';
+import { getInstance } from '../whatsapp';
 
 const getKeyAuthor = (key: WAMessageKey | undefined | null) =>
     (key?.fromMe ? 'me' : key?.participant || key?.remoteJid) || '';
 
-export default function messageHandler(sessionId: string, event: BaileysEventEmitter) {
+export default function messageHandler(sessionId: string, event: BaileysEventEmitter, deviceId?: number) {
     let listening = false;
 
     // obtain messages history
@@ -222,20 +223,84 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                                         sendCampaignReply(sessionId, message),
                                     ]).catch(() => {});
                                 }
-                                // pesan masuk tidak disimpan untuk sementara waktu
-                                // const incomingMessage = await prisma.incomingMessage.create({
-                                //     data: {
-                                //         id: message.key.id!,
-                                //         from: jid,
-                                //         message: messageText,
-                                //         receivedAt: new Date(data.messageTimestamp * 1000),
-                                //         sessionId,
-                                //         contactId: contact?.pkId || null,
-                                //     },
-                                //     include: { contact: true },
-                                // });
+                                
+                                // 🆕 Simpan pesan masuk ke database
+                                try {
+                                    // Get pushName (WhatsApp profile name) from message
+                                    const pushName = message.pushName || null;
+                                    
+                                    // Get participant (sender in group) from message key
+                                    const participant = message.key.participant || null;
+                                    
+                                    // Get group name and picture if it's a group message
+                                    let groupName: string | null = null;
+                                    let groupPicUrl: string | null = null;
+                                    if (jid.includes('@g.us')) {
+                                        try {
+                                            const session = getInstance(sessionId);
+                                            if (session) {
+                                                // Get group metadata (name)
+                                                if (typeof session.groupMetadata === 'function') {
+                                                    const groupMeta = await session.groupMetadata(jid);
+                                                    groupName = groupMeta?.subject || null;
+                                                }
+                                // Get group profile picture
+                                                if (typeof session.profilePictureUrl === 'function') {
+                                                    try {
+                                                        const picUrl = await session.profilePictureUrl(jid, 'image');
+                                                        groupPicUrl = picUrl || null;
+                                                    } catch {
+                                                        // Group might not have a profile picture
+                                                        groupPicUrl = null;
+                                                    }
+                                                }
+                                            }
+                                        } catch (groupErr) {
+                                            logger.debug({ groupErr, jid }, 'Failed to fetch group metadata');
+                                        }
+                                    }
+                                    
+                                    const incomingMessage = await prisma.incomingMessage.create({
+                                        data: {
+                                            id: message.key.id!,
+                                            from: jid,
+                                            participant,
+                                            pushName,
+                                            groupName,
+                                            groupPicUrl,
+                                            message: messageText,
+                                            receivedAt: new Date(Number(data.messageTimestamp) * 1000),
+                                            sessionId,
+                                            deviceId: deviceId || null,
+                                            contactId: contact?.pkId || null,
+                                        },
+                                        include: { contact: true },
+                                    });
 
-                                // io.emit(`message:${sessionId}`, incomingMessage);
+                                    // Emit socket event untuk real-time update
+                                    io.emit(`incoming:${sessionId}`, {
+                                        ...incomingMessage,
+                                        isGroup: jid.includes('@g.us'),
+                                    });
+                                    
+                                    logger.info(
+                                        { sessionId, from: jid, participant, pushName, groupName, messageId: message.key.id },
+                                        'Incoming message saved'
+                                    );
+                                } catch (saveError: any) {
+                                    // Handle duplicate key error (message already exists)
+                                    if (saveError?.code === 'P2002') {
+                                        logger.debug(
+                                            { sessionId, messageId: message.key.id },
+                                            'Incoming message already exists, skipping'
+                                        );
+                                    } else {
+                                        logger.error(
+                                            { error: saveError, sessionId, messageId: message.key.id },
+                                            'Failed to save incoming message'
+                                        );
+                                    }
+                                }
                             }
                         }
                     } catch (e) {

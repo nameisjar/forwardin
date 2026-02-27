@@ -13,6 +13,11 @@ router.put('/:deviceId', controller.updateDevice);
 router.delete('/', controller.deleteDevices);
 router.post('/:deviceId/access-token', controller.issueDeviceAccessToken);
 
+// Inbox - incoming messages (persists across session reconnects)
+router.get('/:deviceId/inbox', controller.getDeviceInbox);
+router.delete('/:deviceId/inbox', controller.deleteAllInbox);
+router.delete('/:deviceId/inbox/conversation', controller.deleteConversation);
+
 // Health monitoring endpoints
 router.get('/:id/health', controller.getDeviceHealthStatus);
 router.get('/:id/signals', controller.getDeviceSignals);

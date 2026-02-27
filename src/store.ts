@@ -22,9 +22,9 @@ export class Store {
     private readonly messageHandler;
     //   private readonly contactHandler;
 
-    constructor(sessionId: string, event: BaileysEventEmitter) {
+    constructor(sessionId: string, event: BaileysEventEmitter, deviceId?: number) {
         // this.chatHandler = handlers.chatHandler(sessionId, event);
-        this.messageHandler = handlers.messageHandler(sessionId, event);
+        this.messageHandler = handlers.messageHandler(sessionId, event, deviceId);
         // this.contactHandler = handlers.contactHandler(sessionId, event);
         this.listen();
     }

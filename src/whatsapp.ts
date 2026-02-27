@@ -6,6 +6,7 @@ import makeWASocket, {
     WASocket,
     makeCacheableSignalKeyStore,
     proto,
+    fetchLatestBaileysVersion,
 } from '@whiskeysockets/baileys';
 import prisma from './utils/db';
 import { toDataURL, toString as qrToString } from 'qrcode';
@@ -166,7 +167,7 @@ export async function createInstance(options: createInstanceOptions) {
         
         const operations = [
             { name: 'Message', fn: () => prisma.message.updateMany({ where: { sessionId }, data: { sessionId: null } }) },
-            { name: 'IncomingMessage', fn: () => prisma.incomingMessage.updateMany({ where: { sessionId }, data: { sessionId: null } }) },
+            // NOTE: IncomingMessage NOT nullified here - messages persist via deviceId for Inbox feature
             { name: 'OutgoingMessage', fn: () => prisma.outgoingMessage.updateMany({ where: { sessionId }, data: { sessionId: null } }) },
             { name: 'Session', fn: () => prisma.session.deleteMany({ where: { sessionId } }) },
         ];
@@ -518,9 +519,24 @@ export async function createInstance(options: createInstanceOptions) {
     const handleConnectionUpdate = SSE ? handleSSEConnectionUpdate : handleNormalConnectionUpdate;
 
     const { state, saveCreds } = await useSession(sessionId, deviceId);
+
+    // Fetch latest WhatsApp version for QR compatibility
+    const FALLBACK_VERSION: [number, number, number] = [2, 3000, 1033105955];
+    let waVersion: [number, number, number] = FALLBACK_VERSION;
+    try {
+        const { version, isLatest } = await fetchLatestBaileysVersion();
+        if (version && Array.isArray(version)) {
+            waVersion = version as [number, number, number];
+            logger.info(`[WA-VERSION] ✅ Auto-fetched: [${version.join(', ')}] ${isLatest ? '(latest)' : '(may not be latest)'}`);
+        }
+    } catch (e) {
+        logger.warn(`[WA-VERSION] ⚠️ Fetch failed, using fallback: [${FALLBACK_VERSION.join(', ')}]`);
+    }
+
     // back here: adjust SocketConfig such as turn off always online
     const sock = makeWASocket({
         // printQRInTerminal removed due to deprecation; handled manually in connection.update
+        version: waVersion,
         browser: ['Autosender', 'Chrome', '143.0.0.0'],
         ...socketConfig,
         auth: {
@@ -538,7 +554,7 @@ export async function createInstance(options: createInstanceOptions) {
         },
     });
 
-    const store = new Store(sessionId, sock.ev);
+    const store = new Store(sessionId, sock.ev, deviceId);
     instances.set(sessionId, { ...sock, destroy, store });
 
     sock.ev.on('creds.update', saveCreds);

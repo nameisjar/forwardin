@@ -1,6 +1,6 @@
 import { RequestHandler } from 'express';
 import { generateUuid } from '../utils/keyGenerator';
-import prisma from '../utils/db';
+import prisma, { serializePrisma } from '../utils/db';
 import logger from '../config/logger';
 import { generateSlug } from '../utils/slug';
 import { useDevice } from '../utils/quota';
@@ -853,6 +853,85 @@ scheduledJobs.push(
 );
 
 /**
+ * Delete a specific conversation (all messages from a specific sender) for a device
+ * DELETE /devices/:deviceId/inbox/conversation
+ * Body: { from: string } - the JID of the sender
+ */
+export const deleteConversation: RequestHandler = async (req, res) => {
+    try {
+        const deviceUuid = req.params.deviceId;
+        if (!isUUID(deviceUuid)) {
+            return res.status(400).json({ message: 'Invalid deviceId' });
+        }
+
+        const { from } = req.body;
+        if (!from || typeof from !== 'string') {
+            return res.status(400).json({ message: 'Missing or invalid "from" field' });
+        }
+
+        const userPkId = req.authenticatedUser.pkId;
+        const device = await prisma.device.findFirst({
+            where: { id: deviceUuid, userId: userPkId },
+            select: { pkId: true },
+        });
+
+        if (!device) {
+            return res.status(404).json({ message: 'Device not found' });
+        }
+
+        const result = await prisma.incomingMessage.deleteMany({
+            where: {
+                deviceId: device.pkId,
+                from: from,
+            },
+        });
+
+        res.status(200).json({
+            message: `Berhasil menghapus ${result.count} pesan dari ${from}`,
+            deletedCount: result.count,
+        });
+    } catch (error) {
+        logger.error(error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};
+
+/**
+ * Delete all incoming messages for a device
+ * DELETE /devices/:deviceId/inbox
+ */
+export const deleteAllInbox: RequestHandler = async (req, res) => {
+    try {
+        const deviceUuid = req.params.deviceId;
+        if (!isUUID(deviceUuid)) {
+            return res.status(400).json({ message: 'Invalid deviceId' });
+        }
+
+        const userPkId = req.authenticatedUser.pkId;
+        const device = await prisma.device.findFirst({
+            where: { id: deviceUuid, userId: userPkId },
+            select: { pkId: true },
+        });
+
+        if (!device) {
+            return res.status(404).json({ message: 'Device not found' });
+        }
+
+        const result = await prisma.incomingMessage.deleteMany({
+            where: { deviceId: device.pkId },
+        });
+
+        res.status(200).json({
+            message: `Berhasil menghapus seluruh ${result.count} pesan masuk`,
+            deletedCount: result.count,
+        });
+    } catch (error) {
+        logger.error(error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};
+
+/**
  * Cleanup scheduled jobs on graceful shutdown
  * Prevents memory leaks and ensures clean process termination
  */
@@ -866,3 +945,83 @@ export function shutdownScheduledJobs(): void {
     scheduledJobs.length = 0;
     logger.info('[Device] All scheduled jobs cancelled');
 }
+
+/**
+ * Get incoming messages for a device (persists across session reconnects)
+ * GET /devices/:deviceId/inbox
+ * Uses deviceId (UUID) → resolved to pkId for DB query.
+ * This endpoint uses authMiddleware (user JWT), not deviceTokenOnly,
+ * so it works even when the device is disconnected.
+ */
+export const getDeviceInbox: RequestHandler = async (req, res) => {
+    try {
+        const deviceUuid = req.params.deviceId;
+        if (!isUUID(deviceUuid)) {
+            return res.status(400).json({ message: 'Invalid deviceId' });
+        }
+
+        const userPkId = req.authenticatedUser.pkId;
+        const device = await prisma.device.findFirst({
+            where: { id: deviceUuid, userId: userPkId },
+            select: { pkId: true },
+        });
+
+        if (!device) {
+            return res.status(404).json({ message: 'Device not found' });
+        }
+
+        const { page = 1, pageSize = 25, phoneNumber, message, contactName } = req.query;
+        const offset = (Number(page) - 1) * Number(pageSize);
+
+        const whereClause: any = {
+            deviceId: device.pkId,
+            from: phoneNumber ? { contains: phoneNumber.toString() } : undefined,
+            message: message
+                ? { contains: message.toString(), mode: 'insensitive' as const }
+                : undefined,
+        };
+
+        if (contactName) {
+            whereClause.contact = {
+                OR: [
+                    { firstName: { contains: contactName.toString(), mode: 'insensitive' as const } },
+                    { lastName: { contains: contactName.toString(), mode: 'insensitive' as const } },
+                ],
+            };
+        }
+
+        const [messages, totalMessages] = await Promise.all([
+            prisma.incomingMessage.findMany({
+                take: Number(pageSize),
+                skip: offset,
+                where: whereClause,
+                include: {
+                    contact: {
+                        select: { firstName: true, lastName: true, colorCode: true },
+                    },
+                },
+                orderBy: { receivedAt: 'desc' },
+            }),
+            prisma.incomingMessage.count({ where: whereClause }),
+        ]);
+
+        const serialized = messages.map((m) => serializePrisma(m));
+        const currentPage = Math.max(1, Number(page) || 1);
+        const totalPages = Math.ceil(totalMessages / Number(pageSize));
+        const hasMore = currentPage * Number(pageSize) < totalMessages;
+
+        res.status(200).json({
+            data: serialized,
+            total: totalMessages,
+            metadata: {
+                totalMessages,
+                currentPage,
+                totalPages,
+                hasMore,
+            },
+        });
+    } catch (error) {
+        logger.error(error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};
