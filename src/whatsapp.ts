@@ -7,7 +7,6 @@ import makeWASocket, {
     makeCacheableSignalKeyStore,
     proto,
     fetchLatestBaileysVersion,
-    Browsers,
 } from '@whiskeysockets/baileys';
 import prisma from './utils/db';
 import { toDataURL, toString as qrToString } from 'qrcode';
@@ -79,68 +78,17 @@ const RECONNECT_INTERVAL = Number(process.env.RECONNECT_INTERVAL || 0);
 const MAX_RECONNECT_RETRIES = Number(process.env.MAX_RECONNECT_RETRIES || 5);
 const SSE_MAX_QR_GENERATION = Number(process.env.SSE_MAX_QR_GENERATION || 5);
 const SESSION_CONFIG_ID = 'session-config';
-const INIT_STAGGER_DELAY = Number(process.env.INIT_STAGGER_DELAY || 3000); // ms between session reconnections
-
-// 🔧 Global cached WA version — fetched ONCE, shared by ALL sessions
-let cachedWAVersion: [number, number, number] | null = null;
-let versionFetchedAt = 0;
-const VERSION_CACHE_TTL = 30 * 60 * 1000; // 30 minutes
-const WA_VERSION_FALLBACK: [number, number, number] = [2, 3000, 1015];
-
-async function getWAVersion(): Promise<[number, number, number]> {
-    // Return cached version if still fresh
-    if (cachedWAVersion && Date.now() - versionFetchedAt < VERSION_CACHE_TTL) {
-        return cachedWAVersion;
-    }
-
-    try {
-        const { version, isLatest } = await fetchLatestBaileysVersion();
-        if (version && Array.isArray(version) && version.length === 3) {
-            cachedWAVersion = version as [number, number, number];
-            versionFetchedAt = Date.now();
-            logger.info(`[WA-VERSION] ✅ Fetched & cached: [${version.join(', ')}] ${isLatest ? '(latest)' : '(may not be latest)'}`);
-            return cachedWAVersion;
-        }
-    } catch (e) {
-        logger.warn(`[WA-VERSION] ⚠️ Fetch failed: ${(e as Error).message}`);
-    }
-
-    // Use previously cached version if available, otherwise fallback
-    if (cachedWAVersion) {
-        logger.info(`[WA-VERSION] Using previously cached: [${cachedWAVersion.join(', ')}]`);
-        return cachedWAVersion;
-    }
-
-    logger.warn(`[WA-VERSION] Using fallback: [${WA_VERSION_FALLBACK.join(', ')}]`);
-    return WA_VERSION_FALLBACK;
-}
 
 export async function init() {
-    // 🔧 Pre-fetch WA version ONCE before connecting any session
-    const waVersion = await getWAVersion();
-    logger.info(`[INIT] WA version cached: [${waVersion.join(', ')}]`);
-
     const sessions = await prisma.session.findMany({
         select: { sessionId: true, deviceId: true, data: true },
         where: { id: { startsWith: SESSION_CONFIG_ID } },
     });
 
-    logger.info(`[INIT] Reconnecting ${sessions.length} session(s) with ${INIT_STAGGER_DELAY}ms stagger...`);
-
-    for (let i = 0; i < sessions.length; i++) {
-        const { sessionId, deviceId, data } = sessions[i];
+    for (const { sessionId, deviceId, data } of sessions) {
         const { readIncomingMessages, ...socketConfig } = JSON.parse(data);
-
-        logger.info(`[INIT] Starting session ${i + 1}/${sessions.length}: ${sessionId}`);
         createInstance({ sessionId, deviceId, readIncomingMessages, socketConfig });
-
-        // 🔧 Stagger: wait between sessions to avoid overwhelming WA servers
-        if (i < sessions.length - 1) {
-            await delay(INIT_STAGGER_DELAY);
-        }
     }
-
-    logger.info(`[INIT] All ${sessions.length} session(s) initiated`);
 }
 
 // 🆕 Export helper function untuk akses activeSSEConnections Map
@@ -572,17 +520,24 @@ export async function createInstance(options: createInstanceOptions) {
 
     const { state, saveCreds } = await useSession(sessionId, deviceId);
 
-    // 🔧 Use globally cached WA version (fetched once, shared by all sessions)
-    const waVersion = await getWAVersion();
-    logger.info({ sessionId, version: waVersion }, '[WA-VERSION] Using cached version for session');
+    // Fetch latest WhatsApp version for QR compatibility
+    const FALLBACK_VERSION: [number, number, number] = [2, 3000, 1033105955];
+    let waVersion: [number, number, number] = FALLBACK_VERSION;
+    try {
+        const { version, isLatest } = await fetchLatestBaileysVersion();
+        if (version && Array.isArray(version)) {
+            waVersion = version as [number, number, number];
+            logger.info(`[WA-VERSION] ✅ Auto-fetched: [${version.join(', ')}] ${isLatest ? '(latest)' : '(may not be latest)'}`);
+        }
+    } catch (e) {
+        logger.warn(`[WA-VERSION] ⚠️ Fetch failed, using fallback: [${FALLBACK_VERSION.join(', ')}]`);
+    }
 
     // back here: adjust SocketConfig such as turn off always online
     const sock = makeWASocket({
         // printQRInTerminal removed due to deprecation; handled manually in connection.update
         version: waVersion,
-        // 🔧 Standard Ubuntu/Chrome fingerprint for multi-device compatibility
-        // Custom names like 'Autosender' get flagged as unofficial client on datacenter IPs
-        browser: Browsers.ubuntu('Chrome'),
+        browser: ['Autosender', 'Chrome', '143.0.0.0'],
         ...socketConfig,
         auth: {
             creds: state.creds,
