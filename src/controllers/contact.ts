@@ -1090,6 +1090,82 @@ export const deleteContacts: RequestHandler = async (req, res) => {
     }
 };
 
+export const deleteAllContacts: RequestHandler = async (req, res) => {
+    try {
+        const pkId = req.authenticatedUser.pkId;
+        const privilegeId = req.privilege.pkId;
+        const { deviceId } = req.body;
+
+        if (!deviceId) {
+            return res.status(400).json({ message: 'deviceId is required' });
+        }
+
+        if (!isUUID(deviceId)) {
+            return res.status(400).json({ message: 'Invalid deviceId' });
+        }
+
+        // Verify device belongs to user
+        const device = await prisma.device.findFirst({
+            where: {
+                id: deviceId,
+                userId: privilegeId !== Number(process.env.SUPER_ADMIN_ID) ? pkId : undefined,
+            },
+            select: { pkId: true },
+        });
+
+        if (!device) {
+            return res.status(404).json({ message: 'Device not found' });
+        }
+
+        // Get all contacts for this device
+        const contacts = await prisma.contact.findMany({
+            where: {
+                contactDevices: {
+                    some: {
+                        deviceId: device.pkId,
+                    },
+                },
+            },
+            select: { pkId: true },
+        });
+
+        if (contacts.length === 0) {
+            return res.status(200).json({
+                message: 'No contacts to delete',
+                deletedCount: 0,
+            });
+        }
+
+        const contactPkIds = contacts.map((c) => c.pkId);
+
+        await prisma.$transaction(async (transaction) => {
+            // Delete related records first
+            await transaction.contactLabel.deleteMany({
+                where: { contactId: { in: contactPkIds } },
+            });
+            await transaction.contactDevice.deleteMany({
+                where: { contactId: { in: contactPkIds } },
+            });
+            await transaction.contactGroup.deleteMany({
+                where: { contactId: { in: contactPkIds } },
+            });
+
+            // Delete contacts
+            await transaction.contact.deleteMany({
+                where: { pkId: { in: contactPkIds } },
+            });
+        });
+
+        res.status(200).json({
+            message: 'All contacts deleted successfully',
+            deletedCount: contacts.length,
+        });
+    } catch (error) {
+        logger.error(error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};
+
 export const addContactToGroup: RequestHandler = async (req, res) => {
     try {
         const pkId = req.authenticatedUser.pkId;

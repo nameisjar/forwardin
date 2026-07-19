@@ -20,6 +20,7 @@ router.get('/labels', controller.getContactLabels);
 router.get('/:contactId', controller.getContact);
 router.put('/:contactId', dateRules, validate, controller.updateContact);
 router.delete('/', controller.deleteContacts);
+router.delete('/all', controller.deleteAllContacts);
 router.post('/add', controller.addContactToGroup);
 
 export default router;
