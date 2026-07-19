@@ -400,15 +400,23 @@ export const deleteDevices: RequestHandler = async (req, res) => {
                         contactDevices: { some: { device: { id: deviceId } } },
                     },
                 }),
+                // Only delete labels that are orphaned (not used in ANY DeviceLabel OR ContactLabel)
                 prisma.label.deleteMany({
                     where: {
-                        NOT: {
-                            DeviceLabel: {
-                                some: {
-                                    deviceId: { not: deletedDevice.pkId },
-                                },
+                        AND: [
+                            {
+                                // No DeviceLabel relationships exist
+                                DeviceLabel: {
+                                    none: {}
+                                }
                             },
-                        },
+                            {
+                                // No ContactLabel relationships exist
+                                ContactLabel: {
+                                    none: {}
+                                }
+                            }
+                        ]
                     },
                 })
             ]);
