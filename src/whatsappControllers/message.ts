@@ -298,15 +298,21 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                                             if (session && typeof session.profilePictureUrl === 'function') {
                                                 const picUrl = await session.profilePictureUrl(jid, 'image');
                                                 profilePicUrl = picUrl || null;
+                                                logger.debug({ jid, profilePicUrl }, '✅ Fetched profile picture for personal chat');
+                                            } else {
+                                                logger.warn({ jid, hasSession: !!session }, '⚠️ Cannot fetch profile picture - session or method unavailable');
                                             }
-                                        } catch {
+                                        } catch (picErr) {
                                             // User might not have a profile picture
+                                            logger.debug({ jid, picErr }, '❌ Failed to fetch profile picture');
                                             profilePicUrl = null;
                                         }
                                     }
                                     
-                                    const incomingMessage = await prisma.incomingMessage.create({
-                                        data: {
+                                    // ✅ Use upsert instead of create to update profile pictures for existing messages
+                                    const incomingMessage = await prisma.incomingMessage.upsert({
+                                        where: { id: message.key.id! },
+                                        create: {
                                             id: message.key.id!,
                                             from: jid,
                                             participant,
@@ -319,6 +325,13 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                                             sessionId,
                                             deviceId: deviceId || null,
                                             contactId: contact?.pkId || null,
+                                        },
+                                        update: {
+                                            // Update profile pictures if message already exists
+                                            profilePicUrl,
+                                            groupPicUrl,
+                                            groupName,
+                                            pushName,
                                         },
                                         include: { contact: true },
                                     });
