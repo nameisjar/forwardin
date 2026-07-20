@@ -265,51 +265,23 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                                     // Get group name and picture if it's a group message
                                     let groupName: string | null = null;
                                     let groupPicUrl: string | null = null;
-                                    let profilePicUrl: string | null = null; // ✅ Profile picture for personal chat
                                     
                                     const session = getInstance(sessionId);
                                     
                                     if (jid.includes('@g.us')) {
-                                        // GROUP MESSAGE - Get group metadata and picture
+                                        // GROUP MESSAGE - Get group metadata (name only, picture in background)
                                         try {
-                                            if (session) {
-                                                // Get group metadata (name)
-                                                if (typeof session.groupMetadata === 'function') {
-                                                    const groupMeta = await session.groupMetadata(jid);
-                                                    groupName = groupMeta?.subject || null;
-                                                }
-                                                // Get group profile picture
-                                                if (typeof session.profilePictureUrl === 'function') {
-                                                    try {
-                                                        const picUrl = await session.profilePictureUrl(jid, 'image');
-                                                        groupPicUrl = picUrl || null;
-                                                    } catch {
-                                                        // Group might not have a profile picture
-                                                        groupPicUrl = null;
-                                                    }
-                                                }
+                                            if (session && typeof session.groupMetadata === 'function') {
+                                                const groupMeta = await session.groupMetadata(jid);
+                                                groupName = groupMeta?.subject || null;
                                             }
                                         } catch (groupErr) {
                                             logger.debug({ groupErr, jid }, 'Failed to fetch group metadata');
                                         }
-                                    } else {
-                                        // PERSONAL MESSAGE - Get sender's profile picture
-                                        try {
-                                            if (session && typeof session.profilePictureUrl === 'function') {
-                                                const picUrl = await session.profilePictureUrl(jid, 'image');
-                                                profilePicUrl = picUrl || null;
-                                                logger.debug({ jid, profilePicUrl }, '✅ Fetched profile picture for personal chat');
-                                            } else {
-                                                logger.warn({ jid, hasSession: !!session }, '⚠️ Cannot fetch profile picture - session or method unavailable');
-                                            }
-                                        } catch (picErr) {
-                                            // User might not have a profile picture
-                                            logger.debug({ jid, picErr }, '❌ Failed to fetch profile picture');
-                                            profilePicUrl = null;
-                                        }
                                     }
                                     
-                                    // ✅ Use upsert instead of create to update profile pictures for existing messages
+                                    // ✅ PERFORMANCE FIX: Simpan pesan DULU tanpa profile picture (instant)
+                                    // Profile picture akan di-fetch di background dan di-update kemudian
                                     const incomingMessage = await prisma.incomingMessage.upsert({
                                         where: { id: message.key.id! },
                                         create: {
@@ -318,8 +290,8 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                                             participant,
                                             pushName,
                                             groupName,
-                                            groupPicUrl,
-                                            profilePicUrl, // ✅ Profile picture for personal chat
+                                            groupPicUrl: null, // Will be fetched in background
+                                            profilePicUrl: null, // Will be fetched in background
                                             message: messageText,
                                             receivedAt: new Date(Number(data.messageTimestamp) * 1000),
                                             sessionId,
@@ -327,14 +299,83 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                                             contactId: contact?.pkId || null,
                                         },
                                         update: {
-                                            // Update profile pictures if message already exists
-                                            profilePicUrl,
-                                            groupPicUrl,
+                                            // Update metadata if changed
                                             groupName,
                                             pushName,
                                         },
                                         include: { contact: true },
                                     });
+                                    
+                                    // ✅ BACKGROUND: Fetch dan update profile/group pictures (non-blocking)
+                                    (async () => {
+                                        try {
+                                            let picUrlToUpdate: string | null = null;
+                                            let fieldToUpdate: 'profilePicUrl' | 'groupPicUrl' = 'profilePicUrl';
+                                            
+                                            if (jid.includes('@g.us')) {
+                                                // GROUP: Fetch group picture
+                                                if (session && typeof session.profilePictureUrl === 'function') {
+                                                    try {
+                                                        const picUrl = await session.profilePictureUrl(jid, 'image');
+                                                        picUrlToUpdate = picUrl || null;
+                                                        fieldToUpdate = 'groupPicUrl';
+                                                    } catch {
+                                                        // Group might not have a profile picture
+                                                        picUrlToUpdate = null;
+                                                    }
+                                                }
+                                            } else {
+                                                // PERSONAL: Fetch profile picture
+                                                if (session && typeof session.profilePictureUrl === 'function') {
+                                                    try {
+                                                        const picUrl = await session.profilePictureUrl(jid, 'image');
+                                                        picUrlToUpdate = picUrl || null;
+                                                        fieldToUpdate = 'profilePicUrl';
+                                                    } catch {
+                                                        // User might not have a profile picture
+                                                        picUrlToUpdate = null;
+                                                    }
+                                                }
+                                            }
+                                            
+                                            // Update database if picture found
+                                            if (picUrlToUpdate) {
+                                                const updateData: { profilePicUrl?: string; groupPicUrl?: string } = {};
+                                                if (fieldToUpdate === 'profilePicUrl') {
+                                                    updateData.profilePicUrl = picUrlToUpdate;
+                                                } else {
+                                                    updateData.groupPicUrl = picUrlToUpdate;
+                                                }
+                                                
+                                                await prisma.incomingMessage.update({
+                                                    where: { id: message.key.id! },
+                                                    data: updateData,
+                                                });
+                                                
+                                                // Emit updated message with picture
+                                                const updatedMessage = await prisma.incomingMessage.findUnique({
+                                                    where: { id: message.key.id! },
+                                                    include: { contact: true },
+                                                });
+                                                
+                                                if (updatedMessage) {
+                                                    const emitEventName = `incoming:${sessionId}:profile-updated`;
+                                                    io.emit(emitEventName, {
+                                                        ...updatedMessage,
+                                                        isGroup: jid.includes('@g.us'),
+                                                    });
+                                                }
+                                                
+                                                logger.debug({ 
+                                                    jid, 
+                                                    field: fieldToUpdate,
+                                                    picUrl: picUrlToUpdate.substring(0, 50) 
+                                                }, '✅ Picture updated in background');
+                                            }
+                                        } catch (picErr) {
+                                            logger.debug({ jid, picErr }, '❌ Background picture fetch failed');
+                                        }
+                                    })();
 
                                     // Emit socket event untuk real-time update
                                     const emitEventName = `incoming:${sessionId}`;

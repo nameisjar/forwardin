@@ -14,8 +14,7 @@
         "format:write": "prettier --write .",
         "test": "mocha dist/tests/*.test.js --exit --timeout 10000",
         "configure-husky": "npx husky install && npx husky add .husky/pre-commit \"npx --no-install lint-staged\"",
-        "seed:dummy-broadcasts": "ts-node ./prisma/seed/dummyBroadcasts",
-        "backfill:profile-pics": "npm run build && node dist/scripts/backfill-profile-pictures.js"
+        "seed:dummy-broadcasts": "ts-node ./prisma/seed/dummyBroadcasts"
     },
     "prisma": {
         "seed": "ts-node ./prisma/seed"
