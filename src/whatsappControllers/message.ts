@@ -364,6 +364,15 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                                                         ...updatedMessage,
                                                         isGroup: jid.includes('@g.us'),
                                                     });
+                                                    
+                                                    logger.info({ 
+                                                        eventName: emitEventName,
+                                                        messageId: updatedMessage.id,
+                                                        field: fieldToUpdate,
+                                                        hasProfilePic: !!updatedMessage.profilePicUrl,
+                                                        hasGroupPic: !!updatedMessage.groupPicUrl,
+                                                        connectedClients: io.sockets.sockets.size
+                                                    }, '📸 Profile picture update emitted');
                                                 }
                                                 
                                                 logger.debug({ 
