@@ -66,7 +66,11 @@ export const getDevices: RequestHandler = async (req, res) => {
 
                         // Return device dengan status yang sudah dikoreksi
                         const { sessions, ...deviceWithoutSessions } = device;
-                        return { ...deviceWithoutSessions, status: 'close' };
+                        return { 
+                            ...deviceWithoutSessions, 
+                            status: 'close',
+                            sessionId: sessions[0]?.sessionId || null // ✅ Include sessionId
+                        };
                     }
                 } else if (dbStatus === 'open' && !sessionId) {
                     // Status open tapi tidak ada session sama sekali
@@ -81,12 +85,19 @@ export const getDevices: RequestHandler = async (req, res) => {
                     });
 
                     const { sessions, ...deviceWithoutSessions } = device;
-                    return { ...deviceWithoutSessions, status: 'close' };
+                    return { 
+                        ...deviceWithoutSessions, 
+                        status: 'close',
+                        sessionId: null // ✅ Include sessionId (null in this case)
+                    };
                 }
 
-                // Remove sessions from response (tidak perlu dikirim ke frontend)
+                // Remove sessions array but preserve sessionId field for socket listeners
                 const { sessions, ...deviceWithoutSessions } = device;
-                return deviceWithoutSessions;
+                return { 
+                    ...deviceWithoutSessions, 
+                    sessionId: sessions[0]?.sessionId || null // ✅ Include sessionId for frontend socket listeners
+                };
             })
         );
 
@@ -935,6 +946,86 @@ export const deleteAllInbox: RequestHandler = async (req, res) => {
         });
     } catch (error) {
         logger.error(error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};
+
+/**
+ * Get outgoing messages (outbox) for a device
+ * GET /devices/:deviceId/outbox?to=<jid>&limit=50
+ */
+export const getDeviceOutbox: RequestHandler = async (req, res) => {
+    try {
+        const deviceUuid = req.params.deviceId;
+        if (!isUUID(deviceUuid)) {
+            return res.status(400).json({ message: 'Invalid deviceId' });
+        }
+
+        const { to, limit = '50' } = req.query;
+        const userPkId = req.authenticatedUser.pkId;
+
+        const device = await prisma.device.findFirst({
+            where: { id: deviceUuid, userId: userPkId },
+            select: { 
+                pkId: true,
+                sessions: {
+                    select: { sessionId: true },
+                    take: 1,
+                },
+            },
+        });
+
+        if (!device) {
+            return res.status(404).json({ message: 'Device not found' });
+        }
+
+        const sessionId = device.sessions[0]?.sessionId;
+        if (!sessionId) {
+            return res.status(200).json([]);
+        }
+
+        // Build where clause
+        const where: any = {
+            sessionId,
+        };
+
+        // Filter by recipient if provided
+        if (to && typeof to === 'string') {
+            where.to = to;
+        }
+
+        // Fetch outgoing messages
+        const messages = await prisma.outgoingMessage.findMany({
+            where,
+            orderBy: { createdAt: 'desc' }, // ✅ DESC untuk ambil yang TERBARU dulu
+            take: parseInt(limit as string) || 50,
+            select: {
+                id: true,
+                waMessageId: true,
+                to: true,
+                message: true,
+                mediaPath: true,
+                status: true,
+                createdAt: true,
+                isGroup: true,
+                readBy: true,
+            },
+        });
+
+        // ✅ CRITICAL: Decrypt messages before sending to frontend
+        const { decryptOutgoingMessages } = await import('../utils/messageEncryption');
+        const decryptedMessages = decryptOutgoingMessages(messages);
+
+        // ✅ CRITICAL: Disable ETag caching for this endpoint
+        // Pesan baru harus selalu di-fetch dari database, tidak boleh di-cache
+        res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+        res.setHeader('Pragma', 'no-cache');
+        res.setHeader('Expires', '0');
+        res.removeHeader('ETag');
+
+        res.status(200).json(decryptedMessages);
+    } catch (error) {
+        logger.error('Error in getDeviceOutbox:', error);
         res.status(500).json({ message: 'Internal server error' });
     }
 };

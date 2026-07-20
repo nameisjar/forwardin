@@ -58,14 +58,11 @@ export const sendMessages: RequestHandler = async (req, res) => {
                 if (type === 'group') {
                     jid = normalizeGroupJid(String(recipient));
 
-                    // simple validation: group JID harus mengandung '-' sebelum @g.us
-                    // format sah: <digits>-<digits>@g.us
-                    const beforeAt = jid.split('@')[0];
-                    if (!beforeAt.includes('-')) {
-                        // berikan pesan error jelas: biasanya grup JID harus mengandung '-'
+                    // Relaxed validation: just check if it's a valid @g.us format
+                    // Some group JIDs may not have hyphen in newer WhatsApp versions
+                    if (!jid.includes('@g.us')) {
                         throw new Error(
-                            'Invalid group JID. A WhatsApp group JID must contain a hyphen (e.g. 12345-67890@g.us). ' +
-                                'If you only have the numeric id, include the hyphen part (group id).',
+                            'Invalid group JID. Group JID must end with @g.us domain.',
                         );
                     }
 
@@ -133,6 +130,68 @@ export const sendMessages: RequestHandler = async (req, res) => {
                 // kirim pesan. Banyak wrapper Baileys menggunakan sendMessage(jid, payload, options)
                 const result = await session.sendMessage(jid, payload, options ?? undefined);
                 results.push({ index, result });
+                
+                // 🔥 CRITICAL: Save outgoing message to database BEFORE returning response
+                // This ensures message is available when frontend reloads
+                const messageText = typeof payload === 'string' ? payload : payload?.text || JSON.stringify(payload);
+                const waMessageId = result?.key?.id;
+                
+                if (!waMessageId) {
+                    logger.warn({ sessionId, jid }, '⚠️ No waMessageId in sendMessage result, message may not be tracked properly');
+                }
+                
+                logger.info({ sessionId, jid, waMessageId, messageText: messageText?.substring(0, 50) }, '💾 Attempting to save outgoing message to database...');
+                
+                // ✅ CRITICAL: Encrypt message before saving
+                const { encryptMessage } = await import('../utils/messageEncryption');
+                const encryptedMessage = encryptMessage(messageText);
+                
+                try {
+                    const savedMessage = await prisma.outgoingMessage.create({
+                        data: {
+                            id: waMessageId || `msg-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+                            waMessageId,
+                            sessionId,
+                            to: jid,
+                            message: encryptedMessage,
+                            schedule: new Date(),
+                            status: 'server_ack', // Default status: terkirim ke server (1 centang)
+                            isGroup: type === 'group',
+                            readBy: [], // Initialize empty readBy array
+                        },
+                    });
+                    
+                    logger.info({ 
+                        sessionId, 
+                        jid, 
+                        waMessageId,
+                        savedId: savedMessage.id,
+                        isGroup: savedMessage.isGroup,
+                        pkId: savedMessage.pkId,
+                        toField: savedMessage.to, // ✅ DEBUG: Log 'to' field yang tersimpan
+                    }, '✅ Outgoing message SUCCESSFULLY saved to database');
+                } catch (dbError) {
+                    // ⚠️ Log detailed error for debugging
+                    logger.error({ 
+                        error: dbError, 
+                        errorMessage: dbError instanceof Error ? dbError.message : String(dbError),
+                        errorStack: dbError instanceof Error ? dbError.stack : undefined,
+                        sessionId, 
+                        jid, 
+                        waMessageId,
+                        messageData: {
+                            id: waMessageId || `msg-${Date.now()}`,
+                            waMessageId,
+                            sessionId,
+                            to: jid,
+                            messageLength: messageText?.length,
+                            isGroup: type === 'group'
+                        }
+                    }, '❌ FAILED to save outgoing message to database');
+                    
+                    // Don't fail the request - message was sent successfully
+                    // Frontend will use cache until message appears in DB
+                }
             } catch (e) {
                 const msg = e instanceof Error ? e.message : String(e);
                 logger.error(e, `Failed to send message at index ${index}: ${msg}`);

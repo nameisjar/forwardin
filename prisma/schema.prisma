@@ -369,6 +369,7 @@ model IncomingMessage {
   pushName       String?  @map("push_name") // Nama profil WhatsApp pengirim
   groupName      String?  @map("group_name") // Nama grup (jika pesan dari grup)
   groupPicUrl    String?  @map("group_pic_url") // URL foto profil grup
+  profilePicUrl  String?  @map("profile_pic_url") // URL foto profil personal chat
   message        String
   mediaPath      String?
   receivedAt     DateTime @map("received_at")

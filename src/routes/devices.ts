@@ -18,6 +18,9 @@ router.get('/:deviceId/inbox', controller.getDeviceInbox);
 router.delete('/:deviceId/inbox', controller.deleteAllInbox);
 router.delete('/:deviceId/inbox/conversation', controller.deleteConversation);
 
+// Outbox - outgoing messages sent from this device
+router.get('/:deviceId/outbox', controller.getDeviceOutbox);
+
 // Health monitoring endpoints
 router.get('/:id/health', controller.getDeviceHealthStatus);
 router.get('/:id/signals', controller.getDeviceSignals);

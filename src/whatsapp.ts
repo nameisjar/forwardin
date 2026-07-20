@@ -1075,6 +1075,172 @@ export async function createInstance(options: createInstanceOptions) {
         }
     });
 
+    // 🆕 Listen untuk message receipts (delivered & read status)
+    sock.ev.on('messages.update', async (updates) => {
+        try {
+            // 🔧 FIX: Check connection via centralized state
+            if (!isSessionConnected(sessionId)) {
+                logger.debug({ sessionId }, 'Skipping messages.update - connection not open');
+                return;
+            }
+
+            for (const update of updates) {
+                try {
+                    // Update hanya untuk pesan yang kita kirim (fromMe: true)
+                    if (!update.key || !update.key.fromMe) continue;
+
+                    const messageId = update.key.id;
+                    if (!messageId) continue;
+
+                    // Determine new status from update
+                    let newStatus: string | null = null;
+                    
+                    if (update.update?.status === 2) {
+                        // Status 2 = SERVER_ACK (sent - 1 centang)
+                        newStatus = 'server_ack';
+                    } else if (update.update?.status === 3) {
+                        // Status 3 = DELIVERY_ACK (delivered - 2 centang abu-abu)
+                        newStatus = 'delivery_ack';
+                    } else if (update.update?.status === 4) {
+                        // Status 4 = READ (read - 2 centang biru)
+                        newStatus = 'read';
+                    } else if (update.update?.status === 5) {
+                        // Status 5 = PLAYED (for voice notes)
+                        newStatus = 'played';
+                    }
+
+                    if (newStatus) {
+                        // ✅ CRITICAL FIX: Only update if new status is HIGHER than current
+                        // Define status hierarchy
+                        const statusHierarchy: Record<string, number> = {
+                            pending: 1,
+                            error: 1,
+                            server_ack: 2,
+                            delivery_ack: 3,
+                            read: 4,
+                            played: 5,
+                        };
+                        
+                        const newLevel = statusHierarchy[newStatus] || 0;
+                        
+                        // Build list of statuses that are LOWER than new status
+                        const lowerStatuses = Object.keys(statusHierarchy).filter(
+                            s => statusHierarchy[s] < newLevel
+                        );
+                        
+                        // First, try to update by waMessageId (only if status would upgrade)
+                        const updateResult = await prisma.outgoingMessage.updateMany({
+                            where: {
+                                waMessageId: messageId,
+                                sessionId,
+                                // ✅ CRITICAL: Only update messages with LOWER status
+                                status: lowerStatuses.length > 0 ? { in: lowerStatuses } : undefined,
+                            },
+                            data: {
+                                status: newStatus,
+                                updatedAt: new Date(),
+                            },
+                        });
+
+                        if (updateResult.count > 0) {
+                            logger.info(
+                                { sessionId, messageId, newStatus, newLevel, updatedCount: updateResult.count },
+                                '✅ Message status UPGRADED in database (matched by waMessageId)'
+                            );
+
+                            // Emit Socket.IO event untuk real-time update di frontend
+                            const io: Server = getSocketIO();
+                            const device = await prisma.device.findFirst({
+                                where: {
+                                    sessions: {
+                                        some: { sessionId },
+                                    },
+                                },
+                            });
+
+                            if (device) {
+                                io.emit(`device:${device.id}:message-status`, {
+                                    waMessageId: messageId,
+                                    status: newStatus,
+                                    to: update.key.remoteJid,
+                                    timestamp: new Date().toISOString(),
+                                });
+                            }
+                        } else {
+                            // ⚠️ waMessageId match failed, try backup strategy: update by id field
+                            // (id field is set to waMessageId or fallback value when saving)
+                            const backupUpdateResult = await prisma.outgoingMessage.updateMany({
+                                where: {
+                                    id: messageId,
+                                    sessionId,
+                                    // ✅ CRITICAL: Only update messages with LOWER status
+                                    status: lowerStatuses.length > 0 ? { in: lowerStatuses } : undefined,
+                                },
+                                data: {
+                                    status: newStatus,
+                                    waMessageId: messageId, // ✅ Also set waMessageId now that we have it
+                                    updatedAt: new Date(),
+                                },
+                            });
+                            
+                            if (backupUpdateResult.count > 0) {
+                                logger.info(
+                                    { sessionId, messageId, newStatus, newLevel, updatedCount: backupUpdateResult.count },
+                                    '✅ Message status UPGRADED in database (matched by id field, also set waMessageId)'
+                                );
+                                
+                                // Emit Socket.IO event
+                                const io: Server = getSocketIO();
+                                const device = await prisma.device.findFirst({
+                                    where: {
+                                        sessions: {
+                                            some: { sessionId },
+                                        },
+                                    },
+                                });
+
+                                if (device) {
+                                    io.emit(`device:${device.id}:message-status`, {
+                                        waMessageId: messageId,
+                                        status: newStatus,
+                                        to: update.key.remoteJid,
+                                        timestamp: new Date().toISOString(),
+                                    });
+                                }
+                            } else {
+                                // Still no match - log warning
+                                logger.warn(
+                                    { 
+                                        sessionId, 
+                                        messageId, 
+                                        newStatus,
+                                        newLevel,
+                                        remoteJid: update.key.remoteJid,
+                                    },
+                                    '⚠️ Message status update found 0 rows after both waMessageId and id attempts (might be because status would downgrade)'
+                                );
+                            }
+                        }
+                    }
+                } catch (updateError: any) {
+                    if (updateError?.message !== 'Connection Closed') {
+                        logger.error(
+                            { error: updateError, sessionId, update },
+                            'Failed to process message status update'
+                        );
+                    }
+                }
+            }
+        } catch (error: any) {
+            if (error?.message !== 'Connection Closed') {
+                logger.error(
+                    { error, sessionId },
+                    'Failed to handle messages.update event'
+                );
+            }
+        }
+    });
+
     // Debug events
     // sock.ev.on('messaging-history.set', (data) => dump('messaging-history.set', data));
     // sock.ev.on('chats.upsert', (data) => dump('chats.upsert', data));
@@ -1126,6 +1292,13 @@ export { markSSEAborted };
 export async function verifyJid(session: Instance, jid: string, type: string = 'number') {
     if (type !== 'group') {
         if (jid.includes('@g.us')) return true;
+        
+        // Skip verification for @lid (Linked ID) format
+        // Baileys onWhatsApp() doesn't support @lid, but messages can still be sent
+        if (jid.includes('@lid')) {
+            return true; // Trust the JID, skip verification
+        }
+        
         const onWAResult = await session.onWhatsApp(jid);
         const result = Array.isArray(onWAResult) ? onWAResult[0] : onWAResult;
         if (result && result.exists) return true;
@@ -1140,9 +1313,12 @@ export async function verifyJid(session: Instance, jid: string, type: string = '
 }
 
 export function getJid(jid: string) {
-    if (jid.includes('@g.us') || jid.includes('@s.whatsapp.net')) {
+    // If already has domain (@lid, @s.whatsapp.net, @g.us), return as-is
+    if (jid.includes('@lid') || jid.includes('@g.us') || jid.includes('@s.whatsapp.net')) {
         return jid;
     }
+    // If contains '-', it's a group
+    // Otherwise, it's a regular number
     return jid.includes('-') ? `${jid}@g.us` : `${jid}@s.whatsapp.net`;
 }
 
