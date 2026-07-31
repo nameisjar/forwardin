@@ -313,80 +313,104 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                                                   }
                                                 : null;
 
-                                    if (incomingMedia) {
-                                        try {
-                                            const mediaBuffer = await downloadMediaMessage(
-                                                message,
-                                                'buffer',
-                                                {},
-                                                session?.updateMediaMessage
-                                                    ? {
-                                                          reuploadRequest:
-                                                              session.updateMediaMessage.bind(session),
-                                                          logger,
-                                                      }
-                                                    : undefined,
-                                            );
+                                    const downloadAndPersistIncomingMedia = async (
+                                        maxAttempts: number,
+                                    ): Promise<string | null> => {
+                                        if (!incomingMedia) return null;
 
-                                            if (mediaBuffer.length > 0) {
-                                                const safeMessageId = message.key.id!.replace(
-                                                    /[^a-zA-Z0-9_-]/g,
-                                                    '_',
+                                        let mediaBuffer: Buffer | null = null;
+                                        let lastError: unknown = null;
+                                        for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+                                            try {
+                                                mediaBuffer = await downloadMediaMessage(
+                                                    message,
+                                                    'buffer',
+                                                    {},
+                                                    session?.updateMediaMessage
+                                                        ? {
+                                                              reuploadRequest:
+                                                                  session.updateMediaMessage.bind(session),
+                                                              logger,
+                                                          }
+                                                        : undefined,
                                                 );
-                                                const mimeType = incomingMedia.content.mimetype || '';
-                                                const mimeExtensions: Record<string, string> = {
-                                                    'image/jpeg': 'jpg',
-                                                    'image/png': 'png',
-                                                    'image/gif': 'gif',
-                                                    'image/webp': 'webp',
-                                                    'video/mp4': 'mp4',
-                                                    'video/quicktime': 'mov',
-                                                    'video/webm': 'webm',
-                                                    'audio/mpeg': 'mp3',
-                                                    'audio/ogg': 'ogg',
-                                                    'audio/wav': 'wav',
-                                                    'audio/webm': 'webm',
-                                                    'application/pdf': 'pdf',
-                                                };
-                                                const originalName =
-                                                    'fileName' in incomingMedia.content
-                                                        ? incomingMedia.content.fileName || ''
-                                                        : '';
-                                                const safeOriginalName = path
-                                                    .basename(originalName)
-                                                    .replace(/[^a-zA-Z0-9._-]/g, '_');
-                                                const originalExtension = path
-                                                    .extname(safeOriginalName)
-                                                    .replace('.', '');
-                                                const extension =
-                                                    (incomingMedia.kind === 'sticker' && 'webp') ||
-                                                    originalExtension ||
-                                                    mimeExtensions[mimeType] ||
-                                                    'bin';
-                                                if (incomingMedia.kind === 'sticker') {
-                                                    // Runtime files are ephemeral on many deployment
-                                                    // platforms. Persist stickers as a data URL so they
-                                                    // remain renderable after a restart/redeploy and do not
-                                                    // depend on which application instance serves /media.
-                                                    const stickerMimeType = mimeType || 'image/webp';
-                                                    incomingMediaPath = `data:${stickerMimeType};base64,${mediaBuffer.toString('base64')}`;
-                                                } else {
-                                                    const mediaFileName = safeOriginalName
-                                                        ? `${safeMessageId}-${safeOriginalName}`
-                                                        : `${safeMessageId}.${extension}`;
-                                                    const mediaFilePath = path.join(dir, mediaFileName);
-                                                    await fs.promises.writeFile(mediaFilePath, mediaBuffer);
-                                                    incomingMediaPath = mediaFilePath.replace(/\\/g, '/');
+                                                if (mediaBuffer && mediaBuffer.length > 0) break;
+                                                throw new Error('Downloaded media is empty');
+                                            } catch (error) {
+                                                lastError = error;
+                                                if (attempt < maxAttempts) {
+                                                    await new Promise((resolve) =>
+                                                        setTimeout(resolve, attempt * 750),
+                                                    );
                                                 }
                                             }
+                                        }
+
+                                        if (!mediaBuffer || mediaBuffer.length === 0) {
+                                            throw lastError || new Error('Failed to download media');
+                                        }
+
+                                        const safeMessageId = message.key.id!.replace(
+                                            /[^a-zA-Z0-9_-]/g,
+                                            '_',
+                                        );
+                                        const mimeType = incomingMedia.content.mimetype || '';
+                                        const mimeExtensions: Record<string, string> = {
+                                            'image/jpeg': 'jpg',
+                                            'image/png': 'png',
+                                            'image/gif': 'gif',
+                                            'image/webp': 'webp',
+                                            'video/mp4': 'mp4',
+                                            'video/quicktime': 'mov',
+                                            'video/webm': 'webm',
+                                            'audio/mpeg': 'mp3',
+                                            'audio/ogg': 'ogg',
+                                            'audio/wav': 'wav',
+                                            'audio/webm': 'webm',
+                                            'application/pdf': 'pdf',
+                                        };
+                                        const originalName =
+                                            'fileName' in incomingMedia.content
+                                                ? incomingMedia.content.fileName || ''
+                                                : '';
+                                        const safeOriginalName = path
+                                            .basename(originalName)
+                                            .replace(/[^a-zA-Z0-9._-]/g, '_');
+                                        const originalExtension = path
+                                            .extname(safeOriginalName)
+                                            .replace('.', '');
+                                        const extension =
+                                            (incomingMedia.kind === 'sticker' && 'webp') ||
+                                            originalExtension ||
+                                            mimeExtensions[mimeType] ||
+                                            'bin';
+
+                                        if (incomingMedia.kind === 'sticker') {
+                                            const stickerMimeType = mimeType || 'image/webp';
+                                            return `data:${stickerMimeType};base64,${mediaBuffer.toString('base64')}`;
+                                        }
+
+                                        const mediaFileName = safeOriginalName
+                                            ? `${safeMessageId}-${safeOriginalName}`
+                                            : `${safeMessageId}.${extension}`;
+                                        const mediaFilePath = path.join(dir, mediaFileName);
+                                        await fs.promises.writeFile(mediaFilePath, mediaBuffer);
+                                        return mediaFilePath.replace(/\\/g, '/');
+                                    };
+
+                                    if (incomingMedia) {
+                                        try {
+                                            incomingMediaPath =
+                                                await downloadAndPersistIncomingMedia(3);
                                         } catch (mediaError) {
-                                            logger.error(
+                                            logger.warn(
                                                 {
                                                     mediaError,
                                                     sessionId,
                                                     messageId: message.key.id,
+                                                    mediaKind: incomingMedia.kind,
                                                 },
-                                                'Failed to download incoming media',
+                                                'Initial incoming media download failed; scheduling recovery',
                                             );
                                         }
                                     }
@@ -431,7 +455,50 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                                         },
                                         include: { contact: true },
                                     });
-                                    
+
+                                    // WhatsApp CDN access can be intermittent in production. If the
+                                    // initial attempts fail, recover the media without delaying the
+                                    // incoming-message notification.
+                                    if (incomingMedia && !incomingMediaPath) {
+                                        void (async () => {
+                                            await new Promise((resolve) => setTimeout(resolve, 5_000));
+                                            try {
+                                                const recoveredMediaPath =
+                                                    await downloadAndPersistIncomingMedia(3);
+                                                if (!recoveredMediaPath) return;
+
+                                                const recoveredMessage =
+                                                    await prisma.incomingMessage.update({
+                                                        where: { id: message.key.id! },
+                                                        data: { mediaPath: recoveredMediaPath },
+                                                        include: { contact: true },
+                                                    });
+                                                io.emit(`incoming:${sessionId}:media-updated`, {
+                                                    ...recoveredMessage,
+                                                    isGroup: jid.includes('@g.us'),
+                                                });
+                                                logger.info(
+                                                    {
+                                                        sessionId,
+                                                        messageId: message.key.id,
+                                                        mediaKind: incomingMedia.kind,
+                                                    },
+                                                    'Incoming media recovered in background',
+                                                );
+                                            } catch (mediaError) {
+                                                logger.error(
+                                                    {
+                                                        mediaError,
+                                                        sessionId,
+                                                        messageId: message.key.id,
+                                                        mediaKind: incomingMedia.kind,
+                                                    },
+                                                    'Incoming media recovery failed',
+                                                );
+                                            }
+                                        })();
+                                    }
+
                                     // ✅ BACKGROUND: Fetch dan update profile/group pictures (non-blocking)
                                     (async () => {
                                         try {
