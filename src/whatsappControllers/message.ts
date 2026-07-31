@@ -6,6 +6,7 @@ import type {
     WAMessageKey,
 } from '@whiskeysockets/baileys';
 import {
+    downloadContentFromMessage,
     downloadMediaMessage,
     extractMessageContent,
     jidNormalizedUser,
@@ -22,6 +23,7 @@ import { Server } from 'socket.io';
 import { safeMessageContext, redactPhone, redactMessageObject } from '../utils/logRedaction';
 import { encryptMessage, decryptOutgoingMessage } from '../utils/messageEncryption';
 import { getInstance } from '../whatsapp';
+import sharp from 'sharp';
 
 const getKeyAuthor = (key: WAMessageKey | undefined | null) =>
     (key?.fromMe
@@ -338,6 +340,27 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                                                 throw new Error('Downloaded media is empty');
                                             } catch (error) {
                                                 lastError = error;
+                                                try {
+                                                    // Some sticker variants are not recovered correctly by
+                                                    // downloadMediaMessage even though their direct media
+                                                    // descriptor is still valid.
+                                                    const stream = await downloadContentFromMessage(
+                                                        incomingMedia.content,
+                                                        incomingMedia.kind as any,
+                                                    );
+                                                    const chunks: Buffer[] = [];
+                                                    for await (const chunk of stream) {
+                                                        chunks.push(
+                                                            Buffer.isBuffer(chunk)
+                                                                ? chunk
+                                                                : Buffer.from(chunk),
+                                                        );
+                                                    }
+                                                    mediaBuffer = Buffer.concat(chunks);
+                                                    if (mediaBuffer.length > 0) break;
+                                                } catch (directDownloadError) {
+                                                    lastError = directDownloadError;
+                                                }
                                                 if (attempt < maxAttempts) {
                                                     await new Promise((resolve) =>
                                                         setTimeout(resolve, attempt * 750),
@@ -386,8 +409,33 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                                             'bin';
 
                                         if (incomingMedia.kind === 'sticker') {
-                                            const stickerMimeType = mimeType || 'image/webp';
-                                            return `data:${stickerMimeType};base64,${mediaBuffer.toString('base64')}`;
+                                            const thumbnail = stickerMessage?.pngThumbnail;
+                                            // Lottie stickers are not directly renderable by an <img>.
+                                            // Use the PNG preview while preserving regular/animated WebP.
+                                            if (stickerMessage?.isLottie && thumbnail?.length) {
+                                                return `data:image/png;base64,${Buffer.from(thumbnail).toString('base64')}`;
+                                            }
+
+                                            try {
+                                                const metadata = await sharp(mediaBuffer).metadata();
+                                                const detectedMimeType = metadata.format
+                                                    ? `image/${metadata.format}`
+                                                    : mimeType || 'image/webp';
+                                                return `data:${detectedMimeType};base64,${mediaBuffer.toString('base64')}`;
+                                            } catch (invalidStickerError) {
+                                                if (thumbnail?.length) {
+                                                    logger.warn(
+                                                        {
+                                                            invalidStickerError,
+                                                            sessionId,
+                                                            messageId: message.key.id,
+                                                        },
+                                                        'Sticker payload is not browser-renderable; using thumbnail',
+                                                    );
+                                                    return `data:image/png;base64,${Buffer.from(thumbnail).toString('base64')}`;
+                                                }
+                                                throw invalidStickerError;
+                                            }
                                         }
 
                                         const mediaFileName = safeOriginalName
@@ -403,6 +451,14 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                                             incomingMediaPath =
                                                 await downloadAndPersistIncomingMedia(3);
                                         } catch (mediaError) {
+                                            if (
+                                                incomingMedia.kind === 'sticker' &&
+                                                stickerMessage?.pngThumbnail?.length
+                                            ) {
+                                                incomingMediaPath = `data:image/png;base64,${Buffer.from(
+                                                    stickerMessage.pngThumbnail,
+                                                ).toString('base64')}`;
+                                            }
                                             logger.warn(
                                                 {
                                                     mediaError,

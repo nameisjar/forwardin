@@ -1088,10 +1088,17 @@ export const getProfilePictureUrl: RequestHandler = async (req, res) => {
             await verifyJid(session, jid, 'number');
         }
 
-        const ppUrl = await session.profilePictureUrl(
-            jid,
-            resolution === 'high' ? 'image' : undefined,
-        );
+        let ppUrl: string | undefined;
+        try {
+            ppUrl = await session.profilePictureUrl(
+                jid,
+                resolution === 'high' ? 'image' : undefined,
+            );
+        } catch (highResolutionError) {
+            if (resolution !== 'high') throw highResolutionError;
+            // Some accounts expose only the preview-sized profile photo.
+            ppUrl = await session.profilePictureUrl(jid);
+        }
         if (!ppUrl) {
             return res.status(404).json({ message: 'Profile picture not found' });
         }
