@@ -9,6 +9,8 @@ import {
     downloadContentFromMessage,
     downloadMediaMessage,
     extractMessageContent,
+    getMediaKeys,
+    getUrlFromDirectPath,
     jidNormalizedUser,
 } from '@whiskeysockets/baileys';
 import logger from '../config/logger';
@@ -24,6 +26,54 @@ import { safeMessageContext, redactPhone, redactMessageObject } from '../utils/l
 import { encryptMessage, decryptOutgoingMessage } from '../utils/messageEncryption';
 import { getInstance } from '../whatsapp';
 import sharp from 'sharp';
+import axios from 'axios';
+import https from 'https';
+import { createDecipheriv } from 'crypto';
+
+const whatsappMediaHttpsAgent = new https.Agent({
+    family: 4,
+    keepAlive: true,
+    maxSockets: 20,
+});
+
+async function downloadWhatsAppMediaOverIpv4(
+    media: {
+        mediaKey?: Uint8Array | null;
+        directPath?: string | null;
+        url?: string | null;
+    },
+    mediaType: any,
+): Promise<Buffer> {
+    if (!media.mediaKey || (!media.directPath && !media.url)) {
+        throw new Error('WhatsApp media descriptor is incomplete');
+    }
+
+    const downloadUrl = media.url?.startsWith('https://mmg.whatsapp.net/')
+        ? media.url
+        : getUrlFromDirectPath(media.directPath!);
+    const response = await axios.get<Buffer>(downloadUrl, {
+        responseType: 'arraybuffer',
+        timeout: 30_000,
+        maxContentLength: 50 * 1024 * 1024,
+        maxBodyLength: 50 * 1024 * 1024,
+        httpsAgent: whatsappMediaHttpsAgent,
+        headers: {
+            Accept: '*/*',
+            Origin: 'https://web.whatsapp.com',
+            'User-Agent': 'Mozilla/5.0',
+        },
+    });
+    const encryptedPayload = Buffer.from(response.data);
+    if (encryptedPayload.length <= 10) {
+        throw new Error('WhatsApp CDN returned an empty encrypted payload');
+    }
+
+    // WhatsApp appends a 10-byte MAC after the AES-CBC ciphertext.
+    const ciphertext = encryptedPayload.subarray(0, encryptedPayload.length - 10);
+    const { cipherKey, iv } = await getMediaKeys(media.mediaKey, mediaType);
+    const decipher = createDecipheriv('aes-256-cbc', cipherKey, iv);
+    return Buffer.concat([decipher.update(ciphertext), decipher.final()]);
+}
 
 const getKeyAuthor = (key: WAMessageKey | undefined | null) =>
     (key?.fromMe
@@ -360,6 +410,25 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                                                     if (mediaBuffer.length > 0) break;
                                                 } catch (directDownloadError) {
                                                     lastError = directDownloadError;
+                                                }
+                                                try {
+                                                    mediaBuffer = await downloadWhatsAppMediaOverIpv4(
+                                                        incomingMedia.content,
+                                                        incomingMedia.kind,
+                                                    );
+                                                    if (mediaBuffer.length > 0) {
+                                                        logger.info(
+                                                            {
+                                                                sessionId,
+                                                                messageId: message.key.id,
+                                                                mediaKind: incomingMedia.kind,
+                                                            },
+                                                            'Incoming media downloaded through IPv4 fallback',
+                                                        );
+                                                        break;
+                                                    }
+                                                } catch (ipv4DownloadError) {
+                                                    lastError = ipv4DownloadError;
                                                 }
                                                 if (attempt < maxAttempts) {
                                                     await new Promise((resolve) =>

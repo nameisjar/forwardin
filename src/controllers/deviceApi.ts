@@ -16,9 +16,15 @@ import { redactPhone } from '../utils/logRedaction';
 import { encryptMessage, decryptOutgoingMessage, decryptOutgoingMessages, decryptBroadcast, decryptBroadcasts } from '../utils/messageEncryption';
 import { getSocketIO } from '../socket';
 import axios from 'axios';
+import https from 'https';
 
 const PROFILE_PICTURE_CACHE_TTL_MS = 5 * 60 * 1000;
 const PROFILE_PICTURE_MAX_BYTES = 5 * 1024 * 1024;
+const profilePictureHttpsAgent = new https.Agent({
+    family: 4,
+    keepAlive: true,
+    maxSockets: 20,
+});
 const profilePictureCache = new Map<
     string,
     { data: Buffer; contentType: string; expiresAt: number }
@@ -1085,7 +1091,6 @@ export const getProfilePictureUrl: RequestHandler = async (req, res) => {
             jid = recipient;
         } else {
             jid = getJid(recipient);
-            await verifyJid(session, jid, 'number');
         }
 
         let ppUrl: string | undefined;
@@ -1095,12 +1100,20 @@ export const getProfilePictureUrl: RequestHandler = async (req, res) => {
                 resolution === 'high' ? 'image' : undefined,
             );
         } catch (highResolutionError) {
-            if (resolution !== 'high') throw highResolutionError;
-            // Some accounts expose only the preview-sized profile photo.
-            ppUrl = await session.profilePictureUrl(jid);
+            if (resolution !== 'high') {
+                logger.debug({ jid }, 'Profile picture is not available');
+                return res.status(204).send();
+            }
+            try {
+                // Some accounts expose only the preview-sized profile photo.
+                ppUrl = await session.profilePictureUrl(jid);
+            } catch {
+                logger.debug({ jid }, 'Profile picture is not available');
+                return res.status(204).send();
+            }
         }
         if (!ppUrl) {
-            return res.status(404).json({ message: 'Profile picture not found' });
+            return res.status(204).send();
         }
 
         if (download === '1' || download === 'true') {
@@ -1118,6 +1131,7 @@ export const getProfilePictureUrl: RequestHandler = async (req, res) => {
                 timeout: 15_000,
                 maxContentLength: PROFILE_PICTURE_MAX_BYTES,
                 maxBodyLength: PROFILE_PICTURE_MAX_BYTES,
+                httpsAgent: profilePictureHttpsAgent,
                 headers: {
                     Accept: 'image/*',
                     'User-Agent': 'Mozilla/5.0',
