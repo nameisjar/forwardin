@@ -8,7 +8,7 @@ import fs from 'fs';
 import schedule from 'node-schedule';
 import { isUUID } from '../utils/uuidChecker';
 import { generateDeviceAccessToken } from '../utils/jwtGenerator';
-import { verifyInstance } from '../whatsapp';
+import { getInstance, verifyInstance } from '../whatsapp';
 import { hashApiKey } from '../utils/apiKeyHash';
 import { 
     getDeviceHealth, 
@@ -891,6 +891,72 @@ export const deleteConversation: RequestHandler = async (req, res) => {
         const userPkId = req.authenticatedUser.pkId;
         const device = await prisma.device.findFirst({
             where: { id: deviceUuid, userId: userPkId },
+            select: {
+                pkId: true,
+                sessions: { select: { sessionId: true } },
+                Broadcast: { select: { pkId: true } },
+            },
+        });
+
+        if (!device) {
+            return res.status(404).json({ message: 'Device not found' });
+        }
+
+        const sessionIds = [...new Set(device.sessions.map((session) => session.sessionId))];
+        const broadcastIds = device.Broadcast.map((broadcast) => broadcast.pkId);
+        const outgoingOwnership: any[] = [];
+        if (sessionIds.length > 0) outgoingOwnership.push({ sessionId: { in: sessionIds } });
+        if (broadcastIds.length > 0) outgoingOwnership.push({ broadcastId: { in: broadcastIds } });
+
+        const [incomingResult, outgoingResult] = await prisma.$transaction([
+            prisma.incomingMessage.deleteMany({
+                where: {
+                    deviceId: device.pkId,
+                    from,
+                },
+            }),
+            prisma.outgoingMessage.deleteMany({
+                where: {
+                    to: from,
+                    ...(outgoingOwnership.length > 0 ? { OR: outgoingOwnership } : { pkId: -1 }),
+                },
+            }),
+        ]);
+
+        const deletedCount = incomingResult.count + outgoingResult.count;
+
+        res.status(200).json({
+            message: `Berhasil menghapus ${deletedCount} pesan dari ${from}`,
+            deletedCount,
+            deletedIncomingCount: incomingResult.count,
+            deletedOutgoingCount: outgoingResult.count,
+        });
+    } catch (error) {
+        logger.error(error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};
+
+/**
+ * Mark all messages from a specific sender as read
+ * PUT /devices/:deviceId/inbox/conversation/read
+ * Body: { from: string } - the JID of the sender
+ */
+export const markConversationAsRead: RequestHandler = async (req, res) => {
+    try {
+        const deviceUuid = req.params.deviceId;
+        if (!isUUID(deviceUuid)) {
+            return res.status(400).json({ message: 'Invalid deviceId' });
+        }
+
+        const { from } = req.body;
+        if (!from || typeof from !== 'string') {
+            return res.status(400).json({ message: 'Missing or invalid "from" field' });
+        }
+
+        const userPkId = req.authenticatedUser.pkId;
+        const device = await prisma.device.findFirst({
+            where: { id: deviceUuid, userId: userPkId },
             select: { pkId: true },
         });
 
@@ -898,16 +964,21 @@ export const deleteConversation: RequestHandler = async (req, res) => {
             return res.status(404).json({ message: 'Device not found' });
         }
 
-        const result = await prisma.incomingMessage.deleteMany({
+        const result = await prisma.incomingMessage.updateMany({
             where: {
                 deviceId: device.pkId,
                 from: from,
+                isRead: false,
+            },
+            data: {
+                isRead: true,
+                updatedAt: new Date(),
             },
         });
 
         res.status(200).json({
-            message: `Berhasil menghapus ${result.count} pesan dari ${from}`,
-            deletedCount: result.count,
+            message: `Berhasil menandai ${result.count} pesan sebagai sudah dibaca`,
+            updatedCount: result.count,
         });
     } catch (error) {
         logger.error(error);
@@ -929,20 +1000,39 @@ export const deleteAllInbox: RequestHandler = async (req, res) => {
         const userPkId = req.authenticatedUser.pkId;
         const device = await prisma.device.findFirst({
             where: { id: deviceUuid, userId: userPkId },
-            select: { pkId: true },
+            select: {
+                pkId: true,
+                sessions: { select: { sessionId: true } },
+                Broadcast: { select: { pkId: true } },
+            },
         });
 
         if (!device) {
             return res.status(404).json({ message: 'Device not found' });
         }
 
-        const result = await prisma.incomingMessage.deleteMany({
-            where: { deviceId: device.pkId },
-        });
+        const sessionIds = [...new Set(device.sessions.map((session) => session.sessionId))];
+        const broadcastIds = device.Broadcast.map((broadcast) => broadcast.pkId);
+        const outgoingOwnership: any[] = [];
+        if (sessionIds.length > 0) outgoingOwnership.push({ sessionId: { in: sessionIds } });
+        if (broadcastIds.length > 0) outgoingOwnership.push({ broadcastId: { in: broadcastIds } });
+
+        const [incomingResult, outgoingResult] = await prisma.$transaction([
+            prisma.incomingMessage.deleteMany({
+                where: { deviceId: device.pkId },
+            }),
+            prisma.outgoingMessage.deleteMany({
+                where: outgoingOwnership.length > 0 ? { OR: outgoingOwnership } : { pkId: -1 },
+            }),
+        ]);
+
+        const deletedCount = incomingResult.count + outgoingResult.count;
 
         res.status(200).json({
-            message: `Berhasil menghapus seluruh ${result.count} pesan masuk`,
-            deletedCount: result.count,
+            message: `Berhasil menghapus seluruh ${deletedCount} pesan masuk dan keluar`,
+            deletedCount,
+            deletedIncomingCount: incomingResult.count,
+            deletedOutgoingCount: outgoingResult.count,
         });
     } catch (error) {
         logger.error(error);
@@ -970,7 +1060,6 @@ export const getDeviceOutbox: RequestHandler = async (req, res) => {
                 pkId: true,
                 sessions: {
                     select: { sessionId: true },
-                    take: 1,
                 },
             },
         });
@@ -979,14 +1068,14 @@ export const getDeviceOutbox: RequestHandler = async (req, res) => {
             return res.status(404).json({ message: 'Device not found' });
         }
 
-        const sessionId = device.sessions[0]?.sessionId;
-        if (!sessionId) {
+        const sessionIds = [...new Set(device.sessions.map((session) => session.sessionId))];
+        if (sessionIds.length === 0) {
             return res.status(200).json([]);
         }
 
         // Build where clause
         const where: any = {
-            sessionId,
+            sessionId: { in: sessionIds },
         };
 
         // Filter by recipient if provided
@@ -1031,6 +1120,113 @@ export const getDeviceOutbox: RequestHandler = async (req, res) => {
 };
 
 /**
+ * Get the latest outgoing message per recipient for the Inbox conversation list.
+ * Includes broadcast, campaign, direct-send, and other persisted outgoing messages.
+ * GET /devices/:deviceId/outbox/conversations?search=<text>
+ */
+export const getDeviceOutboxConversations: RequestHandler = async (req, res) => {
+    try {
+        const deviceUuid = req.params.deviceId;
+        if (!isUUID(deviceUuid)) {
+            return res.status(400).json({ message: 'Invalid deviceId' });
+        }
+
+        const userPkId = req.authenticatedUser.pkId;
+        const device = await prisma.device.findFirst({
+            where: { id: deviceUuid, userId: userPkId },
+            select: {
+                sessions: { select: { sessionId: true } },
+            },
+        });
+
+        if (!device) {
+            return res.status(404).json({ message: 'Device not found' });
+        }
+
+        const sessionIds = [...new Set(device.sessions.map((session) => session.sessionId))];
+        if (sessionIds.length === 0) {
+            return res.status(200).json([]);
+        }
+
+        const groupedRecipients = await prisma.outgoingMessage.groupBy({
+            by: ['to'],
+            where: { sessionId: { in: sessionIds } },
+            _max: { createdAt: true },
+            _count: { _all: true },
+            orderBy: { _max: { createdAt: 'desc' } },
+            take: 500,
+        });
+
+        if (groupedRecipients.length === 0) {
+            return res.status(200).json([]);
+        }
+
+        const latestMessages = await prisma.outgoingMessage.findMany({
+            where: {
+                sessionId: { in: sessionIds },
+                OR: groupedRecipients
+                    .filter((group) => group._max.createdAt)
+                    .map((group) => ({ to: group.to, createdAt: group._max.createdAt! })),
+            },
+            select: {
+                id: true,
+                waMessageId: true,
+                to: true,
+                message: true,
+                mediaPath: true,
+                status: true,
+                createdAt: true,
+                isGroup: true,
+                broadcastType: true,
+                contact: {
+                    select: { firstName: true, lastName: true, phone: true, colorCode: true },
+                },
+            },
+            orderBy: { createdAt: 'desc' },
+        });
+
+        const { decryptOutgoingMessages } = await import('../utils/messageEncryption');
+        const decryptedMessages = decryptOutgoingMessages(latestMessages);
+        const counts = new Map(
+            groupedRecipients.map((group) => [group.to, group._count._all]),
+        );
+        const uniqueRecipients = new Set<string>();
+        let conversations = decryptedMessages
+            .filter((message) => {
+                if (uniqueRecipients.has(message.to)) return false;
+                uniqueRecipients.add(message.to);
+                return true;
+            })
+            .map((message) => ({
+                ...message,
+                messageCount: counts.get(message.to) || 1,
+            }));
+
+        const search = typeof req.query.search === 'string' ? req.query.search.trim().toLowerCase() : '';
+        if (search) {
+            conversations = conversations.filter((conversation) => {
+                const contactName = conversation.contact
+                    ? `${conversation.contact.firstName} ${conversation.contact.lastName || ''}`
+                    : '';
+                return [conversation.to, conversation.message || '', contactName]
+                    .join(' ')
+                    .toLowerCase()
+                    .includes(search);
+            });
+        }
+
+        res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+        res.setHeader('Pragma', 'no-cache');
+        res.setHeader('Expires', '0');
+        res.removeHeader('ETag');
+        res.status(200).json(conversations);
+    } catch (error) {
+        logger.error({ error }, 'Error in getDeviceOutboxConversations');
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};
+
+/**
  * Cleanup scheduled jobs on graceful shutdown
  * Prevents memory leaks and ensures clean process termination
  */
@@ -1043,6 +1239,134 @@ export function shutdownScheduledJobs(): void {
     }
     scheduledJobs.length = 0;
     logger.info('[Device] All scheduled jobs cancelled');
+}
+
+/**
+ * Convert legacy personal-chat @lid identities to their phone-number JID using
+ * Baileys' remoteJidAlt metadata. The normalized value is also persisted so
+ * future reads, read acknowledgements, and deletes use one conversation key.
+ */
+async function normalizeIncomingConversationIdentities(messages: any[], devicePkId: number) {
+    const lidMessages = messages.filter(
+        (message) => typeof message.from === 'string' && message.from.endsWith('@lid'),
+    );
+    if (lidMessages.length === 0) return messages;
+
+    const rawMessages = await prisma.message.findMany({
+        where: {
+            OR: lidMessages.map((message) => ({
+                id: message.id,
+                remoteJid: message.from,
+            })),
+        },
+        select: { id: true, key: true },
+    });
+
+    const canonicalJidByMessageId = new Map<string, string>();
+    for (const rawMessage of rawMessages) {
+        const key = rawMessage.key as Record<string, unknown> | null;
+        const remoteJidAlt = typeof key?.remoteJidAlt === 'string' ? key.remoteJidAlt : '';
+        if (!remoteJidAlt.endsWith('@s.whatsapp.net')) continue;
+
+        const [localPart] = remoteJidAlt.split('@');
+        const phone = localPart.split(':')[0].replace(/\D/g, '');
+        if (phone) canonicalJidByMessageId.set(rawMessage.id, `${phone}@s.whatsapp.net`);
+    }
+
+    // Recent messages are not always present in the generic Message history
+    // table yet. Baileys keeps the same LID -> PN mapping in the active Signal
+    // repository, so use it as the authoritative fallback.
+    await Promise.all(
+        lidMessages
+            .filter((message) => !canonicalJidByMessageId.has(message.id) && message.sessionId)
+            .map(async (message) => {
+                try {
+                    const session = getInstance(message.sessionId) as any;
+                    const phoneJid = await session?.signalRepository?.lidMapping?.getPNForLID(
+                        message.from,
+                    );
+                    if (typeof phoneJid !== 'string' || !phoneJid.endsWith('@s.whatsapp.net')) {
+                        return;
+                    }
+
+                    const [localPart] = phoneJid.split('@');
+                    const phone = localPart.split(':')[0].replace(/\D/g, '');
+                    if (phone) {
+                        canonicalJidByMessageId.set(message.id, `${phone}@s.whatsapp.net`);
+                    }
+                } catch (error) {
+                    logger.debug(
+                        { error, messageId: message.id },
+                        'Could not resolve Inbox LID from the active WhatsApp session',
+                    );
+                }
+            }),
+    );
+
+    if (canonicalJidByMessageId.size === 0) return messages;
+
+    const phones = [...new Set(
+        [...canonicalJidByMessageId.values()].map((jid) => jid.split('@')[0]),
+    )];
+    const contacts = await prisma.contact.findMany({
+        where: {
+            phone: { in: [...phones, ...phones.map((phone) => `+${phone}`)] },
+            contactDevices: { some: { deviceId: devicePkId } },
+        },
+        select: {
+            pkId: true,
+            firstName: true,
+            lastName: true,
+            phone: true,
+            colorCode: true,
+        },
+    });
+    const contactsByPhone = new Map(
+        contacts.map((contact) => [contact.phone.replace(/\D/g, ''), contact]),
+    );
+
+    const repairs: Promise<unknown>[] = [];
+    const normalizedMessages = messages.map((message) => {
+        const canonicalJid = canonicalJidByMessageId.get(message.id);
+        if (!canonicalJid) return message;
+
+        const phone = canonicalJid.split('@')[0];
+        const contact = contactsByPhone.get(phone) || message.contact || null;
+        repairs.push(
+            prisma.incomingMessage.update({
+                where: { id: message.id },
+                data: {
+                    from: canonicalJid,
+                    ...(contact?.pkId ? { contactId: contact.pkId } : {}),
+                    updatedAt: new Date(),
+                },
+            }),
+        );
+
+        return {
+            ...message,
+            from: canonicalJid,
+            contact: contact
+                ? {
+                      firstName: contact.firstName,
+                      lastName: contact.lastName,
+                      phone: contact.phone,
+                      colorCode: contact.colorCode,
+                  }
+                : null,
+        };
+    });
+
+    const repairResults = await Promise.allSettled(repairs);
+    const failedRepairs = repairResults.filter((result) => result.status === 'rejected').length;
+    if (failedRepairs > 0) {
+        logger.warn(
+            { devicePkId, failedRepairs },
+            'Some legacy Inbox LID identities could not be normalized',
+        );
+    }
+
+    return normalizedMessages;
 }
 
 /**
@@ -1096,7 +1420,7 @@ export const getDeviceInbox: RequestHandler = async (req, res) => {
                 where: whereClause,
                 include: {
                     contact: {
-                        select: { firstName: true, lastName: true, colorCode: true },
+                        select: { firstName: true, lastName: true, phone: true, colorCode: true },
                     },
                 },
                 orderBy: { receivedAt: 'desc' },
@@ -1104,10 +1428,21 @@ export const getDeviceInbox: RequestHandler = async (req, res) => {
             prisma.incomingMessage.count({ where: whereClause }),
         ]);
 
-        const serialized = messages.map((m) => serializePrisma(m));
+        const normalizedMessages = await normalizeIncomingConversationIdentities(
+            messages,
+            device.pkId,
+        );
+        const serialized = normalizedMessages.map((m) => serializePrisma(m));
         const currentPage = Math.max(1, Number(page) || 1);
         const totalPages = Math.ceil(totalMessages / Number(pageSize));
         const hasMore = currentPage * Number(pageSize) < totalMessages;
+
+        // Inbox state changes through real-time events and read acknowledgements.
+        // Never let browsers or reverse proxies serve an older unread state.
+        res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+        res.setHeader('Pragma', 'no-cache');
+        res.setHeader('Expires', '0');
+        res.removeHeader('ETag');
 
         res.status(200).json({
             data: serialized,

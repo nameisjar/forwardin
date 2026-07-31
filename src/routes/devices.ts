@@ -17,8 +17,10 @@ router.post('/:deviceId/access-token', controller.issueDeviceAccessToken);
 router.get('/:deviceId/inbox', controller.getDeviceInbox);
 router.delete('/:deviceId/inbox', controller.deleteAllInbox);
 router.delete('/:deviceId/inbox/conversation', controller.deleteConversation);
+router.put('/:deviceId/inbox/conversation/read', controller.markConversationAsRead);
 
 // Outbox - outgoing messages sent from this device
+router.get('/:deviceId/outbox/conversations', controller.getDeviceOutboxConversations);
 router.get('/:deviceId/outbox', controller.getDeviceOutbox);
 
 // Health monitoring endpoints

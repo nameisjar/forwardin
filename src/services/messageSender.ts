@@ -5,6 +5,8 @@ import { executeWithRateLimit, RateLimitResult } from './rateLimiter';
 import { incrementMessageCount } from './signalDetector';
 import prisma from '../utils/db';
 import logger from '../config/logger';
+import { encryptMessage } from '../utils/messageEncryption';
+import { getSocketIO } from '../socket';
 
 // ============================================
 // 🚀 MESSAGE SENDER SERVICE
@@ -16,30 +18,112 @@ import logger from '../config/logger';
 // SEMUA pengiriman pesan HARUS melalui service ini!
 // ============================================
 
-// Cache deviceId -> pkId untuk mengurangi query DB
-const devicePkIdCache = new Map<string, number>();
+type DeviceContext = { pkId: number; sessionId: string | null };
+
+// Cache deviceId -> database/session identifiers untuk mengurangi query DB
+const deviceContextCache = new Map<string, DeviceContext>();
+
+async function getDeviceContext(deviceId: string): Promise<DeviceContext | null> {
+    const cached = deviceContextCache.get(deviceId);
+    if (cached) return cached;
+
+    const device = await prisma.device.findUnique({
+        where: { id: deviceId },
+        select: {
+            pkId: true,
+            sessions: {
+                select: { sessionId: true },
+                take: 1,
+            },
+        },
+    });
+
+    if (!device) return null;
+
+    const context = {
+        pkId: device.pkId,
+        sessionId: device.sessions[0]?.sessionId || null,
+    };
+    deviceContextCache.set(deviceId, context);
+    return context;
+}
 
 /**
  * Get device pkId from deviceId (UUID) with caching
  */
 async function getDevicePkId(deviceId: string): Promise<number | null> {
-    // Check cache first
-    if (devicePkIdCache.has(deviceId)) {
-        return devicePkIdCache.get(deviceId)!;
+    return (await getDeviceContext(deviceId))?.pkId || null;
+}
+
+async function persistOutgoingMessage(params: {
+    deviceId: string;
+    jid: string;
+    messageId?: string;
+    text?: string;
+    mediaPath?: string | null;
+}): Promise<void> {
+    if (!params.messageId) return;
+
+    try {
+        const context = await getDeviceContext(params.deviceId);
+        if (!context?.sessionId) {
+            logger.warn(
+                { deviceId: params.deviceId, messageId: params.messageId },
+                '[MessageSender] Cannot persist outgoing message without sessionId',
+            );
+            return;
+        }
+
+        const phone = params.jid.split('@')[0];
+        const contact = await prisma.contact.findFirst({
+            where: {
+                phone,
+                contactDevices: { some: { deviceId: context.pkId } },
+            },
+            select: { pkId: true },
+        });
+        const encryptedText = params.text ? encryptMessage(params.text) : null;
+
+        const savedMessage = await prisma.outgoingMessage.upsert({
+            where: { id: params.messageId },
+            update: {
+                waMessageId: params.messageId,
+                to: params.jid,
+                sessionId: context.sessionId,
+                ...(encryptedText ? { message: encryptedText } : {}),
+                ...(params.mediaPath ? { mediaPath: params.mediaPath } : {}),
+                contactId: contact?.pkId || null,
+                isGroup: params.jid.includes('@g.us'),
+                updatedAt: new Date(),
+            },
+            create: {
+                id: params.messageId,
+                waMessageId: params.messageId,
+                to: params.jid,
+                message: encryptedText,
+                mediaPath: params.mediaPath || null,
+                schedule: new Date(),
+                status: 'server_ack',
+                sessionId: context.sessionId,
+                contactId: contact?.pkId || null,
+                isGroup: params.jid.includes('@g.us'),
+                readBy: [],
+            },
+        });
+
+        getSocketIO().emit(`outgoing:${context.sessionId}`, {
+            ...savedMessage,
+            message: params.text || '',
+            isOutgoing: true,
+        });
+    } catch (error) {
+        // Pengiriman WhatsApp sudah sukses; kegagalan pencatatan tidak boleh
+        // mengubah hasil kirim, tetapi harus terlihat jelas di log.
+        logger.error(
+            { error, deviceId: params.deviceId, jid: params.jid, messageId: params.messageId },
+            '[MessageSender] Failed to persist outgoing message',
+        );
     }
-    
-    // Query DB
-    const device = await prisma.device.findUnique({
-        where: { id: deviceId },
-        select: { pkId: true }
-    });
-    
-    if (device) {
-        devicePkIdCache.set(deviceId, device.pkId);
-        return device.pkId;
-    }
-    
-    return null;
 }
 
 export interface SendMessageOptions {
@@ -107,6 +191,7 @@ export async function sendTextMessage(
         );
 
         const messageId = result?.key?.id;
+        await persistOutgoingMessage({ deviceId, jid, messageId, text });
         
         // 🔥 Increment message count for health tracking
         const devicePkId = await getDevicePkId(deviceId);
@@ -167,6 +252,13 @@ export async function sendImageMessage(
         );
 
         const messageId = result?.key?.id;
+        await persistOutgoingMessage({
+            deviceId,
+            jid,
+            messageId,
+            text: options?.caption || '[Gambar]',
+            mediaPath: !Buffer.isBuffer(image) ? image.url : null,
+        });
         
         // 🔥 Increment message count for health tracking
         const devicePkId = await getDevicePkId(deviceId);
@@ -230,6 +322,13 @@ export async function sendDocumentMessage(
         );
 
         const messageId = result?.key?.id;
+        await persistOutgoingMessage({
+            deviceId,
+            jid,
+            messageId,
+            text: options?.caption || options?.fileName || '[Dokumen]',
+            mediaPath: !Buffer.isBuffer(document) ? document.url : null,
+        });
         
         // 🔥 Increment message count for health tracking
         const devicePkId = await getDevicePkId(deviceId);
@@ -290,6 +389,13 @@ export async function sendVideoMessage(
         );
 
         const messageId = result?.key?.id;
+        await persistOutgoingMessage({
+            deviceId,
+            jid,
+            messageId,
+            text: options?.caption || '[Video]',
+            mediaPath: !Buffer.isBuffer(video) ? video.url : null,
+        });
         
         // 🔥 Increment message count for health tracking
         const devicePkId = await getDevicePkId(deviceId);
@@ -352,6 +458,13 @@ export async function sendAudioMessage(
         );
 
         const messageId = result?.key?.id;
+        await persistOutgoingMessage({
+            deviceId,
+            jid,
+            messageId,
+            text: options?.fileName || '[Audio]',
+            mediaPath: !Buffer.isBuffer(audio) ? audio.url : null,
+        });
         
         // 🔥 Increment message count for health tracking
         const devicePkId = await getDevicePkId(deviceId);
@@ -435,6 +548,23 @@ export async function sendGenericMessage(
         );
 
         const messageId = result?.key?.id;
+        const genericText =
+            typeof content === 'string'
+                ? content
+                : content?.text || content?.caption || '[Pesan]';
+        const genericMedia =
+            content?.image?.url ||
+            content?.document?.url ||
+            content?.video?.url ||
+            content?.audio?.url ||
+            null;
+        await persistOutgoingMessage({
+            deviceId,
+            jid,
+            messageId,
+            text: genericText,
+            mediaPath: genericMedia,
+        });
         
         // 🔥 Increment message count for health tracking
         const devicePkId = await getDevicePkId(deviceId);

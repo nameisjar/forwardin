@@ -9,6 +9,7 @@ router.post('/messages/send/image', controller.sendImageMessages);
 router.post('/messages/send/doc', controller.sendDocumentMessages);
 router.post('/messages/send/audio', controller.sendAudioMessages);
 router.post('/messages/send/video', controller.sendVideoMessages);
+router.post('/messages/send/media', apiSendRateLimit, controller.sendInboxMediaMessage);
 router.post('/messages/send/button', controller.sendButton);
 router.post('/messages/broadcasts', apiBroadcastRateLimit, controller.createBroadcast);
 router.post('/messages/broadcasts/scheduled', apiBroadcastRateLimit, controller.createBroadcastScheduled);

@@ -7,12 +7,14 @@ import { proto } from '@whiskeysockets/baileys';
 import { diskUpload, memoryUpload } from '../config/multer';
 import { isUUID } from '../utils/uuidChecker';
 import fs from 'fs';
+import path from 'path';
 import { addWeeks, format } from 'date-fns'; // Anda bisa menggunakan date-fns atau moment.js untuk manipulasi tanggal
 import { sendDocument } from '../services/whatsapp';
 import { generateMonthlyFeedbackPDFWithPuppeteer } from '../services/pdfGenerator';
 import { executeWithRateLimit, RateLimitResult, setDeviceAsPersonal, setDeviceAsShared } from '../services/rateLimiter';
 import { redactPhone } from '../utils/logRedaction';
 import { encryptMessage, decryptOutgoingMessage, decryptOutgoingMessages, decryptBroadcast, decryptBroadcasts } from '../utils/messageEncryption';
+import { getSocketIO } from '../socket';
 
 export const sendMessages: RequestHandler = async (req, res) => {
     try {
@@ -147,9 +149,20 @@ export const sendMessages: RequestHandler = async (req, res) => {
                 const encryptedMessage = encryptMessage(messageText);
                 
                 try {
-                    const savedMessage = await prisma.outgoingMessage.create({
-                        data: {
-                            id: waMessageId || `msg-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+                    const savedMessageId = waMessageId || `msg-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+                    const savedMessage = await prisma.outgoingMessage.upsert({
+                        where: { id: savedMessageId },
+                        update: {
+                            waMessageId,
+                            sessionId,
+                            to: jid,
+                            message: encryptedMessage,
+                            status: 'server_ack',
+                            isGroup: type === 'group',
+                            updatedAt: new Date(),
+                        },
+                        create: {
+                            id: savedMessageId,
                             waMessageId,
                             sessionId,
                             to: jid,
@@ -159,6 +172,12 @@ export const sendMessages: RequestHandler = async (req, res) => {
                             isGroup: type === 'group',
                             readBy: [], // Initialize empty readBy array
                         },
+                    });
+
+                    getSocketIO().emit(`outgoing:${sessionId}`, {
+                        ...savedMessage,
+                        message: messageText,
+                        isOutgoing: true,
                     });
                     
                     logger.info({ 
@@ -444,6 +463,123 @@ export const sendVideoMessages: RequestHandler = async (req, res) => {
         logger.error(error);
         res.status(500).json({ message: 'Internal server error' });
     }
+};
+
+/**
+ * Send one media attachment from the Inbox reply composer and persist it in
+ * OutgoingMessage so the attachment remains visible after refresh.
+ */
+export const sendInboxMediaMessage: RequestHandler = async (req, res) => {
+    diskUpload.single('media')(req, res, async (uploadError) => {
+        if (uploadError) {
+            logger.warn({ uploadError }, 'Inbox media upload rejected');
+            return res.status(400).json({
+                message: uploadError instanceof Error ? uploadError.message : 'Upload media gagal',
+            });
+        }
+
+        const uploadedPath = req.file?.path;
+        try {
+            const sessionId = req.authenticatedDevice.sessionId;
+            const devicePkId = req.authenticatedDevice.deviceId;
+            const session = getInstance(sessionId);
+            if (!isUUID(sessionId) || !session) {
+                throw new Error('Session WhatsApp tidak ditemukan atau tidak terhubung');
+            }
+
+            const recipient = typeof req.body.recipient === 'string' ? req.body.recipient : '';
+            if (!recipient || !req.file) {
+                return res.status(400).json({ message: 'Nomor tujuan dan file media wajib diisi' });
+            }
+
+            const jid = getJid(recipient);
+            const isGroup = jid.includes('@g.us');
+            await verifyJid(session, jid, isGroup ? 'group' : 'number');
+
+            const mimeType = req.file.mimetype;
+            const mediaType = mimeType.startsWith('image/')
+                ? 'image'
+                : mimeType.startsWith('video/')
+                  ? 'video'
+                  : mimeType.startsWith('audio/')
+                    ? 'audio'
+                    : 'document';
+            const caption = typeof req.body.caption === 'string' ? req.body.caption.trim() : '';
+            const localMedia = { url: path.resolve(req.file.path) };
+            const payload: any = {
+                [mediaType]: localMedia,
+                mimetype: mimeType,
+                fileName: req.file.originalname,
+                ...(caption && mediaType !== 'audio' ? { caption } : {}),
+                ...(mediaType === 'audio' ? { ptt: false } : {}),
+            };
+
+            const result = await session.sendMessage(jid, payload);
+            const messageId = result?.key?.id;
+            if (!messageId) throw new Error('WhatsApp tidak mengembalikan ID pesan');
+
+            const placeholders: Record<string, string> = {
+                image: '[Gambar]',
+                video: '[Video]',
+                audio: '[Audio]',
+                document: req.file.originalname || '[Dokumen]',
+            };
+            const messageText = caption || placeholders[mediaType];
+            const contact = await prisma.contact.findFirst({
+                where: {
+                    phone: jid.split('@')[0],
+                    contactDevices: { some: { deviceId: devicePkId } },
+                },
+                select: { pkId: true },
+            });
+            const mediaPath = req.file.path.replace(/\\/g, '/');
+            const savedMessage = await prisma.outgoingMessage.upsert({
+                where: { id: messageId },
+                update: {
+                    waMessageId: messageId,
+                    to: jid,
+                    message: encryptMessage(messageText),
+                    mediaPath,
+                    status: 'server_ack',
+                    sessionId,
+                    contactId: contact?.pkId || null,
+                    isGroup,
+                    updatedAt: new Date(),
+                },
+                create: {
+                    id: messageId,
+                    waMessageId: messageId,
+                    to: jid,
+                    message: encryptMessage(messageText),
+                    mediaPath,
+                    schedule: new Date(),
+                    status: 'server_ack',
+                    sessionId,
+                    contactId: contact?.pkId || null,
+                    isGroup,
+                    readBy: [],
+                },
+                include: { contact: true },
+            });
+
+            const responseMessage = {
+                ...savedMessage,
+                message: messageText,
+                mediaType,
+                isOutgoing: true,
+            };
+            getSocketIO().emit(`outgoing:${sessionId}`, responseMessage);
+            return res.status(200).json({ result, message: responseMessage });
+        } catch (error) {
+            if (uploadedPath) {
+                fs.promises.unlink(uploadedPath).catch(() => {});
+            }
+            logger.error({ error }, 'Failed to send Inbox media message');
+            return res.status(500).json({
+                message: error instanceof Error ? error.message : 'Gagal mengirim media',
+            });
+        }
+    });
 };
 
 export const sendButton: RequestHandler = async (req, res) => {

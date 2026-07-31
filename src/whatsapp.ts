@@ -190,6 +190,23 @@ export async function createInstance(options: createInstanceOptions) {
      */
     const cleanupMediaFiles = async (): Promise<{ success: boolean; error?: string }> => {
         const subDirectoryPath = `media/S${sessionId}`;
+
+        // Inbox messages keep references to downloaded images/documents even
+        // after a WhatsApp reconnect. Do not remove their media directory while
+        // those persisted records still exist.
+        const referencedMediaCount = await prisma.incomingMessage.count({
+            where: {
+                sessionId,
+                mediaPath: { not: null },
+            },
+        });
+        if (referencedMediaCount > 0) {
+            logger.info(
+                { sessionId, referencedMediaCount },
+                'Keeping session media because Inbox messages still reference it',
+            );
+            return { success: true };
+        }
         
         return new Promise((resolve) => {
             fs.rm(subDirectoryPath, { recursive: true }, (err) => {

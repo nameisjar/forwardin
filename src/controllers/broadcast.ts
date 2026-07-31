@@ -1700,11 +1700,19 @@ schedule.scheduleJob('* * * * *', async () => {
 
                     await prisma.outgoingMessage.upsert({
                         where: { id: messageId },
-                        update: { 
-                            waMessageId: messageId, 
+                        update: {
+                            waMessageId: messageId,
+                            to: jid,
+                            message: encryptMessage(textPayload),
+                            sessionId,
+                            contactId: contact?.pkId ?? null,
+                            mediaPath: broadcast.mediaPath || null,
+                            broadcastId: broadcast.pkId,
+                            broadcastType: broadcast.broadcastType || null,
+                            isGroup: jid.includes('@g.us'),
                             updatedAt: new Date(),
                             readBy: [],
-                            status: 'pending'
+                            status: 'server_ack',
                         },
                         create: {
                             id: messageId,
@@ -1712,7 +1720,7 @@ schedule.scheduleJob('* * * * *', async () => {
                             to: jid,
                             message: encryptMessage(textPayload),
                             schedule: new Date(),
-                            status: 'pending',
+                            status: 'server_ack',
                             sessionId,
                             contactId: contact?.pkId ?? null,
                             mediaPath: broadcast.mediaPath || null,

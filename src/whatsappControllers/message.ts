@@ -5,7 +5,11 @@ import type {
     proto,
     WAMessageKey,
 } from '@whiskeysockets/baileys';
-import { downloadMediaMessage, jidNormalizedUser } from '@whiskeysockets/baileys';
+import {
+    downloadMediaMessage,
+    extractMessageContent,
+    jidNormalizedUser,
+} from '@whiskeysockets/baileys';
 import logger from '../config/logger';
 import prisma, { transformPrisma } from '../utils/db';
 import { BaileysEventHandler } from '../types';
@@ -20,7 +24,14 @@ import { encryptMessage, decryptOutgoingMessage } from '../utils/messageEncrypti
 import { getInstance } from '../whatsapp';
 
 const getKeyAuthor = (key: WAMessageKey | undefined | null) =>
-    (key?.fromMe ? 'me' : key?.participant || key?.remoteJid) || '';
+    (key?.fromMe
+        ? 'me'
+        : key?.participantAlt || key?.remoteJidAlt || key?.participant || key?.remoteJid) || '';
+
+const getPhoneJid = (...jids: Array<string | null | undefined>): string | null => {
+    const phoneJid = jids.find((candidate) => candidate?.endsWith('@s.whatsapp.net'));
+    return phoneJid ? jidNormalizedUser(phoneJid) : null;
+};
 
 export default function messageHandler(sessionId: string, event: BaileysEventEmitter, deviceId?: number) {
     let listening = false;
@@ -57,31 +68,30 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                         if (!remoteJidRaw || remoteJidRaw === 'status@broadcast') {
                             continue;
                         }
-                        const jid = jidNormalizedUser(remoteJidRaw);
+                        // WhatsApp can identify the same personal chat using a Linked ID
+                        // (@lid) while outgoing messages use the phone-number JID. Prefer
+                        // the PN alternative so Inbox can merge both directions.
+                        const jid = remoteJidRaw.includes('@g.us')
+                            ? jidNormalizedUser(remoteJidRaw)
+                            : getPhoneJid(remoteJidRaw, message.key.remoteJidAlt) ||
+                              jidNormalizedUser(remoteJidRaw);
                         const data = transformPrisma(message);
+                        const messageContent = extractMessageContent(message.message);
+                        const stickerMessage = messageContent?.stickerMessage;
 
                         const messageText =
-                            data.message?.conversation ||
-                            data.message?.extendedTextMessage?.text ||
-                            data.message?.imageMessage?.caption ||
-                            data.message?.documentMessage?.caption ||
-                            '';
-
-                        // CEK: Jika pesan outgoing (fromMe), pastikan hanya simpan jika ada di outgoingMessage
-                        if (message.key.fromMe) {
-                            const outgoingExists = await prisma.outgoingMessage.findFirst({
-                                where: {
-                                    OR: [
-                                        { id: message.key.id! },
-                                        { waMessageId: message.key.id!, sessionId },
-                                    ],
-                                },
-                            });
-                            if (!outgoingExists) {
-                                // Pesan outgoing dari luar sistem, jangan simpan
-                                continue;
-                            }
-                        }
+                            messageContent?.conversation ||
+                            messageContent?.extendedTextMessage?.text ||
+                            messageContent?.imageMessage?.caption ||
+                            (messageContent?.imageMessage ? '[Gambar]' : '') ||
+                            messageContent?.videoMessage?.caption ||
+                            (messageContent?.videoMessage ? '[Video]' : '') ||
+                            messageContent?.documentMessage?.caption ||
+                            messageContent?.documentMessage?.fileName ||
+                            (messageContent?.documentMessage ? '[Dokumen]' : '') ||
+                            (messageContent?.audioMessage ? '[Audio]' : '') ||
+                            (stickerMessage ? '[Stiker]' : '') ||
+                            '[Pesan]';
 
                         const contact = await prisma.contact.findFirst({
                             where: {
@@ -162,6 +172,10 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                                             include: { contact: true },
                                         });
                                         io.emit(`message:${sessionId}`, outgoingMessage);
+                                        io.emit(
+                                            `outgoing:${sessionId}`,
+                                            decryptOutgoingMessage(outgoingMessage),
+                                        );
                                     } else {
                                         // ⚠️ CRITICAL FIX: Check existing message before upsert to prevent downgrade
                                         const existingMessage = await prisma.outgoingMessage.findFirst({
@@ -191,6 +205,10 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                                                 
                                                 if (updatedMessage) {
                                                     io.emit(`message:${sessionId}`, updatedMessage);
+                                                    io.emit(
+                                                        `outgoing:${sessionId}`,
+                                                        decryptOutgoingMessage(updatedMessage),
+                                                    );
                                                 }
                                             }
                                         } else {
@@ -209,6 +227,10 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                                                 include: { contact: true },
                                             });
                                             io.emit(`message:${sessionId}`, outgoingMessage);
+                                            io.emit(
+                                                `outgoing:${sessionId}`,
+                                                decryptOutgoingMessage(outgoingMessage),
+                                            );
                                         }
                                     }
                                 } else {
@@ -260,13 +282,105 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                                     const pushName = message.pushName || null;
                                     
                                     // Get participant (sender in group) from message key
-                                    const participant = message.key.participant || null;
+                                    const participant = jid.includes('@g.us')
+                                        ? getPhoneJid(
+                                              message.key.participant,
+                                              message.key.participantAlt,
+                                          ) || message.key.participant || null
+                                        : null;
                                     
                                     // Get group name and picture if it's a group message
                                     let groupName: string | null = null;
                                     let groupPicUrl: string | null = null;
+                                    let incomingMediaPath: string | null = null;
                                     
                                     const session = getInstance(sessionId);
+
+                                    // Download incoming media so Inbox can render it after refresh.
+                                    // Keep the text placeholder as a preview/fallback.
+                                    const incomingMedia = stickerMessage
+                                        ? { content: stickerMessage, kind: 'sticker' }
+                                        : messageContent?.imageMessage
+                                          ? { content: messageContent.imageMessage, kind: 'image' }
+                                          : messageContent?.videoMessage
+                                            ? { content: messageContent.videoMessage, kind: 'video' }
+                                            : messageContent?.audioMessage
+                                              ? { content: messageContent.audioMessage, kind: 'audio' }
+                                              : messageContent?.documentMessage
+                                                ? {
+                                                      content: messageContent.documentMessage,
+                                                      kind: 'document',
+                                                  }
+                                                : null;
+
+                                    if (incomingMedia) {
+                                        try {
+                                            const mediaBuffer = await downloadMediaMessage(
+                                                message,
+                                                'buffer',
+                                                {},
+                                                session?.updateMediaMessage
+                                                    ? {
+                                                          reuploadRequest:
+                                                              session.updateMediaMessage.bind(session),
+                                                          logger,
+                                                      }
+                                                    : undefined,
+                                            );
+
+                                            if (mediaBuffer.length > 0) {
+                                                const safeMessageId = message.key.id!.replace(
+                                                    /[^a-zA-Z0-9_-]/g,
+                                                    '_',
+                                                );
+                                                const mimeType = incomingMedia.content.mimetype || '';
+                                                const mimeExtensions: Record<string, string> = {
+                                                    'image/jpeg': 'jpg',
+                                                    'image/png': 'png',
+                                                    'image/gif': 'gif',
+                                                    'image/webp': 'webp',
+                                                    'video/mp4': 'mp4',
+                                                    'video/quicktime': 'mov',
+                                                    'video/webm': 'webm',
+                                                    'audio/mpeg': 'mp3',
+                                                    'audio/ogg': 'ogg',
+                                                    'audio/wav': 'wav',
+                                                    'audio/webm': 'webm',
+                                                    'application/pdf': 'pdf',
+                                                };
+                                                const originalName =
+                                                    'fileName' in incomingMedia.content
+                                                        ? incomingMedia.content.fileName || ''
+                                                        : '';
+                                                const safeOriginalName = path
+                                                    .basename(originalName)
+                                                    .replace(/[^a-zA-Z0-9._-]/g, '_');
+                                                const originalExtension = path
+                                                    .extname(safeOriginalName)
+                                                    .replace('.', '');
+                                                const extension =
+                                                    (incomingMedia.kind === 'sticker' && 'webp') ||
+                                                    originalExtension ||
+                                                    mimeExtensions[mimeType] ||
+                                                    'bin';
+                                                const mediaFileName = safeOriginalName
+                                                    ? `${safeMessageId}-${safeOriginalName}`
+                                                    : `${safeMessageId}.${extension}`;
+                                                const mediaFilePath = path.join(dir, mediaFileName);
+                                                await fs.promises.writeFile(mediaFilePath, mediaBuffer);
+                                                incomingMediaPath = mediaFilePath.replace(/\\/g, '/');
+                                            }
+                                        } catch (mediaError) {
+                                            logger.error(
+                                                {
+                                                    mediaError,
+                                                    sessionId,
+                                                    messageId: message.key.id,
+                                                },
+                                                'Failed to download incoming media',
+                                            );
+                                        }
+                                    }
                                     
                                     if (jid.includes('@g.us')) {
                                         // GROUP MESSAGE - Get group metadata (name only, picture in background)
@@ -293,6 +407,7 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                                             groupPicUrl: null, // Will be fetched in background
                                             profilePicUrl: null, // Will be fetched in background
                                             message: messageText,
+                                            mediaPath: incomingMediaPath,
                                             receivedAt: new Date(Number(data.messageTimestamp) * 1000),
                                             sessionId,
                                             deviceId: deviceId || null,
@@ -302,6 +417,8 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                                             // Update metadata if changed
                                             groupName,
                                             pushName,
+                                            message: messageText,
+                                            ...(incomingMediaPath ? { mediaPath: incomingMediaPath } : {}),
                                         },
                                         include: { contact: true },
                                     });
