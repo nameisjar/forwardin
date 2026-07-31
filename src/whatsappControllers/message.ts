@@ -363,12 +363,21 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                                                     originalExtension ||
                                                     mimeExtensions[mimeType] ||
                                                     'bin';
-                                                const mediaFileName = safeOriginalName
-                                                    ? `${safeMessageId}-${safeOriginalName}`
-                                                    : `${safeMessageId}.${extension}`;
-                                                const mediaFilePath = path.join(dir, mediaFileName);
-                                                await fs.promises.writeFile(mediaFilePath, mediaBuffer);
-                                                incomingMediaPath = mediaFilePath.replace(/\\/g, '/');
+                                                if (incomingMedia.kind === 'sticker') {
+                                                    // Runtime files are ephemeral on many deployment
+                                                    // platforms. Persist stickers as a data URL so they
+                                                    // remain renderable after a restart/redeploy and do not
+                                                    // depend on which application instance serves /media.
+                                                    const stickerMimeType = mimeType || 'image/webp';
+                                                    incomingMediaPath = `data:${stickerMimeType};base64,${mediaBuffer.toString('base64')}`;
+                                                } else {
+                                                    const mediaFileName = safeOriginalName
+                                                        ? `${safeMessageId}-${safeOriginalName}`
+                                                        : `${safeMessageId}.${extension}`;
+                                                    const mediaFilePath = path.join(dir, mediaFileName);
+                                                    await fs.promises.writeFile(mediaFilePath, mediaBuffer);
+                                                    incomingMediaPath = mediaFilePath.replace(/\\/g, '/');
+                                                }
                                             }
                                         } catch (mediaError) {
                                             logger.error(

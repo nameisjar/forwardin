@@ -74,10 +74,10 @@ async function persistOutgoingMessage(params: {
             return;
         }
 
-        const phone = params.jid.split('@')[0];
+        const phone = params.jid.split('@')[0].replace(/\D/g, '');
         const contact = await prisma.contact.findFirst({
             where: {
-                phone,
+                phone: { in: [phone, `+${phone}`] },
                 contactDevices: { some: { deviceId: context.pkId } },
             },
             select: { pkId: true },

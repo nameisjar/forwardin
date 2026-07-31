@@ -1135,6 +1135,7 @@ export const getDeviceOutboxConversations: RequestHandler = async (req, res) => 
         const device = await prisma.device.findFirst({
             where: { id: deviceUuid, userId: userPkId },
             select: {
+                pkId: true,
                 sessions: { select: { sessionId: true } },
             },
         });
@@ -1187,6 +1188,69 @@ export const getDeviceOutboxConversations: RequestHandler = async (req, res) => 
 
         const { decryptOutgoingMessages } = await import('../utils/messageEncryption');
         const decryptedMessages = decryptOutgoingMessages(latestMessages);
+        const recipientJids = [...new Set(decryptedMessages.map((message) => message.to))];
+        const recipientPhones = [
+            ...new Set(
+                recipientJids
+                    .filter((jid) => !jid.includes('@g.us') && !jid.includes('@lid'))
+                    .map((jid) => jid.split('@')[0].replace(/\D/g, ''))
+                    .filter(Boolean),
+            ),
+        ];
+        const [matchingContacts, incomingIdentities] = await Promise.all([
+            recipientPhones.length > 0
+                ? prisma.contact.findMany({
+                      where: {
+                          phone: {
+                              in: [
+                                  ...recipientPhones,
+                                  ...recipientPhones.map((phone) => `+${phone}`),
+                              ],
+                          },
+                          contactDevices: { some: { deviceId: device.pkId } },
+                      },
+                      select: {
+                          firstName: true,
+                          lastName: true,
+                          phone: true,
+                          colorCode: true,
+                      },
+                  })
+                : Promise.resolve([]),
+            recipientJids.length > 0
+                ? prisma.incomingMessage.findMany({
+                      where: {
+                          deviceId: device.pkId,
+                          from: { in: recipientJids },
+                      },
+                      orderBy: { receivedAt: 'desc' },
+                      select: {
+                          from: true,
+                          pushName: true,
+                          groupName: true,
+                          groupPicUrl: true,
+                          profilePicUrl: true,
+                          contact: {
+                              select: {
+                                  firstName: true,
+                                  lastName: true,
+                                  phone: true,
+                                  colorCode: true,
+                              },
+                          },
+                      },
+                  })
+                : Promise.resolve([]),
+        ]);
+        const contactsByPhone = new Map(
+            matchingContacts.map((contact) => [contact.phone.replace(/\D/g, ''), contact]),
+        );
+        const incomingIdentityByJid = new Map<string, (typeof incomingIdentities)[number]>();
+        for (const identity of incomingIdentities) {
+            if (!incomingIdentityByJid.has(identity.from)) {
+                incomingIdentityByJid.set(identity.from, identity);
+            }
+        }
         const counts = new Map(
             groupedRecipients.map((group) => [group.to, group._count._all]),
         );
@@ -1197,10 +1261,22 @@ export const getDeviceOutboxConversations: RequestHandler = async (req, res) => 
                 uniqueRecipients.add(message.to);
                 return true;
             })
-            .map((message) => ({
-                ...message,
-                messageCount: counts.get(message.to) || 1,
-            }));
+            .map((message) => {
+                const incomingIdentity = incomingIdentityByJid.get(message.to);
+                const phone = message.to.split('@')[0].replace(/\D/g, '');
+                const contact =
+                    message.contact || incomingIdentity?.contact || contactsByPhone.get(phone) || null;
+
+                return {
+                    ...message,
+                    contact,
+                    pushName: incomingIdentity?.pushName || null,
+                    groupName: incomingIdentity?.groupName || null,
+                    groupPicUrl: incomingIdentity?.groupPicUrl || null,
+                    profilePicUrl: incomingIdentity?.profilePicUrl || null,
+                    messageCount: counts.get(message.to) || 1,
+                };
+            });
 
         const search = typeof req.query.search === 'string' ? req.query.search.trim().toLowerCase() : '';
         if (search) {

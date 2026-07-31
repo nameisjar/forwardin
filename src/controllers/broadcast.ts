@@ -1694,8 +1694,10 @@ schedule.scheduleJob('* * * * *', async () => {
 
                 // Save to OutgoingMessage
                 try {
+                    const recipientPhone = String(recipient).replace(/\D/g, '');
                     const contact = broadcast.device.contactDevices.find(
-                        (cd: any) => cd.contact.phone == recipient
+                        (cd: any) =>
+                            String(cd.contact.phone).replace(/\D/g, '') === recipientPhone,
                     )?.contact;
 
                     await prisma.outgoingMessage.upsert({

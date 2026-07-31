@@ -15,6 +15,14 @@ import { executeWithRateLimit, RateLimitResult, setDeviceAsPersonal, setDeviceAs
 import { redactPhone } from '../utils/logRedaction';
 import { encryptMessage, decryptOutgoingMessage, decryptOutgoingMessages, decryptBroadcast, decryptBroadcasts } from '../utils/messageEncryption';
 import { getSocketIO } from '../socket';
+import axios from 'axios';
+
+const PROFILE_PICTURE_CACHE_TTL_MS = 5 * 60 * 1000;
+const PROFILE_PICTURE_MAX_BYTES = 5 * 1024 * 1024;
+const profilePictureCache = new Map<
+    string,
+    { data: Buffer; contentType: string; expiresAt: number }
+>();
 
 export const sendMessages: RequestHandler = async (req, res) => {
     try {
@@ -1052,7 +1060,11 @@ export const getProfilePictureUrl: RequestHandler = async (req, res) => {
         const session = getInstance(sessionId);
         if (!session) return res.status(404).json({ message: 'Session not found' });
 
-        const { recipient, resolution } = req.query as { recipient?: string; resolution?: string };
+        const { recipient, resolution, download } = req.query as {
+            recipient?: string;
+            resolution?: string;
+            download?: string;
+        };
         if (!recipient) return res.status(400).json({ message: 'Recipient is required' });
 
         // Support untuk 'me' - ambil nomor phone dari database
@@ -1069,6 +1081,8 @@ export const getProfilePictureUrl: RequestHandler = async (req, res) => {
             }
             
             jid = getJid(sessionData.device.phone);
+        } else if (recipient.includes('@g.us')) {
+            jid = recipient;
         } else {
             jid = getJid(recipient);
             await verifyJid(session, jid, 'number');
@@ -1078,6 +1092,50 @@ export const getProfilePictureUrl: RequestHandler = async (req, res) => {
             jid,
             resolution === 'high' ? 'image' : undefined,
         );
+        if (!ppUrl) {
+            return res.status(404).json({ message: 'Profile picture not found' });
+        }
+
+        if (download === '1' || download === 'true') {
+            const cacheKey = `${sessionId}:${jid}:${resolution || 'preview'}`;
+            const cached = profilePictureCache.get(cacheKey);
+
+            if (cached && cached.expiresAt > Date.now()) {
+                res.setHeader('Content-Type', cached.contentType);
+                res.setHeader('Cache-Control', 'private, max-age=300');
+                return res.status(200).send(cached.data);
+            }
+
+            const pictureResponse = await axios.get<Buffer>(ppUrl, {
+                responseType: 'arraybuffer',
+                timeout: 15_000,
+                maxContentLength: PROFILE_PICTURE_MAX_BYTES,
+                maxBodyLength: PROFILE_PICTURE_MAX_BYTES,
+                headers: {
+                    Accept: 'image/*',
+                    'User-Agent': 'Mozilla/5.0',
+                },
+            });
+            const data = pictureResponse.data;
+            if (data.length > PROFILE_PICTURE_MAX_BYTES) {
+                return res.status(413).json({ message: 'Profile picture is too large' });
+            }
+
+            const rawContentType = pictureResponse.headers['content-type'];
+            const contentType =
+                typeof rawContentType === 'string' && rawContentType.startsWith('image/')
+                    ? rawContentType
+                    : 'image/jpeg';
+            profilePictureCache.set(cacheKey, {
+                data,
+                contentType,
+                expiresAt: Date.now() + PROFILE_PICTURE_CACHE_TTL_MS,
+            });
+
+            res.setHeader('Content-Type', contentType);
+            res.setHeader('Cache-Control', 'private, max-age=300');
+            return res.status(200).send(data);
+        }
 
         res.status(200).json({ profilePictureUrl: ppUrl });
     } catch (error) {
