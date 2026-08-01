@@ -6,12 +6,19 @@ import { generateSlug } from '../utils/slug';
 import { useDevice } from '../utils/quota';
 import fs from 'fs';
 import path from 'path';
+import https from 'https';
+import axios from 'axios';
 import schedule from 'node-schedule';
 import { isUUID } from '../utils/uuidChecker';
 import { generateDeviceAccessToken } from '../utils/jwtGenerator';
 import { getInstance, verifyInstance } from '../whatsapp';
 import { hashApiKey } from '../utils/apiKeyHash';
-import { serializeInboxMediaPath, verifyInboxMediaToken } from '../utils/inboxMedia';
+import {
+    createInboxProfileUrl,
+    serializeInboxMediaPath,
+    verifyInboxMediaToken,
+    verifyInboxProfileToken,
+} from '../utils/inboxMedia';
 import { 
     getDeviceHealth, 
     pauseDevice, 
@@ -19,6 +26,12 @@ import {
     checkAutoResume,
     cleanupOldSignals,
 } from '../services/signalDetector';
+
+const inboxProfileHttpsAgent = new https.Agent({
+    family: 4,
+    keepAlive: true,
+    maxSockets: 20,
+});
 
 export const getDevices: RequestHandler = async (req, res) => {
     const pkId = req.authenticatedUser.pkId;
@@ -1151,13 +1164,20 @@ export const getDeviceOutboxConversations: RequestHandler = async (req, res) => 
             return res.status(200).json([]);
         }
 
+        const recipients =
+            typeof req.query.recipients === 'string'
+                ? [...new Set(req.query.recipients.split(',').map((jid) => jid.trim()).filter(Boolean))]
+                : [];
         const groupedRecipients = await prisma.outgoingMessage.groupBy({
             by: ['to'],
-            where: { sessionId: { in: sessionIds } },
+            where: {
+                sessionId: { in: sessionIds },
+                ...(recipients.length > 0 ? { to: { in: recipients } } : {}),
+            },
             _max: { createdAt: true },
             _count: { _all: true },
             orderBy: { _max: { createdAt: 'desc' } },
-            take: 500,
+            take: recipients.length > 0 ? Math.min(recipients.length, 500) : 500,
         });
 
         if (groupedRecipients.length === 0) {
@@ -1274,8 +1294,13 @@ export const getDeviceOutboxConversations: RequestHandler = async (req, res) => 
                     contact,
                     pushName: incomingIdentity?.pushName || null,
                     groupName: incomingIdentity?.groupName || null,
-                    groupPicUrl: incomingIdentity?.groupPicUrl || null,
-                    profilePicUrl: incomingIdentity?.profilePicUrl || null,
+                    groupPicUrl: message.to.endsWith('@g.us')
+                        ? createInboxProfileUrl(deviceUuid, message.to)
+                        : null,
+                    profilePicUrl:
+                        !message.to.endsWith('@g.us') && !message.to.endsWith('@lid')
+                            ? createInboxProfileUrl(deviceUuid, message.to)
+                            : null,
                     messageCount: counts.get(message.to) || 1,
                 };
             });
@@ -1505,6 +1530,145 @@ export const getInboxMedia: RequestHandler = async (req, res) => {
     }
 };
 
+/** Serve a conversation profile picture without exposing WhatsApp CDN details. */
+export const getInboxProfilePicture: RequestHandler = async (req, res) => {
+    try {
+        const { deviceId, jid } = req.params;
+        const token = typeof req.query.token === 'string' ? req.query.token : '';
+        if (!isUUID(deviceId) || !jid || !token || !verifyInboxProfileToken(deviceId, jid, token)) {
+            return res.status(404).end();
+        }
+
+        const device = await prisma.device.findUnique({
+            where: { id: deviceId },
+            select: {
+                pkId: true,
+                sessions: {
+                    where: { id: { contains: 'config' } },
+                    select: { sessionId: true },
+                    take: 1,
+                },
+            },
+        });
+        if (!device) return res.status(404).end();
+
+        const isGroup = jid.endsWith('@g.us');
+        const [latestProfile, cachedProfile] = await Promise.all([
+            prisma.incomingMessage.findFirst({
+                where: { deviceId: device.pkId, from: jid },
+                orderBy: { receivedAt: 'desc' },
+                select: { id: true, profilePicUrl: true, groupPicUrl: true },
+            }),
+            prisma.incomingMessage.findFirst({
+                where: {
+                    deviceId: device.pkId,
+                    from: jid,
+                    ...(isGroup
+                        ? { groupPicUrl: { not: null } }
+                        : { profilePicUrl: { not: null } }),
+                },
+                orderBy: { receivedAt: 'desc' },
+                select: { id: true, profilePicUrl: true, groupPicUrl: true },
+            }),
+        ]);
+        const storedSource = isGroup
+            ? cachedProfile?.groupPicUrl
+            : cachedProfile?.profilePicUrl;
+
+        const decodeDataUrl = (source: string) => {
+            const match = source.match(/^data:(image\/[^;,]+);base64,(.+)$/);
+            if (!match) return null;
+            const data = Buffer.from(match[2], 'base64');
+            return data.length > 0 ? { data, contentType: match[1] } : null;
+        };
+        const downloadProfile = async (source: string) => {
+            if (source.startsWith('data:')) return decodeDataUrl(source);
+            if (!/^https:\/\//i.test(source)) return null;
+            const response = await axios.get<Buffer>(source, {
+                responseType: 'arraybuffer',
+                timeout: 15_000,
+                maxContentLength: 5 * 1024 * 1024,
+                maxBodyLength: 5 * 1024 * 1024,
+                httpsAgent: inboxProfileHttpsAgent,
+                headers: { Accept: 'image/*', 'User-Agent': 'Mozilla/5.0' },
+            });
+            const data = Buffer.from(response.data);
+            const rawContentType = response.headers['content-type'];
+            const contentType =
+                typeof rawContentType === 'string' && rawContentType.startsWith('image/')
+                    ? rawContentType
+                    : 'image/jpeg';
+            return data.length > 0 ? { data, contentType } : null;
+        };
+
+        let freshSource: string | null = null;
+        let picture = null;
+        if (storedSource) {
+            try {
+                picture = await downloadProfile(storedSource);
+            } catch {
+                picture = null;
+            }
+        }
+
+        if (!picture) {
+            const sessionId = device.sessions[0]?.sessionId;
+            const session = sessionId ? getInstance(sessionId) : null;
+            if (session && typeof session.profilePictureUrl === 'function') {
+                try {
+                    freshSource = (await session.profilePictureUrl(jid, 'image')) || null;
+                } catch {
+                    freshSource = null;
+                }
+                if (!freshSource) {
+                    try {
+                        freshSource = (await session.profilePictureUrl(jid)) || null;
+                    } catch {
+                        freshSource = null;
+                    }
+                }
+                if (freshSource) {
+                    try {
+                        picture = await downloadProfile(freshSource);
+                    } catch {
+                        picture = null;
+                    }
+                }
+            }
+        }
+
+        if (!picture) {
+            // An img element can often load the fresh WhatsApp URL even when
+            // the deployment provider cannot proxy its CDN response.
+            if (freshSource) return res.redirect(freshSource);
+            res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+            res.setHeader('Cache-Control', 'no-store');
+            return res.status(204).end();
+        }
+
+        if (latestProfile && (Boolean(freshSource) || !storedSource?.startsWith('data:'))) {
+            const dataUrl = `data:${picture.contentType};base64,${picture.data.toString('base64')}`;
+            await prisma.incomingMessage
+                .update({
+                    where: { id: latestProfile.id },
+                    data: isGroup ? { groupPicUrl: dataUrl } : { profilePicUrl: dataUrl },
+                })
+                .catch(() => undefined);
+        }
+
+        res.setHeader('Content-Type', picture.contentType);
+        res.setHeader('Content-Length', String(picture.data.length));
+        res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+        res.setHeader('Cache-Control', 'private, max-age=3600');
+        return res.status(200).send(picture.data);
+    } catch (error) {
+        logger.error({ error }, 'Failed to serve Inbox profile picture');
+        res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+        res.setHeader('Cache-Control', 'no-store');
+        return res.status(204).end();
+    }
+};
+
 /**
  * Get incoming messages for a device (persists across session reconnects)
  * GET /devices/:deviceId/inbox
@@ -1522,7 +1686,10 @@ export const getDeviceInbox: RequestHandler = async (req, res) => {
         const userPkId = req.authenticatedUser.pkId;
         const device = await prisma.device.findFirst({
             where: { id: deviceUuid, userId: userPkId },
-            select: { pkId: true },
+            select: {
+                pkId: true,
+                sessions: { select: { sessionId: true } },
+            },
         });
 
         if (!device) {
@@ -1530,7 +1697,8 @@ export const getDeviceInbox: RequestHandler = async (req, res) => {
         }
 
         const { page = 1, pageSize = 25, phoneNumber, message, contactName } = req.query;
-        const offset = (Number(page) - 1) * Number(pageSize);
+        const requestedPage = Math.max(1, Number(page) || 1);
+        const requestedPageSize = Math.min(50, Math.max(1, Number(pageSize) || 25));
 
         const whereClause: any = {
             deviceId: device.pkId,
@@ -1549,20 +1717,96 @@ export const getDeviceInbox: RequestHandler = async (req, res) => {
             };
         }
 
-        const [messages, totalMessages] = await Promise.all([
-            prisma.incomingMessage.findMany({
-                take: Number(pageSize),
-                skip: offset,
+        const sessionIds = [...new Set(device.sessions.map((session) => session.sessionId))];
+        const hasSearchFilter = Boolean(phoneNumber || message || contactName);
+        const [incomingGroups, outgoingGroups] = await Promise.all([
+            prisma.incomingMessage.groupBy({
+                by: ['from'],
                 where: whereClause,
-                include: {
-                    contact: {
-                        select: { firstName: true, lastName: true, phone: true, colorCode: true },
-                    },
-                },
-                orderBy: { receivedAt: 'desc' },
+                _max: { receivedAt: true },
+                _count: { _all: true },
             }),
-            prisma.incomingMessage.count({ where: whereClause }),
+            !hasSearchFilter && sessionIds.length > 0
+                ? prisma.outgoingMessage.groupBy({
+                      by: ['to'],
+                      where: { sessionId: { in: sessionIds } },
+                      _max: { createdAt: true },
+                      _count: { _all: true },
+                  })
+                : Promise.resolve([]),
         ]);
+
+        // Pagination must operate on conversations, not individual messages.
+        // Otherwise a busy sender can occupy an entire page and the same chat
+        // appears split or disappears when the user changes pages.
+        const conversationIndex = new Map<
+            string,
+            { latestAt: Date; incomingCount: number; outgoingCount: number }
+        >();
+        for (const group of incomingGroups) {
+            if (!group._max.receivedAt) continue;
+            conversationIndex.set(group.from, {
+                latestAt: group._max.receivedAt,
+                incomingCount: group._count._all,
+                outgoingCount: 0,
+            });
+        }
+        for (const group of outgoingGroups) {
+            if (!group._max.createdAt) continue;
+            const existing = conversationIndex.get(group.to);
+            if (existing) {
+                if (group._max.createdAt > existing.latestAt) {
+                    existing.latestAt = group._max.createdAt;
+                }
+                existing.outgoingCount = group._count._all;
+            } else {
+                conversationIndex.set(group.to, {
+                    latestAt: group._max.createdAt,
+                    incomingCount: 0,
+                    outgoingCount: group._count._all,
+                });
+            }
+        }
+
+        const orderedConversationKeys = [...conversationIndex.entries()]
+            .sort((left, right) => right[1].latestAt.getTime() - left[1].latestAt.getTime())
+            .map(([jid]) => jid);
+        const totalConversations = orderedConversationKeys.length;
+        const totalPages = Math.max(1, Math.ceil(totalConversations / requestedPageSize));
+        const currentPage = Math.min(requestedPage, totalPages);
+        const offset = (currentPage - 1) * requestedPageSize;
+        const conversationKeys = orderedConversationKeys.slice(
+            offset,
+            offset + requestedPageSize,
+        );
+
+        // Keep enough history for the detail modal while bounding the response.
+        // Profile/media binaries are served by signed URLs, so they are not
+        // duplicated in this JSON response.
+        const messagesByConversation = await Promise.all(
+            conversationKeys.map((from) =>
+                prisma.incomingMessage.findMany({
+                    take: 100,
+                    where: { ...whereClause, from },
+                    include: {
+                        contact: {
+                            select: {
+                                firstName: true,
+                                lastName: true,
+                                phone: true,
+                                colorCode: true,
+                            },
+                        },
+                    },
+                    orderBy: { receivedAt: 'desc' },
+                }),
+            ),
+        );
+        const messages = messagesByConversation.flat();
+        const totalMessages = [...conversationIndex.values()].reduce(
+            (sum, item) => sum + item.incomingCount + item.outgoingCount,
+            0,
+        );
 
         const normalizedMessages = await normalizeIncomingConversationIdentities(
             messages,
@@ -1575,11 +1819,15 @@ export const getDeviceInbox: RequestHandler = async (req, res) => {
                 deviceUuid,
                 message.id,
             );
+            const profileUrl = createInboxProfileUrl(deviceUuid, message.from);
+            if (message.from.endsWith('@g.us')) {
+                item.groupPicUrl = profileUrl;
+            } else if (!message.from.endsWith('@lid')) {
+                item.profilePicUrl = profileUrl;
+            }
             return item;
         });
-        const currentPage = Math.max(1, Number(page) || 1);
-        const totalPages = Math.ceil(totalMessages / Number(pageSize));
-        const hasMore = currentPage * Number(pageSize) < totalMessages;
+        const hasMore = currentPage < totalPages;
 
         // Inbox state changes through real-time events and read acknowledgements.
         // Never let browsers or reverse proxies serve an older unread state.
@@ -1593,9 +1841,11 @@ export const getDeviceInbox: RequestHandler = async (req, res) => {
             total: totalMessages,
             metadata: {
                 totalMessages,
+                totalConversations,
                 currentPage,
                 totalPages,
                 hasMore,
+                conversationKeys,
             },
         });
     } catch (error) {

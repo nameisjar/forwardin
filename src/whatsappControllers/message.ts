@@ -29,7 +29,7 @@ import sharp from 'sharp';
 import axios from 'axios';
 import https from 'https';
 import { createDecipheriv } from 'crypto';
-import { serializeInboxMediaPath } from '../utils/inboxMedia';
+import { createInboxProfileUrl, serializeInboxMediaPath } from '../utils/inboxMedia';
 
 const whatsappMediaHttpsAgent = new https.Agent({
     family: 4,
@@ -657,8 +657,15 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                                                         picUrlToUpdate = picUrl || null;
                                                         fieldToUpdate = 'groupPicUrl';
                                                     } catch {
-                                                        // Group might not have a profile picture
                                                         picUrlToUpdate = null;
+                                                    }
+                                                    if (!picUrlToUpdate) {
+                                                        try {
+                                                            picUrlToUpdate = (await session.profilePictureUrl(jid)) || null;
+                                                        } catch {
+                                                            // Group might not have a profile picture
+                                                            picUrlToUpdate = null;
+                                                        }
                                                     }
                                                 }
                                             } else {
@@ -669,8 +676,15 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                                                         picUrlToUpdate = picUrl || null;
                                                         fieldToUpdate = 'profilePicUrl';
                                                     } catch {
-                                                        // User might not have a profile picture
                                                         picUrlToUpdate = null;
+                                                    }
+                                                    if (!picUrlToUpdate) {
+                                                        try {
+                                                            picUrlToUpdate = (await session.profilePictureUrl(jid)) || null;
+                                                        } catch {
+                                                            // Privacy settings may hide the user's picture.
+                                                            picUrlToUpdate = null;
+                                                        }
                                                     }
                                                 }
                                             }
@@ -697,8 +711,20 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                                                 
                                                 if (updatedMessage) {
                                                     const emitEventName = `incoming:${sessionId}:profile-updated`;
+                                                    const publicDeviceUuid = await getDeviceUuid();
+                                                    const profileUrl = publicDeviceUuid
+                                                        ? createInboxProfileUrl(publicDeviceUuid, jid)
+                                                        : null;
                                                     io.emit(emitEventName, {
                                                         ...updatedMessage,
+                                                        profilePicUrl:
+                                                            !jid.includes('@g.us') && profileUrl
+                                                                ? profileUrl
+                                                                : updatedMessage.profilePicUrl,
+                                                        groupPicUrl:
+                                                            jid.includes('@g.us') && profileUrl
+                                                                ? profileUrl
+                                                                : updatedMessage.groupPicUrl,
                                                         isGroup: jid.includes('@g.us'),
                                                     });
                                                     
@@ -735,6 +761,14 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                                                   incomingMessage.id,
                                               )
                                             : incomingMessage.mediaPath,
+                                        profilePicUrl:
+                                            publicDeviceUuid && !jid.includes('@g.us') && !jid.includes('@lid')
+                                                ? createInboxProfileUrl(publicDeviceUuid, jid)
+                                                : incomingMessage.profilePicUrl,
+                                        groupPicUrl:
+                                            publicDeviceUuid && jid.includes('@g.us')
+                                                ? createInboxProfileUrl(publicDeviceUuid, jid)
+                                                : incomingMessage.groupPicUrl,
                                         isGroup: jid.includes('@g.us'),
                                     };
                                     

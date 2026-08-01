@@ -1,7 +1,7 @@
 import express, { Router, Request, Response } from 'express';
 import authRoutes from './auth';
 import deviceRoutes from './devices';
-import { getInboxMedia } from '../controllers/device';
+import { getInboxMedia, getInboxProfilePicture } from '../controllers/device';
 import userRoutes from './users';
 import sessionRoutes from './sessions';
 import contactRoutes from './contacts';
@@ -42,6 +42,7 @@ router.use('/health', healthRoutes);
 
 router.use('/auth', authRoutes);
 router.get('/inbox-media/:deviceId/:messageId', getInboxMedia);
+router.get('/inbox-profile/:deviceId/:jid', getInboxProfilePicture);
 router.use('/sessions', authMiddleware, sessionRoutes);
 router.use('/devices', authMiddleware, deviceRoutes);
 router.use('/users', authMiddleware, userRoutes);
