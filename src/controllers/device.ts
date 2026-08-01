@@ -1638,9 +1638,9 @@ export const getInboxProfilePicture: RequestHandler = async (req, res) => {
         }
 
         if (!picture) {
-            // An img element can often load the fresh WhatsApp URL even when
-            // the deployment provider cannot proxy its CDN response.
-            if (freshSource) return res.redirect(freshSource);
+            // Never redirect the browser to WhatsApp's temporary profile CDN.
+            // Those URLs frequently reject cross-site requests with 403. The
+            // Inbox will use its initial avatar when no cached image is available.
             res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
             res.setHeader('Cache-Control', 'no-store');
             return res.status(204).end();
