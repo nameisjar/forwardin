@@ -186,6 +186,7 @@ model Device {
   whatsappGroups  WhatsAppGroup[]
   IncomingMessage IncomingMessage[]
   inboxProfileCaches InboxProfileCache[]
+  messageReactions MessageReaction[]
 
   // Health monitoring fields
   healthStatus    String           @default("healthy") @map("health_status") @db.VarChar(20) // healthy, warning, critical, paused, banned
@@ -410,6 +411,29 @@ model InboxProfileCache {
   @@index([deviceId, status], map: "idx_inbox_profile_cache_device_status")
   @@index([status, nextRetryAt], map: "idx_inbox_profile_cache_retry")
   @@map("inbox_profile_cache")
+}
+
+/// Current reaction state for an Inbox message. Reactions live separately
+/// from incoming/outgoing messages so they cannot affect message delivery.
+model MessageReaction {
+  pkId              Int      @id @default(autoincrement()) @map("pk_id")
+  deviceId          Int      @map("device_id")
+  sessionId         String   @map("session_id") @db.VarChar(128)
+  conversationJid   String   @map("conversation_jid") @db.VarChar(128)
+  targetMessageId   String   @map("target_message_id") @db.VarChar(255)
+  targetFromMe      Boolean  @map("target_from_me")
+  reactorJid        String   @map("reactor_jid") @db.VarChar(128)
+  emoji             String   @db.VarChar(64)
+  reactionMessageId String?  @map("reaction_message_id") @db.VarChar(255)
+  reactedAt         DateTime @map("reacted_at")
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+  device            Device   @relation(fields: [deviceId], references: [pkId], onDelete: Cascade)
+
+  @@unique([deviceId, sessionId, targetMessageId, reactorJid], map: "message_reaction_state_key")
+  @@index([deviceId, conversationJid], map: "idx_message_reaction_conversation")
+  @@index([deviceId, targetMessageId, targetFromMe], map: "idx_message_reaction_target")
+  @@map("message_reaction")
 }
 
 model Broadcast {

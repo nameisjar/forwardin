@@ -15,6 +15,7 @@ import { executeWithRateLimit, RateLimitResult, setDeviceAsPersonal, setDeviceAs
 import { redactPhone } from '../utils/logRedaction';
 import { encryptMessage, decryptOutgoingMessage, decryptOutgoingMessages, decryptBroadcast, decryptBroadcasts } from '../utils/messageEncryption';
 import { getSocketIO } from '../socket';
+import { deleteMessageReactions, saveMessageReaction } from '../services/messageReaction';
 import axios from 'axios';
 import https from 'https';
 
@@ -594,6 +595,307 @@ export const sendInboxMediaMessage: RequestHandler = async (req, res) => {
             });
         }
     });
+};
+
+const isSupportedReactionEmoji = (emoji: string): boolean => {
+    if (!emoji || Buffer.byteLength(emoji, 'utf8') > 64) return false;
+
+    const remaining = emoji.replace(
+        /[\p{Extended_Pictographic}\p{Regional_Indicator}\p{Emoji_Modifier}\uFE0F\u200D]/gu,
+        '',
+    );
+    if (remaining) return false;
+
+    const pictographs = emoji.match(/\p{Extended_Pictographic}/gu) || [];
+    const regionalIndicators = emoji.match(/\p{Regional_Indicator}/gu) || [];
+
+    // One pictograph, a skin-tone variant, a ZWJ-composed emoji, or one flag.
+    return (
+        (pictographs.length === 1 && regionalIndicators.length === 0) ||
+        (pictographs.length > 1 && emoji.includes('\u200D')) ||
+        (pictographs.length === 0 && regionalIndicators.length === 2)
+    );
+};
+
+/**
+ * Send or remove the authenticated WhatsApp account's reaction to one Inbox
+ * message. The conversation and participant are resolved from persisted data,
+ * not trusted from the browser request.
+ */
+export const sendInboxReaction: RequestHandler = async (req, res) => {
+    try {
+        const sessionId = req.authenticatedDevice.sessionId;
+        const devicePkId = req.authenticatedDevice.deviceId;
+        const targetMessageId =
+            typeof req.body.targetMessageId === 'string'
+                ? req.body.targetMessageId.trim()
+                : '';
+        const targetFromMe = req.body.targetFromMe;
+        const emoji = typeof req.body.emoji === 'string' ? req.body.emoji.trim() : '';
+
+        if (!isUUID(sessionId) || !targetMessageId || typeof targetFromMe !== 'boolean') {
+            return res.status(400).json({ message: 'Data pesan reaction tidak valid' });
+        }
+        if (emoji && !isSupportedReactionEmoji(emoji)) {
+            return res.status(400).json({ message: 'Emoji reaction tidak didukung' });
+        }
+
+        const session = getInstance(sessionId);
+        if (!session?.user) {
+            return res.status(409).json({ message: 'Device WhatsApp belum terhubung' });
+        }
+
+        let conversationJid: string;
+        let whatsappTargetId: string;
+        let participant: string | null = null;
+
+        if (targetFromMe) {
+            const target = await prisma.outgoingMessage.findFirst({
+                where: {
+                    sessionId,
+                    OR: [
+                        { waMessageId: targetMessageId },
+                        { id: targetMessageId },
+                    ],
+                },
+                select: { id: true, waMessageId: true, to: true },
+            });
+            if (!target) {
+                return res.status(404).json({ message: 'Pesan keluar tidak ditemukan' });
+            }
+            conversationJid = target.to;
+            whatsappTargetId = target.waMessageId || target.id;
+        } else {
+            const target = await prisma.incomingMessage.findFirst({
+                where: { deviceId: devicePkId, id: targetMessageId },
+                select: { id: true, from: true, participant: true },
+            });
+            if (!target) {
+                return res.status(404).json({ message: 'Pesan masuk tidak ditemukan' });
+            }
+            conversationJid = target.from;
+            whatsappTargetId = target.id;
+            participant = target.participant;
+        }
+
+        const jid = conversationJid.includes('@')
+            ? conversationJid
+            : getJid(conversationJid);
+        const targetKey = {
+            remoteJid: jid,
+            id: whatsappTargetId,
+            fromMe: targetFromMe,
+            ...(jid.endsWith('@g.us') && participant ? { participant } : {}),
+        };
+        const result = await session.sendMessage(jid, {
+            react: { text: emoji, key: targetKey },
+        });
+
+        const reaction = await saveMessageReaction({
+            deviceId: devicePkId,
+            sessionId,
+            conversationJid: jid,
+            targetMessageId: whatsappTargetId,
+            targetFromMe,
+            reactorJid: 'me',
+            emoji,
+            reactionMessageId: result?.key?.id || null,
+            reactedAt: new Date(),
+        });
+        const event = { ...reaction, conversationJid: jid };
+        getSocketIO().to(`session:${sessionId}`).emit(`reaction:${sessionId}`, event);
+
+        return res.status(200).json({ success: true, reaction: event });
+    } catch (error) {
+        logger.warn(
+            { code: (error as { code?: unknown })?.code },
+            'Failed to send Inbox reaction',
+        );
+        return res.status(500).json({
+            message:
+                error instanceof Error
+                    ? error.message
+                    : 'Gagal mengirim reaction WhatsApp',
+        });
+    }
+};
+
+/**
+ * Delete one persisted Inbox message for the current account, or revoke an
+ * outgoing message for everyone. Target ownership is resolved server-side.
+ */
+export const deleteInboxMessage: RequestHandler = async (req, res) => {
+    try {
+        const sessionId = req.authenticatedDevice.sessionId;
+        const devicePkId = req.authenticatedDevice.deviceId;
+        const targetMessageId =
+            typeof req.body.targetMessageId === 'string'
+                ? req.body.targetMessageId.trim()
+                : '';
+        const targetFromMe = req.body.targetFromMe;
+        const scope = req.body.scope;
+
+        if (
+            !isUUID(sessionId) ||
+            !targetMessageId ||
+            typeof targetFromMe !== 'boolean' ||
+            !['me', 'everyone'].includes(scope)
+        ) {
+            return res.status(400).json({ message: 'Data penghapusan pesan tidak valid' });
+        }
+        if (scope === 'everyone' && !targetFromMe) {
+            return res.status(400).json({
+                message: 'Hanya pesan yang Anda kirim yang dapat dihapus untuk semua',
+            });
+        }
+
+        const session = getInstance(sessionId);
+        if (scope === 'everyone' && !session?.user) {
+            return res.status(409).json({ message: 'Device WhatsApp belum terhubung' });
+        }
+
+        let conversationJid: string;
+        let whatsappTargetId: string;
+        let participant: string | null = null;
+        let messageTimestamp: Date;
+        let targetPkId: number;
+
+        if (targetFromMe) {
+            const target = await prisma.outgoingMessage.findFirst({
+                where: {
+                    sessionId,
+                    OR: [
+                        { waMessageId: targetMessageId },
+                        { id: targetMessageId },
+                    ],
+                },
+                select: {
+                    pkId: true,
+                    id: true,
+                    waMessageId: true,
+                    to: true,
+                    createdAt: true,
+                },
+            });
+            if (!target) {
+                return res.status(404).json({ message: 'Pesan keluar tidak ditemukan' });
+            }
+            conversationJid = target.to;
+            whatsappTargetId = target.waMessageId || target.id;
+            messageTimestamp = target.createdAt;
+            targetPkId = target.pkId;
+        } else {
+            const target = await prisma.incomingMessage.findFirst({
+                where: { deviceId: devicePkId, id: targetMessageId },
+                select: {
+                    pkId: true,
+                    id: true,
+                    from: true,
+                    participant: true,
+                    receivedAt: true,
+                },
+            });
+            if (!target) {
+                return res.status(404).json({ message: 'Pesan masuk tidak ditemukan' });
+            }
+            conversationJid = target.from;
+            whatsappTargetId = target.id;
+            participant = target.participant;
+            messageTimestamp = target.receivedAt;
+            targetPkId = target.pkId;
+        }
+
+        const jid = conversationJid.includes('@')
+            ? conversationJid
+            : getJid(conversationJid);
+        const key = {
+            remoteJid: jid,
+            id: whatsappTargetId,
+            fromMe: targetFromMe,
+            ...(jid.endsWith('@g.us') && participant ? { participant } : {}),
+        };
+
+        let whatsappSynced = true;
+        if (scope === 'everyone') {
+            await session!.sendMessage(jid, { delete: key });
+        } else if (session?.user) {
+            try {
+                await session.chatModify(
+                    {
+                        deleteForMe: {
+                            deleteMedia: true,
+                            key,
+                            timestamp: Math.floor(messageTimestamp.getTime() / 1000),
+                        },
+                    },
+                    jid,
+                );
+            } catch (error) {
+                // WhatsApp's delete-for-me uses App State Sync. A freshly linked
+                // or partially restored session may not have that key yet. The
+                // Inbox remains authoritative for this local action, so do not
+                // make a missing WhatsApp sync key block the database deletion.
+                whatsappSynced = false;
+                logger.warn(
+                    { code: (error as { code?: unknown })?.code },
+                    'WhatsApp delete-for-me sync unavailable; continuing with Inbox deletion',
+                );
+            }
+        } else {
+            whatsappSynced = false;
+        }
+
+        if (targetFromMe && scope === 'everyone') {
+            await prisma.outgoingMessage.update({
+                where: { pkId: targetPkId },
+                data: {
+                    message: encryptMessage('Pesan ini telah dihapus'),
+                    mediaPath: null,
+                    status: 'revoked',
+                    updatedAt: new Date(),
+                },
+            });
+        } else if (targetFromMe) {
+            await prisma.outgoingMessage.delete({ where: { pkId: targetPkId } });
+        } else {
+            await prisma.incomingMessage.delete({ where: { pkId: targetPkId } });
+        }
+        await deleteMessageReactions(
+            devicePkId,
+            sessionId,
+            whatsappTargetId,
+        ).catch((error) => {
+            logger.warn(
+                { code: (error as { code?: unknown })?.code },
+                'Failed to delete reaction metadata for deleted message',
+            );
+        });
+
+        const event = {
+            targetMessageId: whatsappTargetId,
+            targetFromMe,
+            conversationJid: jid,
+            scope,
+            placeholder: scope === 'everyone' ? 'Pesan ini telah dihapus' : null,
+            whatsappSynced,
+        };
+        getSocketIO()
+            .to(`session:${sessionId}`)
+            .emit(`message-deleted:${sessionId}`, event);
+
+        return res.status(200).json({ success: true, deleted: event });
+    } catch (error) {
+        logger.warn(
+            { code: (error as { code?: unknown })?.code },
+            'Failed to delete Inbox message',
+        );
+        return res.status(500).json({
+            message:
+                error instanceof Error
+                    ? error.message
+                    : 'Gagal menghapus pesan WhatsApp',
+        });
+    }
 };
 
 export const sendButton: RequestHandler = async (req, res) => {

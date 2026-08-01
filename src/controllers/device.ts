@@ -21,6 +21,11 @@ import {
     getInboxProfileCache,
     getInboxProfileCacheSummaries,
 } from '../services/inboxProfileCache';
+import {
+    deleteAllDeviceReactions,
+    deleteConversationReactions,
+    getConversationMessageReactions,
+} from '../services/messageReaction';
 import { 
     getDeviceHealth, 
     pauseDevice, 
@@ -933,6 +938,12 @@ export const deleteConversation: RequestHandler = async (req, res) => {
                 },
             }),
         ]);
+        await deleteConversationReactions(device.pkId, from).catch((error) => {
+            logger.warn(
+                { code: (error as { code?: unknown })?.code },
+                'Failed to delete conversation reaction metadata',
+            );
+        });
 
         const deletedCount = incomingResult.count + outgoingResult.count;
 
@@ -1036,6 +1047,12 @@ export const deleteAllInbox: RequestHandler = async (req, res) => {
                 where: outgoingOwnership.length > 0 ? { OR: outgoingOwnership } : { pkId: -1 },
             }),
         ]);
+        await deleteAllDeviceReactions(device.pkId).catch((error) => {
+            logger.warn(
+                { code: (error as { code?: unknown })?.code },
+                'Failed to delete device reaction metadata',
+            );
+        });
 
         const deletedCount = incomingResult.count + outgoingResult.count;
 
@@ -1779,5 +1796,46 @@ export const getDeviceInbox: RequestHandler = async (req, res) => {
     } catch (error) {
         logger.error(error);
         res.status(500).json({ message: 'Internal server error' });
+    }
+};
+
+/**
+ * Get reaction metadata for one open Inbox conversation. This endpoint is
+ * deliberately separate from the Inbox list so a reaction failure can never
+ * prevent incoming/outgoing messages from loading.
+ */
+export const getInboxConversationReactions: RequestHandler = async (req, res) => {
+    try {
+        const deviceUuid = req.params.deviceId;
+        const conversationJid =
+            typeof req.query.conversationJid === 'string'
+                ? req.query.conversationJid.trim()
+                : '';
+
+        if (!isUUID(deviceUuid) || !conversationJid) {
+            return res.status(400).json({ message: 'Invalid reaction query' });
+        }
+
+        const device = await prisma.device.findFirst({
+            where: { id: deviceUuid, userId: req.authenticatedUser.pkId },
+            select: { pkId: true },
+        });
+        if (!device) return res.status(404).json({ message: 'Device not found' });
+
+        const reactions = await getConversationMessageReactions(
+            device.pkId,
+            conversationJid,
+        );
+        res.setHeader('Cache-Control', 'no-store');
+        return res.status(200).json(reactions);
+    } catch (error) {
+        // Reaction metadata is optional. Keep the chat usable if its migration
+        // has not reached a deployment yet or the table is temporarily down.
+        logger.warn(
+            { code: (error as { code?: unknown })?.code },
+            'Failed to load conversation reaction metadata',
+        );
+        res.setHeader('Cache-Control', 'no-store');
+        return res.status(200).json([]);
     }
 };

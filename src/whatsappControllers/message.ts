@@ -31,6 +31,11 @@ import https from 'https';
 import { createDecipheriv } from 'crypto';
 import { createInboxProfileUrl, serializeInboxMediaPath } from '../utils/inboxMedia';
 import { refreshInboxProfileCache } from '../services/inboxProfileCache';
+import {
+    deleteReactionPlaceholder,
+    reactionTimestamp,
+    saveMessageReaction,
+} from '../services/messageReaction';
 
 const whatsappMediaHttpsAgent = new https.Agent({
     family: 4,
@@ -90,6 +95,7 @@ const getPhoneJid = (...jids: Array<string | null | undefined>): string | null =
 export default function messageHandler(sessionId: string, event: BaileysEventEmitter, deviceId?: number) {
     let listening = false;
     let deviceUuidPromise: Promise<string | null> | null = null;
+    let devicePkIdPromise: Promise<number | null> | null = null;
     const getDeviceUuid = () => {
         if (!deviceId) return Promise.resolve(null);
         if (!deviceUuidPromise) {
@@ -98,6 +104,96 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                 .then((device) => device?.id || null);
         }
         return deviceUuidPromise;
+    };
+    const getDevicePkId = () => {
+        if (deviceId) return Promise.resolve(deviceId);
+        if (!devicePkIdPromise) {
+            devicePkIdPromise = prisma.session
+                .findFirst({ where: { sessionId }, select: { deviceId: true } })
+                .then((session) => session?.deviceId || null);
+        }
+        return devicePkIdPromise;
+    };
+
+    const persistReaction = async (
+        targetKey: WAMessageKey,
+        reaction: proto.IReaction,
+        conversationJidOverride?: string,
+    ) => {
+        if (!targetKey.id) return null;
+
+        const reactionDeviceId = await getDevicePkId();
+        if (!reactionDeviceId) return null;
+
+        const targetRemoteJid = targetKey.remoteJid || conversationJidOverride;
+        if (!targetRemoteJid) return null;
+
+        let conversationJid = targetRemoteJid.endsWith('@g.us')
+            ? jidNormalizedUser(targetRemoteJid)
+            : getPhoneJid(
+                  targetRemoteJid,
+                  targetKey.remoteJidAlt,
+                  conversationJidOverride,
+              ) || jidNormalizedUser(targetRemoteJid);
+        const persistedTarget = targetKey.fromMe
+            ? await prisma.outgoingMessage.findFirst({
+                  where: {
+                      sessionId,
+                      OR: [
+                          { waMessageId: targetKey.id },
+                          { id: targetKey.id },
+                      ],
+                  },
+                  select: { to: true },
+              })
+            : await prisma.incomingMessage.findFirst({
+                  where: { deviceId: reactionDeviceId, id: targetKey.id },
+                  select: { from: true },
+              });
+        const persistedConversationJid = persistedTarget
+            ? ('to' in persistedTarget ? persistedTarget.to : persistedTarget.from)
+            : null;
+        if (persistedConversationJid && !persistedConversationJid.endsWith('@lid')) {
+            conversationJid = persistedConversationJid;
+        }
+        const isGroup = conversationJid.endsWith('@g.us');
+        const reactionKey = reaction.key as WAMessageKey | null | undefined;
+        const reactorJid = reactionKey?.fromMe
+            ? 'me'
+            : isGroup
+              ? getPhoneJid(
+                    reactionKey?.participant,
+                    reactionKey?.participantAlt,
+                ) || reactionKey?.participant || conversationJid
+              : conversationJid;
+
+        const saved = await saveMessageReaction({
+            deviceId: reactionDeviceId,
+            sessionId,
+            conversationJid,
+            targetMessageId: targetKey.id,
+            targetFromMe: Boolean(targetKey.fromMe),
+            reactorJid,
+            emoji: reaction.text,
+            reactionMessageId: reactionKey?.id || null,
+            reactedAt: reactionTimestamp(reaction.senderTimestampMs),
+        });
+
+        await deleteReactionPlaceholder({
+            deviceId: reactionDeviceId,
+            sessionId,
+            reactionMessageId: reactionKey?.id,
+        }).catch((error) => {
+            logger.warn(
+                { code: (error as { code?: unknown })?.code },
+                'Failed to remove legacy reaction placeholder',
+            );
+        });
+
+        getSocketIO()
+            .to(`session:${sessionId}`)
+            .emit(`reaction:${sessionId}`, { ...saved, conversationJid });
+        return saved;
     };
 
     // obtain messages history
@@ -141,6 +237,30 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                               jidNormalizedUser(remoteJidRaw);
                         const data = transformPrisma(message);
                         const messageContent = extractMessageContent(message.message);
+                        const reactionMessage = messageContent?.reactionMessage;
+
+                        // A reaction is metadata for another message, not a new
+                        // Inbox row. This exact guard does not alter the normal
+                        // incoming-message path below.
+                        if (reactionMessage?.key?.id) {
+                            try {
+                                await persistReaction(
+                                    reactionMessage.key,
+                                    { ...reactionMessage, key: message.key },
+                                    jid,
+                                );
+                            } catch (reactionError) {
+                                logger.warn(
+                                    {
+                                        sessionId,
+                                        messageId: message.key.id,
+                                        code: (reactionError as { code?: unknown })?.code,
+                                    },
+                                    'Failed to persist reaction message',
+                                );
+                            }
+                            continue;
+                        }
                         const stickerMessage = messageContent?.stickerMessage;
 
                         const messageText =
@@ -1233,6 +1353,22 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                 });
             } catch (e) {
                 logger.error(e, 'An error occured during message reaction update');
+            }
+
+            // Inbox reaction persistence is intentionally independent from the
+            // optional raw Message store above. Missing raw history must not
+            // prevent the reaction from appearing in Inbox.
+            try {
+                await persistReaction(key, reaction);
+            } catch (e) {
+                logger.warn(
+                    {
+                        sessionId,
+                        targetMessageId: key.id,
+                        code: (e as { code?: unknown })?.code,
+                    },
+                    'Failed to persist Inbox reaction metadata',
+                );
             }
         }
     };
