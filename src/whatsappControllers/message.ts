@@ -29,6 +29,7 @@ import sharp from 'sharp';
 import axios from 'axios';
 import https from 'https';
 import { createDecipheriv } from 'crypto';
+import { serializeInboxMediaPath } from '../utils/inboxMedia';
 
 const whatsappMediaHttpsAgent = new https.Agent({
     family: 4,
@@ -87,6 +88,16 @@ const getPhoneJid = (...jids: Array<string | null | undefined>): string | null =
 
 export default function messageHandler(sessionId: string, event: BaileysEventEmitter, deviceId?: number) {
     let listening = false;
+    let deviceUuidPromise: Promise<string | null> | null = null;
+    const getDeviceUuid = () => {
+        if (!deviceId) return Promise.resolve(null);
+        if (!deviceUuidPromise) {
+            deviceUuidPromise = prisma.device
+                .findUnique({ where: { pkId: deviceId }, select: { id: true } })
+                .then((device) => device?.id || null);
+        }
+        return deviceUuidPromise;
+    };
 
     // obtain messages history
     const set: BaileysEventHandler<'messaging-history.set'> = async ({ messages, isLatest }) => {
@@ -598,8 +609,16 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                                                         data: { mediaPath: recoveredMediaPath },
                                                         include: { contact: true },
                                                     });
+                                                const recoveredDeviceUuid = await getDeviceUuid();
                                                 io.emit(`incoming:${sessionId}:media-updated`, {
                                                     ...recoveredMessage,
+                                                    mediaPath: recoveredDeviceUuid
+                                                        ? serializeInboxMediaPath(
+                                                              recoveredMessage.mediaPath,
+                                                              recoveredDeviceUuid,
+                                                              recoveredMessage.id,
+                                                          )
+                                                        : recoveredMessage.mediaPath,
                                                     isGroup: jid.includes('@g.us'),
                                                 });
                                                 logger.info(
@@ -706,8 +725,16 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
 
                                     // Emit socket event untuk real-time update
                                     const emitEventName = `incoming:${sessionId}`;
+                                    const publicDeviceUuid = await getDeviceUuid();
                                     const emitPayload = {
                                         ...incomingMessage,
+                                        mediaPath: publicDeviceUuid
+                                            ? serializeInboxMediaPath(
+                                                  incomingMessage.mediaPath,
+                                                  publicDeviceUuid,
+                                                  incomingMessage.id,
+                                              )
+                                            : incomingMessage.mediaPath,
                                         isGroup: jid.includes('@g.us'),
                                     };
                                     

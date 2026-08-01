@@ -5,11 +5,13 @@ import logger from '../config/logger';
 import { generateSlug } from '../utils/slug';
 import { useDevice } from '../utils/quota';
 import fs from 'fs';
+import path from 'path';
 import schedule from 'node-schedule';
 import { isUUID } from '../utils/uuidChecker';
 import { generateDeviceAccessToken } from '../utils/jwtGenerator';
 import { getInstance, verifyInstance } from '../whatsapp';
 import { hashApiKey } from '../utils/apiKeyHash';
+import { serializeInboxMediaPath, verifyInboxMediaToken } from '../utils/inboxMedia';
 import { 
     getDeviceHealth, 
     pauseDevice, 
@@ -1446,6 +1448,64 @@ async function normalizeIncomingConversationIdentities(messages: any[], devicePk
 }
 
 /**
+ * Serve persisted Inbox media through a regular HTTPS URL. The URL contains an
+ * HMAC token and can therefore be used by img/video elements without exposing a
+ * user JWT or a database data URL to the browser.
+ */
+export const getInboxMedia: RequestHandler = async (req, res) => {
+    try {
+        const { deviceId, messageId } = req.params;
+        const token = typeof req.query.token === 'string' ? req.query.token : '';
+        if (!isUUID(deviceId) || !token || !verifyInboxMediaToken(deviceId, messageId, token)) {
+            return res.status(404).end();
+        }
+
+        const message = await prisma.incomingMessage.findFirst({
+            where: {
+                id: messageId,
+                device: { id: deviceId },
+            },
+            select: { mediaPath: true },
+        });
+        const storedMedia = message?.mediaPath;
+        if (!storedMedia) return res.status(404).end();
+
+        res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+        res.setHeader('Cache-Control', 'private, max-age=86400');
+
+        if (storedMedia.startsWith('data:')) {
+            const match = storedMedia.match(/^data:([^;,]+);base64,(.+)$/);
+            if (!match) return res.status(415).end();
+
+            const contentType = match[1].startsWith('image/')
+                ? match[1]
+                : 'application/octet-stream';
+            const mediaBuffer = Buffer.from(match[2], 'base64');
+            if (mediaBuffer.length === 0) return res.status(404).end();
+
+            res.setHeader('Content-Type', contentType);
+            res.setHeader('Content-Length', String(mediaBuffer.length));
+            return res.status(200).send(mediaBuffer);
+        }
+
+        if (/^https?:\/\//i.test(storedMedia)) {
+            return res.redirect(storedMedia);
+        }
+
+        const mediaRoot = path.resolve('media');
+        const mediaFile = path.resolve(storedMedia);
+        if (mediaFile !== mediaRoot && !mediaFile.startsWith(`${mediaRoot}${path.sep}`)) {
+            return res.status(404).end();
+        }
+        if (!fs.existsSync(mediaFile)) return res.status(404).end();
+        return res.sendFile(mediaFile);
+    } catch (error) {
+        logger.error({ error, messageId: req.params.messageId }, 'Failed to serve Inbox media');
+        return res.status(500).end();
+    }
+};
+
+/**
  * Get incoming messages for a device (persists across session reconnects)
  * GET /devices/:deviceId/inbox
  * Uses deviceId (UUID) → resolved to pkId for DB query.
@@ -1508,7 +1568,15 @@ export const getDeviceInbox: RequestHandler = async (req, res) => {
             messages,
             device.pkId,
         );
-        const serialized = normalizedMessages.map((m) => serializePrisma(m));
+        const serialized = normalizedMessages.map((message) => {
+            const item = serializePrisma(message);
+            item.mediaPath = serializeInboxMediaPath(
+                message.mediaPath,
+                deviceUuid,
+                message.id,
+            );
+            return item;
+        });
         const currentPage = Math.max(1, Number(page) || 1);
         const totalPages = Math.ceil(totalMessages / Number(pageSize));
         const hasMore = currentPage * Number(pageSize) < totalMessages;
