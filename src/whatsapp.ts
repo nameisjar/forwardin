@@ -18,6 +18,8 @@ import { delay } from './utils/delay';
 import { useSession } from './utils/useSession';
 import { Store } from './store';
 import { getSocketIO } from './socket';
+import { warmInboxProfileCache } from './services/inboxProfileCache';
+import { createInboxProfileUrl } from './utils/inboxMedia';
 import { Server } from 'socket.io';
 import fs from 'fs';
 import { WhatsAppGroupService } from './services/whatsappGroup';
@@ -609,9 +611,30 @@ export async function createInstance(options: createInstanceOptions) {
             // ?back here: forbid duplicate phone numbers
             const phone = sock.user?.id.split(':')[0];
 
-            await prisma.device.update({
+            const connectedDevice = await prisma.device.update({
                 where: { pkId: deviceId },
                 data: { phone, updatedAt: new Date() },
+            });
+
+            // Populate missing/stale profile pictures without putting WhatsApp
+            // or CDN work in the browser-facing profile endpoint.
+            void warmInboxProfileCache({
+                deviceId,
+                sessionId,
+                session: sock,
+                onAvailable: (jid) => {
+                    const profileUrl = createInboxProfileUrl(connectedDevice.id, jid);
+                    getSocketIO()
+                        .to(`session:${sessionId}`)
+                        .to(`device:${connectedDevice.id}`)
+                        .emit(`incoming:${sessionId}:profile-updated`, {
+                            from: jid,
+                            profilePicUrl: jid.endsWith('@g.us') ? null : profileUrl,
+                            groupPicUrl: jid.endsWith('@g.us') ? profileUrl : null,
+                            profilePictureStatus: 'available',
+                            isGroup: jid.endsWith('@g.us'),
+                        });
+                },
             });
 
             // 🆕 Send success message ke SSE sebelum close
@@ -703,7 +726,7 @@ export async function createInstance(options: createInstanceOptions) {
             }
 
             const io: Server = getSocketIO();
-            io.emit(`device:${device.id}:status`, connection);
+            io.to(`device:${device.id}`).emit(`device:${device.id}:status`, connection);
         } catch (error: any) {
             // Handle case where device no longer exists
             if (error.code === 'P2025') {
@@ -791,7 +814,7 @@ export async function createInstance(options: createInstanceOptions) {
                     
                     if (device) {
                         // Emit event untuk grup spesifik yang baru join
-                        io.emit(`device:${device.id}:group-joined`, {
+                        io.to(`device:${device.id}`).emit(`device:${device.id}:group-joined`, {
                             groupId: group.id,
                             groupName: groupData.subject,
                             participants: groupMetadata.participants?.length || 0,
@@ -800,7 +823,7 @@ export async function createInstance(options: createInstanceOptions) {
                         });
                         
                         // Emit event umum bahwa ada update di daftar grup
-                        io.emit(`device:${device.id}:groups-updated`, {
+                        io.to(`device:${device.id}`).emit(`device:${device.id}:groups-updated`, {
                             action: 'group-joined',
                             groupId: group.id,
                             timestamp: new Date().toISOString(),
@@ -876,7 +899,7 @@ export async function createInstance(options: createInstanceOptions) {
                     });
                     
                     if (device) {
-                        io.emit(`device:${device.id}:groups-updated`, {
+                        io.to(`device:${device.id}`).emit(`device:${device.id}:groups-updated`, {
                             action: 'group-updated',
                             groupId: update.id,
                             timestamp: new Date().toISOString(),
@@ -946,13 +969,13 @@ export async function createInstance(options: createInstanceOptions) {
                 });
                 
                 if (device) {
-                    io.emit(`device:${device.id}:group-left`, {
+                    io.to(`device:${device.id}`).emit(`device:${device.id}:group-left`, {
                         groupId: groupId,
                         action: action,
                         timestamp: new Date().toISOString(),
                     });
                     
-                    io.emit(`device:${device.id}:groups-updated`, {
+                    io.to(`device:${device.id}`).emit(`device:${device.id}:groups-updated`, {
                         action: 'group-left',
                         groupId: groupId,
                         timestamp: new Date().toISOString(),
@@ -985,7 +1008,7 @@ export async function createInstance(options: createInstanceOptions) {
                     });
                     
                     if (device) {
-                        io.emit(`device:${device.id}:groups-updated`, {
+                        io.to(`device:${device.id}`).emit(`device:${device.id}:groups-updated`, {
                             action: 'participants-updated',
                             groupId: groupId,
                             timestamp: new Date().toISOString(),
@@ -1060,13 +1083,13 @@ export async function createInstance(options: createInstanceOptions) {
                             });
                             
                             if (device) {
-                                io.emit(`device:${device.id}:group-left`, {
+                                io.to(`device:${device.id}`).emit(`device:${device.id}:group-left`, {
                                     groupId: groupId,
                                     action: 'leave',
                                     timestamp: new Date().toISOString(),
                                 });
                                 
-                                io.emit(`device:${device.id}:groups-updated`, {
+                                io.to(`device:${device.id}`).emit(`device:${device.id}:groups-updated`, {
                                     action: 'group-left',
                                     groupId: groupId,
                                     timestamp: new Date().toISOString(),
@@ -1176,7 +1199,7 @@ export async function createInstance(options: createInstanceOptions) {
                             });
 
                             if (device) {
-                                io.emit(`device:${device.id}:message-status`, {
+                                io.to(`device:${device.id}`).emit(`device:${device.id}:message-status`, {
                                     waMessageId: messageId,
                                     status: newStatus,
                                     to: update.key.remoteJid,
@@ -1217,7 +1240,7 @@ export async function createInstance(options: createInstanceOptions) {
                                 });
 
                                 if (device) {
-                                    io.emit(`device:${device.id}:message-status`, {
+                                    io.to(`device:${device.id}`).emit(`device:${device.id}:message-status`, {
                                         waMessageId: messageId,
                                         status: newStatus,
                                         to: update.key.remoteJid,

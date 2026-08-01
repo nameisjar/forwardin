@@ -30,6 +30,7 @@ import axios from 'axios';
 import https from 'https';
 import { createDecipheriv } from 'crypto';
 import { createInboxProfileUrl, serializeInboxMediaPath } from '../utils/inboxMedia';
+import { refreshInboxProfileCache } from '../services/inboxProfileCache';
 
 const whatsappMediaHttpsAgent = new https.Agent({
     family: 4,
@@ -234,8 +235,8 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                                             },
                                             include: { contact: true },
                                         });
-                                        io.emit(`message:${sessionId}`, outgoingMessage);
-                                        io.emit(
+                                        io.to(`session:${sessionId}`).emit(`message:${sessionId}`, outgoingMessage);
+                                        io.to(`session:${sessionId}`).emit(
                                             `outgoing:${sessionId}`,
                                             decryptOutgoingMessage(outgoingMessage),
                                         );
@@ -267,8 +268,8 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                                                 });
                                                 
                                                 if (updatedMessage) {
-                                                    io.emit(`message:${sessionId}`, updatedMessage);
-                                                    io.emit(
+                                                    io.to(`session:${sessionId}`).emit(`message:${sessionId}`, updatedMessage);
+                                                    io.to(`session:${sessionId}`).emit(
                                                         `outgoing:${sessionId}`,
                                                         decryptOutgoingMessage(updatedMessage),
                                                     );
@@ -289,8 +290,8 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                                                 },
                                                 include: { contact: true },
                                             });
-                                            io.emit(`message:${sessionId}`, outgoingMessage);
-                                            io.emit(
+                                            io.to(`session:${sessionId}`).emit(`message:${sessionId}`, outgoingMessage);
+                                            io.to(`session:${sessionId}`).emit(
                                                 `outgoing:${sessionId}`,
                                                 decryptOutgoingMessage(outgoingMessage),
                                             );
@@ -610,7 +611,7 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                                                         include: { contact: true },
                                                     });
                                                 const recoveredDeviceUuid = await getDeviceUuid();
-                                                io.emit(`incoming:${sessionId}:media-updated`, {
+                                                io.to(`session:${sessionId}`).emit(`incoming:${sessionId}:media-updated`, {
                                                     ...recoveredMessage,
                                                     mediaPath: recoveredDeviceUuid
                                                         ? serializeInboxMediaPath(
@@ -643,111 +644,46 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                                         })();
                                     }
 
-                                    // ✅ BACKGROUND: Fetch dan update profile/group pictures (non-blocking)
-                                    (async () => {
-                                        try {
-                                            let picUrlToUpdate: string | null = null;
-                                            let fieldToUpdate: 'profilePicUrl' | 'groupPicUrl' = 'profilePicUrl';
-                                            
-                                            if (jid.includes('@g.us')) {
-                                                // GROUP: Fetch group picture
-                                                if (session && typeof session.profilePictureUrl === 'function') {
-                                                    try {
-                                                        const picUrl = await session.profilePictureUrl(jid, 'image');
-                                                        picUrlToUpdate = picUrl || null;
-                                                        fieldToUpdate = 'groupPicUrl';
-                                                    } catch {
-                                                        picUrlToUpdate = null;
-                                                    }
-                                                    if (!picUrlToUpdate) {
-                                                        try {
-                                                            picUrlToUpdate = (await session.profilePictureUrl(jid)) || null;
-                                                        } catch {
-                                                            // Group might not have a profile picture
-                                                            picUrlToUpdate = null;
-                                                        }
-                                                    }
-                                                }
-                                            } else {
-                                                // PERSONAL: Fetch profile picture
-                                                if (session && typeof session.profilePictureUrl === 'function') {
-                                                    try {
-                                                        const picUrl = await session.profilePictureUrl(jid, 'image');
-                                                        picUrlToUpdate = picUrl || null;
-                                                        fieldToUpdate = 'profilePicUrl';
-                                                    } catch {
-                                                        picUrlToUpdate = null;
-                                                    }
-                                                    if (!picUrlToUpdate) {
-                                                        try {
-                                                            picUrlToUpdate = (await session.profilePictureUrl(jid)) || null;
-                                                        } catch {
-                                                            // Privacy settings may hide the user's picture.
-                                                            picUrlToUpdate = null;
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                            
-                                            // Update database if picture found
-                                            if (picUrlToUpdate) {
-                                                const updateData: { profilePicUrl?: string; groupPicUrl?: string } = {};
-                                                if (fieldToUpdate === 'profilePicUrl') {
-                                                    updateData.profilePicUrl = picUrlToUpdate;
-                                                } else {
-                                                    updateData.groupPicUrl = picUrlToUpdate;
-                                                }
-                                                
-                                                await prisma.incomingMessage.update({
-                                                    where: { id: message.key.id! },
-                                                    data: updateData,
-                                                });
-                                                
-                                                // Emit updated message with picture
-                                                const updatedMessage = await prisma.incomingMessage.findUnique({
-                                                    where: { id: message.key.id! },
-                                                    include: { contact: true },
-                                                });
-                                                
-                                                if (updatedMessage) {
-                                                    const emitEventName = `incoming:${sessionId}:profile-updated`;
-                                                    const publicDeviceUuid = await getDeviceUuid();
-                                                    const profileUrl = publicDeviceUuid
-                                                        ? createInboxProfileUrl(publicDeviceUuid, jid)
-                                                        : null;
-                                                    io.emit(emitEventName, {
+                                    // Fetch and persist the binary outside the HTTP request path.
+                                    // The browser never receives WhatsApp's short-lived CDN URL.
+                                    if (
+                                        deviceId &&
+                                        !jid.endsWith('@lid') &&
+                                        session &&
+                                        typeof session.profilePictureUrl === 'function'
+                                    ) {
+                                        void refreshInboxProfileCache({ deviceId, jid, session })
+                                            .then(async (result) => {
+                                                if (!result.hasImage) return;
+
+                                                const [updatedMessage, publicDeviceUuid] = await Promise.all([
+                                                    prisma.incomingMessage.findUnique({
+                                                        where: { id: message.key.id! },
+                                                        include: { contact: true },
+                                                    }),
+                                                    getDeviceUuid(),
+                                                ]);
+                                                if (!updatedMessage || !publicDeviceUuid) return;
+
+                                                const profileUrl = createInboxProfileUrl(publicDeviceUuid, jid);
+                                                io.to(`session:${sessionId}`).emit(
+                                                    `incoming:${sessionId}:profile-updated`,
+                                                    {
                                                         ...updatedMessage,
-                                                        profilePicUrl:
-                                                            !jid.includes('@g.us') && profileUrl
-                                                                ? profileUrl
-                                                                : updatedMessage.profilePicUrl,
-                                                        groupPicUrl:
-                                                            jid.includes('@g.us') && profileUrl
-                                                                ? profileUrl
-                                                                : updatedMessage.groupPicUrl,
+                                                        profilePicUrl: jid.includes('@g.us') ? null : profileUrl,
+                                                        groupPicUrl: jid.includes('@g.us') ? profileUrl : null,
+                                                        profilePictureStatus: result.status,
                                                         isGroup: jid.includes('@g.us'),
-                                                    });
-                                                    
-                                                    logger.info({ 
-                                                        eventName: emitEventName,
-                                                        messageId: updatedMessage.id,
-                                                        field: fieldToUpdate,
-                                                        hasProfilePic: !!updatedMessage.profilePicUrl,
-                                                        hasGroupPic: !!updatedMessage.groupPicUrl,
-                                                        connectedClients: io.sockets.sockets.size
-                                                    }, '📸 Profile picture update emitted');
-                                                }
-                                                
-                                                logger.debug({ 
-                                                    jid, 
-                                                    field: fieldToUpdate,
-                                                    picUrl: picUrlToUpdate.substring(0, 50) 
-                                                }, '✅ Picture updated in background');
-                                            }
-                                        } catch (picErr) {
-                                            logger.debug({ jid, picErr }, '❌ Background picture fetch failed');
-                                        }
-                                    })();
+                                                    },
+                                                );
+                                            })
+                                            .catch((picError) => {
+                                                logger.debug(
+                                                    { code: picError?.code, messageId: message.key.id },
+                                                    '[InboxProfile] Background refresh failed',
+                                                );
+                                            });
+                                    }
 
                                     // Emit socket event untuk real-time update
                                     const emitEventName = `incoming:${sessionId}`;
@@ -761,24 +697,19 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                                                   incomingMessage.id,
                                               )
                                             : incomingMessage.mediaPath,
-                                        profilePicUrl:
-                                            publicDeviceUuid && !jid.includes('@g.us') && !jid.includes('@lid')
-                                                ? createInboxProfileUrl(publicDeviceUuid, jid)
-                                                : incomingMessage.profilePicUrl,
-                                        groupPicUrl:
-                                            publicDeviceUuid && jid.includes('@g.us')
-                                                ? createInboxProfileUrl(publicDeviceUuid, jid)
-                                                : incomingMessage.groupPicUrl,
+                                        profilePicUrl: null,
+                                        groupPicUrl: null,
+                                        profilePictureStatus: 'pending',
                                         isGroup: jid.includes('@g.us'),
                                     };
                                     
-                                    io.emit(emitEventName, emitPayload);
+                                    io.to(`session:${sessionId}`).emit(emitEventName, emitPayload);
                                     
                                     logger.info(
                                         { 
                                             sessionId, 
-                                            from: jid, 
-                                            participant, 
+                                            from: redactPhone(jid),
+                                            participant: redactPhone(participant || ''),
                                             pushName, 
                                             groupName, 
                                             messageId: message.key.id,
@@ -1045,7 +976,7 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                                         eventPayload.readBy = updateData.readBy;
                                     }
                                     
-                                    io.emit(`device:${deviceId}:message-status`, eventPayload);
+                                    io.to(`session:${sessionId}`).emit(`device:${deviceId}:message-status`, eventPayload);
                                     
                                     logger.info(
                                         {

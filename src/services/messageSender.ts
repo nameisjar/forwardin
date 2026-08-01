@@ -7,6 +7,8 @@ import prisma from '../utils/db';
 import logger from '../config/logger';
 import { encryptMessage } from '../utils/messageEncryption';
 import { getSocketIO } from '../socket';
+import { createInboxProfileUrl } from '../utils/inboxMedia';
+import { refreshInboxProfileCache } from './inboxProfileCache';
 
 // ============================================
 // 🚀 MESSAGE SENDER SERVICE
@@ -61,6 +63,7 @@ async function persistOutgoingMessage(params: {
     messageId?: string;
     text?: string;
     mediaPath?: string | null;
+    session?: any;
 }): Promise<void> {
     if (!params.messageId) return;
 
@@ -111,11 +114,36 @@ async function persistOutgoingMessage(params: {
             },
         });
 
-        getSocketIO().emit(`outgoing:${context.sessionId}`, {
+        getSocketIO().to(`session:${context.sessionId}`).emit(`outgoing:${context.sessionId}`, {
             ...savedMessage,
             message: params.text || '',
             isOutgoing: true,
         });
+
+        if (
+            !params.jid.endsWith('@lid') &&
+            params.session &&
+            typeof params.session.profilePictureUrl === 'function'
+        ) {
+            void refreshInboxProfileCache({
+                deviceId: context.pkId,
+                jid: params.jid,
+                session: params.session,
+            }).then((result) => {
+                if (!result.hasImage) return;
+                const profileUrl = createInboxProfileUrl(params.deviceId, params.jid);
+                getSocketIO().to(`session:${context.sessionId}`).emit(
+                    `incoming:${context.sessionId}:profile-updated`,
+                    {
+                        from: params.jid,
+                        profilePicUrl: params.jid.includes('@g.us') ? null : profileUrl,
+                        groupPicUrl: params.jid.includes('@g.us') ? profileUrl : null,
+                        profilePictureStatus: result.status,
+                        isGroup: params.jid.includes('@g.us'),
+                    },
+                );
+            }).catch(() => undefined);
+        }
     } catch (error) {
         // Pengiriman WhatsApp sudah sukses; kegagalan pencatatan tidak boleh
         // mengubah hasil kirim, tetapi harus terlihat jelas di log.
@@ -191,7 +219,7 @@ export async function sendTextMessage(
         );
 
         const messageId = result?.key?.id;
-        await persistOutgoingMessage({ deviceId, jid, messageId, text });
+        await persistOutgoingMessage({ deviceId, jid, messageId, text, session });
         
         // 🔥 Increment message count for health tracking
         const devicePkId = await getDevicePkId(deviceId);
@@ -258,6 +286,7 @@ export async function sendImageMessage(
             messageId,
             text: options?.caption || '[Gambar]',
             mediaPath: !Buffer.isBuffer(image) ? image.url : null,
+            session,
         });
         
         // 🔥 Increment message count for health tracking
@@ -328,6 +357,7 @@ export async function sendDocumentMessage(
             messageId,
             text: options?.caption || options?.fileName || '[Dokumen]',
             mediaPath: !Buffer.isBuffer(document) ? document.url : null,
+            session,
         });
         
         // 🔥 Increment message count for health tracking
@@ -395,6 +425,7 @@ export async function sendVideoMessage(
             messageId,
             text: options?.caption || '[Video]',
             mediaPath: !Buffer.isBuffer(video) ? video.url : null,
+            session,
         });
         
         // 🔥 Increment message count for health tracking
@@ -464,6 +495,7 @@ export async function sendAudioMessage(
             messageId,
             text: options?.fileName || '[Audio]',
             mediaPath: !Buffer.isBuffer(audio) ? audio.url : null,
+            session,
         });
         
         // 🔥 Increment message count for health tracking
@@ -564,6 +596,7 @@ export async function sendGenericMessage(
             messageId,
             text: genericText,
             mediaPath: genericMedia,
+            session,
         });
         
         // 🔥 Increment message count for health tracking

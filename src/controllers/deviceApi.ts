@@ -188,7 +188,7 @@ export const sendMessages: RequestHandler = async (req, res) => {
                         },
                     });
 
-                    getSocketIO().emit(`outgoing:${sessionId}`, {
+                    getSocketIO().to(`session:${sessionId}`).emit(`outgoing:${sessionId}`, {
                         ...savedMessage,
                         message: messageText,
                         isOutgoing: true,
@@ -582,7 +582,7 @@ export const sendInboxMediaMessage: RequestHandler = async (req, res) => {
                 mediaType,
                 isOutgoing: true,
             };
-            getSocketIO().emit(`outgoing:${sessionId}`, responseMessage);
+            getSocketIO().to(`session:${sessionId}`).emit(`outgoing:${sessionId}`, responseMessage);
             return res.status(200).json({ result, message: responseMessage });
         } catch (error) {
             if (uploadedPath) {

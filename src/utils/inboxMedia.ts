@@ -6,9 +6,11 @@ const signatureFor = (deviceId: string, messageId: string) =>
         .update(`${deviceId}:${messageId}`)
         .digest('hex');
 
-const profileSignatureFor = (deviceId: string, jid: string) =>
+const PROFILE_URL_TTL_SECONDS = 60 * 60;
+
+const profileSignatureFor = (deviceId: string, jid: string, expires: number) =>
     createHmac('sha256', jwtSecretKey)
-        .update(`profile:${deviceId}:${jid}`)
+        .update(`profile:${deviceId}:${jid}:${expires}`)
         .digest('hex');
 
 export function createInboxMediaUrl(deviceId: string, messageId: string): string {
@@ -42,12 +44,22 @@ export function serializeInboxMediaPath(
 }
 
 export function createInboxProfileUrl(deviceId: string, jid: string): string {
-    const token = profileSignatureFor(deviceId, jid);
-    return `/inbox-profile/${encodeURIComponent(deviceId)}/${encodeURIComponent(jid)}?token=${token}`;
+    const expires = Math.floor(Date.now() / 1000) + PROFILE_URL_TTL_SECONDS;
+    const token = profileSignatureFor(deviceId, jid, expires);
+    return `/inbox-profile/${encodeURIComponent(deviceId)}/${encodeURIComponent(jid)}?expires=${expires}&token=${token}`;
 }
 
-export function verifyInboxProfileToken(deviceId: string, jid: string, token: string): boolean {
-    const expected = Buffer.from(profileSignatureFor(deviceId, jid), 'hex');
+export function verifyInboxProfileToken(
+    deviceId: string,
+    jid: string,
+    expires: number,
+    token: string,
+): boolean {
+    const now = Math.floor(Date.now() / 1000);
+    if (!Number.isSafeInteger(expires) || expires < now || expires > now + PROFILE_URL_TTL_SECONDS + 60) {
+        return false;
+    }
+    const expected = Buffer.from(profileSignatureFor(deviceId, jid, expires), 'hex');
     let provided: Buffer;
     try {
         provided = Buffer.from(token, 'hex');

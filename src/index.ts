@@ -73,16 +73,31 @@ app.use(
             return cb(new Error('Not allowed by CORS'));
         },
         credentials: false,
+        exposedHeaders: ['Retry-After', 'X-Profile-Status'],
     }),
 );
 
 // 🛡️ Global Rate Limiter - 100 requests per minute per IP
+// Media thumbnails are requested in parallel by the Inbox. Keep them isolated
+// from API traffic so a page of avatars cannot consume the user's API quota.
+const inboxMediaLimiter = rateLimit({
+    windowMs: 1 * 60 * 1000,
+    max: 300,
+    message: { error: 'Too many media requests, please try again later.', retryAfter: 60 },
+    standardHeaders: true,
+    legacyHeaders: false,
+});
+app.use('/inbox-media', inboxMediaLimiter);
+app.use('/inbox-profile', inboxMediaLimiter);
+
 const globalLimiter = rateLimit({
     windowMs: 1 * 60 * 1000, // 1 minute
     max: 100, // max 100 requests per IP per minute
     message: { error: 'Too many requests, please try again later.', retryAfter: 60 },
     standardHeaders: true,
     legacyHeaders: false,
+    skip: (req) =>
+        req.path.startsWith('/inbox-media/') || req.path.startsWith('/inbox-profile/'),
     handler: (req, res) => {
         logger.warn({ ip: req.ip, path: req.path }, '[Security] Rate limit exceeded');
         res.status(429).json({ error: 'Too many requests, please try again later.' });

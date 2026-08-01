@@ -6,8 +6,6 @@ import { generateSlug } from '../utils/slug';
 import { useDevice } from '../utils/quota';
 import fs from 'fs';
 import path from 'path';
-import https from 'https';
-import axios from 'axios';
 import schedule from 'node-schedule';
 import { isUUID } from '../utils/uuidChecker';
 import { generateDeviceAccessToken } from '../utils/jwtGenerator';
@@ -19,6 +17,10 @@ import {
     verifyInboxMediaToken,
     verifyInboxProfileToken,
 } from '../utils/inboxMedia';
+import {
+    getInboxProfileCache,
+    getInboxProfileCacheSummaries,
+} from '../services/inboxProfileCache';
 import { 
     getDeviceHealth, 
     pauseDevice, 
@@ -26,12 +28,6 @@ import {
     checkAutoResume,
     cleanupOldSignals,
 } from '../services/signalDetector';
-
-const inboxProfileHttpsAgent = new https.Agent({
-    family: 4,
-    keepAlive: true,
-    maxSockets: 20,
-});
 
 export const getDevices: RequestHandler = async (req, res) => {
     const pkId = req.authenticatedUser.pkId;
@@ -1276,6 +1272,10 @@ export const getDeviceOutboxConversations: RequestHandler = async (req, res) => 
         const counts = new Map(
             groupedRecipients.map((group) => [group.to, group._count._all]),
         );
+        const profileCacheByJid = await getInboxProfileCacheSummaries(
+            device.pkId,
+            recipientJids,
+        );
         const uniqueRecipients = new Set<string>();
         let conversations = decryptedMessages
             .filter((message) => {
@@ -1288,19 +1288,24 @@ export const getDeviceOutboxConversations: RequestHandler = async (req, res) => 
                 const phone = message.to.split('@')[0].replace(/\D/g, '');
                 const contact =
                     message.contact || incomingIdentity?.contact || contactsByPhone.get(phone) || null;
+                const profileCache = profileCacheByJid.get(message.to);
+                const hasCachedProfile = Boolean(profileCache?.hasImage);
 
                 return {
                     ...message,
                     contact,
                     pushName: incomingIdentity?.pushName || null,
                     groupName: incomingIdentity?.groupName || null,
-                    groupPicUrl: message.to.endsWith('@g.us')
+                    groupPicUrl: message.to.endsWith('@g.us') && hasCachedProfile
                         ? createInboxProfileUrl(deviceUuid, message.to)
                         : null,
                     profilePicUrl:
-                        !message.to.endsWith('@g.us') && !message.to.endsWith('@lid')
+                        !message.to.endsWith('@g.us') &&
+                        !message.to.endsWith('@lid') &&
+                        hasCachedProfile
                             ? createInboxProfileUrl(deviceUuid, message.to)
                             : null,
+                    profilePictureStatus: profileCache?.status || 'unknown',
                     messageCount: counts.get(message.to) || 1,
                 };
             });
@@ -1535,134 +1540,46 @@ export const getInboxProfilePicture: RequestHandler = async (req, res) => {
     try {
         const { deviceId, jid } = req.params;
         const token = typeof req.query.token === 'string' ? req.query.token : '';
-        if (!isUUID(deviceId) || !jid || !token || !verifyInboxProfileToken(deviceId, jid, token)) {
+        const expires = Number(req.query.expires);
+        if (
+            !isUUID(deviceId) ||
+            !jid ||
+            !token ||
+            !verifyInboxProfileToken(deviceId, jid, expires, token)
+        ) {
             return res.status(404).end();
         }
 
         const device = await prisma.device.findUnique({
             where: { id: deviceId },
-            select: {
-                pkId: true,
-                sessions: {
-                    where: { id: { contains: 'config' } },
-                    select: { sessionId: true },
-                    take: 1,
-                },
-            },
+            select: { pkId: true },
         });
         if (!device) return res.status(404).end();
 
-        const isGroup = jid.endsWith('@g.us');
-        const [latestProfile, cachedProfile] = await Promise.all([
-            prisma.incomingMessage.findFirst({
-                where: { deviceId: device.pkId, from: jid },
-                orderBy: { receivedAt: 'desc' },
-                select: { id: true, profilePicUrl: true, groupPicUrl: true },
-            }),
-            prisma.incomingMessage.findFirst({
-                where: {
-                    deviceId: device.pkId,
-                    from: jid,
-                    ...(isGroup
-                        ? { groupPicUrl: { not: null } }
-                        : { profilePicUrl: { not: null } }),
-                },
-                orderBy: { receivedAt: 'desc' },
-                select: { id: true, profilePicUrl: true, groupPicUrl: true },
-            }),
-        ]);
-        const storedSource = isGroup
-            ? cachedProfile?.groupPicUrl
-            : cachedProfile?.profilePicUrl;
-
-        const decodeDataUrl = (source: string) => {
-            const match = source.match(/^data:(image\/[^;,]+);base64,(.+)$/);
-            if (!match) return null;
-            const data = Buffer.from(match[2], 'base64');
-            return data.length > 0 ? { data, contentType: match[1] } : null;
-        };
-        const downloadProfile = async (source: string) => {
-            if (source.startsWith('data:')) return decodeDataUrl(source);
-            if (!/^https:\/\//i.test(source)) return null;
-            const response = await axios.get<Buffer>(source, {
-                responseType: 'arraybuffer',
-                timeout: 15_000,
-                maxContentLength: 5 * 1024 * 1024,
-                maxBodyLength: 5 * 1024 * 1024,
-                httpsAgent: inboxProfileHttpsAgent,
-                headers: { Accept: 'image/*', 'User-Agent': 'Mozilla/5.0' },
-            });
-            const data = Buffer.from(response.data);
-            const rawContentType = response.headers['content-type'];
-            const contentType =
-                typeof rawContentType === 'string' && rawContentType.startsWith('image/')
-                    ? rawContentType
-                    : 'image/jpeg';
-            return data.length > 0 ? { data, contentType } : null;
-        };
-
-        let freshSource: string | null = null;
-        let picture = null;
-        if (storedSource) {
-            try {
-                picture = await downloadProfile(storedSource);
-            } catch {
-                picture = null;
-            }
-        }
-
-        if (!picture) {
-            const sessionId = device.sessions[0]?.sessionId;
-            const session = sessionId ? getInstance(sessionId) : null;
-            if (session && typeof session.profilePictureUrl === 'function') {
-                try {
-                    freshSource = (await session.profilePictureUrl(jid, 'image')) || null;
-                } catch {
-                    freshSource = null;
-                }
-                if (!freshSource) {
-                    try {
-                        freshSource = (await session.profilePictureUrl(jid)) || null;
-                    } catch {
-                        freshSource = null;
-                    }
-                }
-                if (freshSource) {
-                    try {
-                        picture = await downloadProfile(freshSource);
-                    } catch {
-                        picture = null;
-                    }
-                }
-            }
-        }
-
-        if (!picture) {
-            // Never redirect the browser to WhatsApp's temporary profile CDN.
-            // Those URLs frequently reject cross-site requests with 403. The
-            // Inbox will use its initial avatar when no cached image is available.
+        const picture = await getInboxProfileCache(device.pkId, jid);
+        if (!picture?.imageData?.length || !picture.mimeType?.startsWith('image/')) {
             res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
             res.setHeader('Cache-Control', 'no-store');
+            res.setHeader('X-Profile-Status', picture?.status || 'unknown');
+            if (picture?.nextRetryAt) {
+                const retryAfter = Math.max(
+                    60,
+                    Math.ceil((picture.nextRetryAt.getTime() - Date.now()) / 1000),
+                );
+                res.setHeader('Retry-After', String(retryAfter));
+            }
             return res.status(204).end();
         }
 
-        if (latestProfile && (Boolean(freshSource) || !storedSource?.startsWith('data:'))) {
-            const dataUrl = `data:${picture.contentType};base64,${picture.data.toString('base64')}`;
-            await prisma.incomingMessage
-                .update({
-                    where: { id: latestProfile.id },
-                    data: isGroup ? { groupPicUrl: dataUrl } : { profilePicUrl: dataUrl },
-                })
-                .catch(() => undefined);
-        }
-
-        res.setHeader('Content-Type', picture.contentType);
-        res.setHeader('Content-Length', String(picture.data.length));
+        const imageData = Buffer.from(picture.imageData);
+        res.setHeader('Content-Type', picture.mimeType);
+        res.setHeader('Content-Length', String(imageData.length));
         res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
         res.setHeader('Cache-Control', 'private, max-age=3600');
-        return res.status(200).send(picture.data);
+        res.setHeader('X-Profile-Status', picture.status);
+        return res.status(200).send(imageData);
     } catch (error) {
-        logger.error({ error }, 'Failed to serve Inbox profile picture');
+        logger.error({ code: (error as { code?: unknown })?.code }, 'Failed to serve Inbox profile picture');
         res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
         res.setHeader('Cache-Control', 'no-store');
         return res.status(204).end();
@@ -1812,6 +1729,10 @@ export const getDeviceInbox: RequestHandler = async (req, res) => {
             messages,
             device.pkId,
         );
+        const profileCacheByJid = await getInboxProfileCacheSummaries(
+            device.pkId,
+            normalizedMessages.map((message) => message.from),
+        );
         const serialized = normalizedMessages.map((message) => {
             const item = serializePrisma(message);
             item.mediaPath = serializeInboxMediaPath(
@@ -1819,11 +1740,18 @@ export const getDeviceInbox: RequestHandler = async (req, res) => {
                 deviceUuid,
                 message.id,
             );
-            const profileUrl = createInboxProfileUrl(deviceUuid, message.from);
-            if (message.from.endsWith('@g.us')) {
-                item.groupPicUrl = profileUrl;
-            } else if (!message.from.endsWith('@lid')) {
-                item.profilePicUrl = profileUrl;
+            const profileCache = profileCacheByJid.get(message.from);
+            item.profilePictureStatus = profileCache?.status || 'unknown';
+            if (profileCache?.hasImage) {
+                const profileUrl = createInboxProfileUrl(deviceUuid, message.from);
+                if (message.from.endsWith('@g.us')) {
+                    item.groupPicUrl = profileUrl;
+                } else if (!message.from.endsWith('@lid')) {
+                    item.profilePicUrl = profileUrl;
+                }
+            } else {
+                item.profilePicUrl = null;
+                item.groupPicUrl = null;
             }
             return item;
         });

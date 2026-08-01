@@ -62,7 +62,11 @@ export function initSocketServer(app: Express.Application): http.Server {
             // Find user by email
             const user = await prisma.user.findUnique({
                 where: { email: decoded.email },
-                include: { privilege: true }
+                select: {
+                    pkId: true,
+                    email: true,
+                    privilege: { select: { pkId: true } },
+                },
             });
             
             if (user) {
@@ -83,10 +87,58 @@ export function initSocketServer(app: Express.Application): http.Server {
         }
     });
 
-    io.on('connection', (socket) => {
+    io.on('connection', async (socket) => {
         logger.info(`[Socket] Client connected: ${socket.id} (admin: ${socket.data.isAdmin})`);
 
+        // Authenticated sockets only receive events for devices/sessions owned
+        // by their account. Unauthenticated clients remain connected for
+        // compatibility but are not placed in any private data room.
+        if (socket.data.authenticated && socket.data.user?.pkId) {
+            socket.join(`user:${socket.data.user.pkId}`);
+            try {
+                const devices = await prisma.device.findMany({
+                    where: { userId: socket.data.user.pkId },
+                    select: {
+                        id: true,
+                        sessions: { select: { sessionId: true } },
+                    },
+                });
+                for (const device of devices) {
+                    socket.join(`device:${device.id}`);
+                    for (const session of device.sessions) {
+                        socket.join(`session:${session.sessionId}`);
+                    }
+                }
+            } catch (error) {
+                logger.error(
+                    { socketId: socket.id, code: (error as { code?: unknown })?.code },
+                    '[Socket] Failed to join private rooms',
+                );
+            }
+        }
+
         // 🔐 Handle monitoring room subscription (admin only)
+        socket.on(
+            'session:subscribe',
+            async (payload: { deviceId?: string; sessionId?: string } = {}) => {
+                if (!socket.data.authenticated || !socket.data.user?.pkId) return;
+                if (!payload.deviceId || !payload.sessionId) return;
+
+                const ownedSession = await prisma.device.findFirst({
+                    where: {
+                        id: payload.deviceId,
+                        userId: socket.data.user.pkId,
+                        sessions: { some: { sessionId: payload.sessionId } },
+                    },
+                    select: { id: true },
+                }).catch(() => null);
+                if (!ownedSession) return;
+
+                socket.join(`device:${ownedSession.id}`);
+                socket.join(`session:${payload.sessionId}`);
+            },
+        );
+
         socket.on('monitoring:subscribe', () => {
             // Check if user is authenticated admin
             if (!socket.data.authenticated || !socket.data.isAdmin) {
