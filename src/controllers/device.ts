@@ -1092,6 +1092,7 @@ export const getDeviceOutbox: RequestHandler = async (req, res) => {
         // Build where clause
         const where: any = {
             deviceId: device.pkId,
+            inboxHiddenAt: null,
         };
 
         // Filter by recipient if provided
@@ -1165,6 +1166,7 @@ export const getDeviceOutboxConversations: RequestHandler = async (req, res) => 
             by: ['to'],
             where: {
                 deviceId: device.pkId,
+                inboxHiddenAt: null,
                 ...(recipients.length > 0 ? { to: { in: recipients } } : {}),
             },
             _max: { createdAt: true },
@@ -1180,6 +1182,7 @@ export const getDeviceOutboxConversations: RequestHandler = async (req, res) => 
         const latestMessages = await prisma.outgoingMessage.findMany({
             where: {
                 deviceId: device.pkId,
+                inboxHiddenAt: null,
                 OR: groupedRecipients
                     .filter((group) => group._max.createdAt)
                     .map((group) => ({ to: group.to, createdAt: group._max.createdAt! })),
@@ -1615,6 +1618,7 @@ export const getDeviceInbox: RequestHandler = async (req, res) => {
 
         const whereClause: any = {
             deviceId: device.pkId,
+            inboxHiddenAt: null,
             from: phoneNumber ? { contains: phoneNumber.toString() } : undefined,
             message: message
                 ? { contains: message.toString(), mode: 'insensitive' as const }
@@ -1641,7 +1645,7 @@ export const getDeviceInbox: RequestHandler = async (req, res) => {
             !hasSearchFilter
                 ? prisma.outgoingMessage.groupBy({
                       by: ['to'],
-                      where: { deviceId: device.pkId },
+                      where: { deviceId: device.pkId, inboxHiddenAt: null },
                       _max: { createdAt: true },
                       _count: { _all: true },
                   })

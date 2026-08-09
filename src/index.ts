@@ -17,6 +17,10 @@ import { warmupBrowser } from './services/pdfGenerator';
 import { shutdownRateLimiter } from './services/rateLimiter';
 import { validateEncryptionSetup, isEncryptionEnabled } from './utils/encryption';
 import { shutdownScheduledJobs } from './controllers/device';
+import {
+    startInboxRetentionScheduler,
+    stopInboxRetentionScheduler,
+} from './services/inboxRetention';
 
 // Import scheduler untuk memastikan broadcast scheduler berjalan
 import './controllers/broadcast';
@@ -167,6 +171,8 @@ prisma
     
     // 🔥 Pre-warm Puppeteer browser for PDF generation
     await warmupBrowser();
+
+    startInboxRetentionScheduler();
     
     server.listen(port, host, listener);
 })();
@@ -177,6 +183,7 @@ const gracefulShutdown = async (signal: string) => {
     
     // Shutdown scheduled jobs (prevents memory leaks)
     shutdownScheduledJobs();
+    stopInboxRetentionScheduler();
     
     // Shutdown rate limiter
     await shutdownRateLimiter();

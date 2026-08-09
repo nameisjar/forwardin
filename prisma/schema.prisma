@@ -8,35 +8,35 @@ generator client {
 }
 
 model User {
-  pkId             Int               @id @default(autoincrement())
-  id               String            @unique @default(uuid()) @db.Uuid
-  firstName        String            @map("first_name") @db.VarChar(128)
-  lastName         String?           @map("last_name") @db.VarChar(128)
-  username         String?           @unique @db.VarChar(128)
-  phone            String?           @unique @db.VarChar(20)
-  email            String            @unique @db.VarChar(255)
-  password         String?           @db.VarChar(255)
-  accountApiKey    String?           @unique @map("account_api_key") @db.VarChar(128)
-  googleId         String?           @unique @map("google_id") @db.VarChar(128)
-  affiliationCode  String?           @unique @map("affiliation_code") @db.VarChar(128)
-  emailOtpSecret   String?           @map("email_otp_secret") @db.VarChar(255)
-  refreshToken     String?           @unique @map("refresh_token") @db.VarChar(255)
-  createdAt        DateTime          @default(now()) @map("created_at")
-  updatedAt        DateTime?         @default(now()) @map("updated_at")
-  deletedAt        DateTime?         @map("deleted_at")
-  emailVerifiedAt  DateTime?         @map("email_verfied_at")
-  privilegeId      Int?              @map("privilege_id")
-  privilege        Privilege?        @relation(fields: [privilegeId], references: [pkId], onDelete: SetNull)
-  customerServices CustomerService[]
-  transactions     Transaction[]
-  devices          Device[]
-  deviceAssignments DeviceAssignment[] @relation("AssignedDeviceUser")
+  pkId                     Int                @id @default(autoincrement())
+  id                       String             @unique @default(uuid()) @db.Uuid
+  firstName                String             @map("first_name") @db.VarChar(128)
+  lastName                 String?            @map("last_name") @db.VarChar(128)
+  username                 String?            @unique @db.VarChar(128)
+  phone                    String?            @unique @db.VarChar(20)
+  email                    String             @unique @db.VarChar(255)
+  password                 String?            @db.VarChar(255)
+  accountApiKey            String?            @unique @map("account_api_key") @db.VarChar(128)
+  googleId                 String?            @unique @map("google_id") @db.VarChar(128)
+  affiliationCode          String?            @unique @map("affiliation_code") @db.VarChar(128)
+  emailOtpSecret           String?            @map("email_otp_secret") @db.VarChar(255)
+  refreshToken             String?            @unique @map("refresh_token") @db.VarChar(255)
+  createdAt                DateTime           @default(now()) @map("created_at")
+  updatedAt                DateTime?          @default(now()) @map("updated_at")
+  deletedAt                DateTime?          @map("deleted_at")
+  emailVerifiedAt          DateTime?          @map("email_verfied_at")
+  privilegeId              Int?               @map("privilege_id")
+  privilege                Privilege?         @relation(fields: [privilegeId], references: [pkId], onDelete: SetNull)
+  customerServices         CustomerService[]
+  transactions             Transaction[]
+  devices                  Device[]
+  deviceAssignments        DeviceAssignment[] @relation("AssignedDeviceUser")
   createdDeviceAssignments DeviceAssignment[] @relation("DeviceAssignmentCreator")
-  Group            Group[]
-  Subscription     Subscription[]
-  Template         Template[]
-  notifications    Notification[]
-  codeSnippets     CodeSnippet[]
+  Group                    Group[]
+  Subscription             Subscription[]
+  Template                 Template[]
+  notifications            Notification[]
+  codeSnippets             CodeSnippet[]
 }
 
 model CustomerService {
@@ -166,42 +166,42 @@ model Transaction {
 }
 
 model Device {
-  pkId            Int              @id @default(autoincrement())
-  id              String           @unique @default(uuid()) @db.Uuid
-  name            String           @db.VarChar(128)
-  phone           String?          @db.VarChar(20)
-  apiKey          String           @unique @map("api_key") @db.VarChar(255)
-  status          String           @default("close") @map("status") @db.VarChar(20)
-  createdAt       DateTime         @default(now()) @map("created_at")
-  updatedAt       DateTime         @default(now()) @map("updated_at")
-  userId          Int
-  user            User             @relation(fields: [userId], references: [pkId], onDelete: Cascade)
-  sessions        Session[]
-  autoReplies     AutoReply[]
-  campaigns       Campaign[]
-  contactDevices  ContactDevice[]
-  DeviceLabel     DeviceLabel[]
-  Broadcast       Broadcast[]
-  BusinessHour    BusinessHour[]
-  CustomerService CustomerService?
-  DeviceLog       DeviceLog[]
-  whatsappGroups  WhatsAppGroup[]
-  IncomingMessage IncomingMessage[]
-  OutgoingMessage OutgoingMessage[]
+  pkId               Int                 @id @default(autoincrement())
+  id                 String              @unique @default(uuid()) @db.Uuid
+  name               String              @db.VarChar(128)
+  phone              String?             @db.VarChar(20)
+  apiKey             String              @unique @map("api_key") @db.VarChar(255)
+  status             String              @default("close") @map("status") @db.VarChar(20)
+  createdAt          DateTime            @default(now()) @map("created_at")
+  updatedAt          DateTime            @default(now()) @map("updated_at")
+  userId             Int
+  user               User                @relation(fields: [userId], references: [pkId], onDelete: Cascade)
+  sessions           Session[]
+  autoReplies        AutoReply[]
+  campaigns          Campaign[]
+  contactDevices     ContactDevice[]
+  DeviceLabel        DeviceLabel[]
+  Broadcast          Broadcast[]
+  BusinessHour       BusinessHour[]
+  CustomerService    CustomerService?
+  DeviceLog          DeviceLog[]
+  whatsappGroups     WhatsAppGroup[]
+  IncomingMessage    IncomingMessage[]
+  OutgoingMessage    OutgoingMessage[]
   inboxProfileCaches InboxProfileCache[]
-  messageReactions MessageReaction[]
-  assignments      DeviceAssignment[]
+  messageReactions   MessageReaction[]
+  assignments        DeviceAssignment[]
 
   // Health monitoring fields
-  healthStatus    String           @default("healthy") @map("health_status") @db.VarChar(20) // healthy, warning, critical, paused, banned
-  pausedAt        DateTime?        @map("paused_at")
-  pauseReason     String?          @map("pause_reason") @db.VarChar(255)
-  resumeAt        DateTime?        @map("resume_at")
-  todayMessageCount Int            @default(0) @map("today_message_count")
-  todayMessageDate  DateTime?      @map("today_message_date") @db.Date
-  
+  healthStatus      String    @default("healthy") @map("health_status") @db.VarChar(20) // healthy, warning, critical, paused, banned
+  pausedAt          DateTime? @map("paused_at")
+  pauseReason       String?   @map("pause_reason") @db.VarChar(255)
+  resumeAt          DateTime? @map("resume_at")
+  todayMessageCount Int       @default(0) @map("today_message_count")
+  todayMessageDate  DateTime? @map("today_message_date") @db.Date
+
   // Relations
-  deviceSignals   DeviceSignal[]
+  deviceSignals DeviceSignal[]
 }
 
 model DeviceAssignment {
@@ -236,18 +236,18 @@ model DeviceLog {
 /// WhatsApp signal detection for ban prevention
 /// Tracks rate limits, disconnects, and other warning signs from WhatsApp
 model DeviceSignal {
-  pkId        Int      @id @default(autoincrement())
-  id          String   @unique @default(uuid()) @db.Uuid
-  deviceId    Int      @map("device_id")
-  device      Device   @relation(fields: [deviceId], references: [pkId], onDelete: Cascade)
-  signalType  String   @map("signal_type") @db.VarChar(50) // rate_limit, forced_logout, connection_error, delivery_failed, banned
-  code        Int?     // HTTP/WA status code (429, 401, etc)
-  message     String?  @db.Text
-  severity    String   @default("warning") @db.VarChar(20) // info, warning, critical
-  confidence  String   @default("medium") @db.VarChar(20) // high, medium, low - how confident we are in the classification
-  action      String?  @db.VarChar(50) // auto_paused, manual_paused, resumed, none
-  metadata    Json?    // Additional context
-  createdAt   DateTime @default(now()) @map("created_at")
+  pkId       Int      @id @default(autoincrement())
+  id         String   @unique @default(uuid()) @db.Uuid
+  deviceId   Int      @map("device_id")
+  device     Device   @relation(fields: [deviceId], references: [pkId], onDelete: Cascade)
+  signalType String   @map("signal_type") @db.VarChar(50) // rate_limit, forced_logout, connection_error, delivery_failed, banned
+  code       Int? // HTTP/WA status code (429, 401, etc)
+  message    String?  @db.Text
+  severity   String   @default("warning") @db.VarChar(20) // info, warning, critical
+  confidence String   @default("medium") @db.VarChar(20) // high, medium, low - how confident we are in the classification
+  action     String?  @db.VarChar(50) // auto_paused, manual_paused, resumed, none
+  metadata   Json? // Additional context
+  createdAt  DateTime @default(now()) @map("created_at")
 
   @@index([deviceId, createdAt], map: "idx_device_signal_device_time")
   @@index([deviceId, signalType], map: "idx_device_signal_type")
@@ -359,58 +359,92 @@ model Group {
 }
 
 model OutgoingMessage {
-  pkId        Int      @id @default(autoincrement())
-  id          String   @unique
+  pkId          Int       @id @default(autoincrement())
+  id            String    @unique
   /// WhatsApp message id returned by Baileys (key.id). Used to update delivery/read status reliably.
-  waMessageId String?  @unique @map("wa_message_id")
-  to          String
-  message     String?
-  mediaPath   String?
-  schedule    DateTime
-  status      String   @db.VarChar(20)
-  createdAt   DateTime @default(now()) @map("created_at")
-  updatedAt   DateTime @default(now()) @map("updated_at")
-  sessionId   String?
-  deviceId    Int?     @map("device_id")
-  contactId   Int?
-  broadcastId Int?     // Add reference to broadcast
-  broadcastType String? @map("broadcast_type") @db.VarChar(20) // 🔥 NEW: 'broadcast' | 'reminder' | 'feedback' | 'recurrence'
-  isGroup     Boolean? @default(false) // Track if message is for group
+  waMessageId   String?   @unique @map("wa_message_id")
+  to            String
+  message       String?
+  mediaPath     String?
+  schedule      DateTime
+  status        String    @db.VarChar(20)
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @default(now()) @map("updated_at")
+  inboxHiddenAt DateTime? @map("inbox_hidden_at")
+  sessionId     String?
+  deviceId      Int?      @map("device_id")
+  contactId     Int?
+  broadcastId   Int? // Add reference to broadcast
+  broadcastType String?   @map("broadcast_type") @db.VarChar(20) // 🔥 NEW: 'broadcast' | 'reminder' | 'feedback' | 'recurrence'
+  isGroup       Boolean?  @default(false) // Track if message is for group
   /// For group messages: list of participant JIDs who have read the message (best-effort).
-  readBy      Json?    @map("read_by")
-  contact     Contact? @relation(fields: [contactId], references: [pkId], onDelete: Cascade)
-  device      Device?  @relation(fields: [deviceId], references: [pkId], onDelete: SetNull)
+  readBy        Json?     @map("read_by")
+  contact       Contact?  @relation(fields: [contactId], references: [pkId], onDelete: Cascade)
+  device        Device?   @relation(fields: [deviceId], references: [pkId], onDelete: SetNull)
 
   @@unique([sessionId, to, id], map: "unique_outgoing_message_key_per_session_id")
   @@index([broadcastId], map: "idx_outgoing_message_broadcast")
   @@index([sessionId, createdAt], map: "idx_outgoing_message_session_time")
   @@index([deviceId, createdAt], map: "idx_outgoing_message_device_time")
+  @@index([deviceId, inboxHiddenAt, createdAt], map: "idx_outgoing_message_inbox_retention")
   @@index([status], map: "idx_outgoing_message_status")
 }
 
 model IncomingMessage {
-  pkId           Int      @id @default(autoincrement())
-  id             String   @unique
-  from           String
-  participant    String?  // JID pengirim untuk pesan grup
-  pushName       String?  @map("push_name") // Nama profil WhatsApp pengirim
-  groupName      String?  @map("group_name") // Nama grup (jika pesan dari grup)
-  groupPicUrl    String?  @map("group_pic_url") // URL foto profil grup
-  profilePicUrl  String?  @map("profile_pic_url") // URL foto profil personal chat
-  message        String
-  mediaPath      String?
-  isRead         Boolean  @default(false) @map("is_read") // Status pesan sudah dibaca user
-  receivedAt     DateTime @map("received_at")
-  createdAt      DateTime @default(now()) @map("created_at")
-  updatedAt      DateTime @default(now()) @map("updated_at")
-  sessionId      String?
-  deviceId       Int?     @map("device_id")
-  device         Device?  @relation(fields: [deviceId], references: [pkId], onDelete: Cascade)
-  contactId      Int?
-  contact        Contact? @relation(fields: [contactId], references: [pkId], onDelete: Cascade)
+  pkId          Int       @id @default(autoincrement())
+  id            String    @unique
+  from          String
+  participant   String? // JID pengirim untuk pesan grup
+  pushName      String?   @map("push_name") // Nama profil WhatsApp pengirim
+  groupName     String?   @map("group_name") // Nama grup (jika pesan dari grup)
+  groupPicUrl   String?   @map("group_pic_url") // URL foto profil grup
+  profilePicUrl String?   @map("profile_pic_url") // URL foto profil personal chat
+  message       String
+  mediaPath     String?
+  isRead        Boolean   @default(false) @map("is_read") // Status pesan sudah dibaca user
+  receivedAt    DateTime  @map("received_at")
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @default(now()) @map("updated_at")
+  inboxHiddenAt DateTime? @map("inbox_hidden_at")
+  sessionId     String?
+  deviceId      Int?      @map("device_id")
+  device        Device?   @relation(fields: [deviceId], references: [pkId], onDelete: Cascade)
+  contactId     Int?
+  contact       Contact?  @relation(fields: [contactId], references: [pkId], onDelete: Cascade)
 
   @@index([deviceId], map: "idx_incoming_message_device")
   @@index([deviceId, isRead], map: "idx_incoming_message_device_read")
+  @@index([deviceId, inboxHiddenAt, receivedAt], map: "idx_incoming_message_inbox_retention")
+}
+
+model InboxRetentionSetting {
+  pkId          Int       @id @default(1) @map("pk_id")
+  enabled       Boolean   @default(true)
+  retentionDays Int       @default(90) @map("retention_days")
+  graceDays     Int       @default(7) @map("grace_days")
+  lastCleanupAt DateTime? @map("last_cleanup_at")
+  updatedBy     String?   @map("updated_by") @db.VarChar(255)
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
+
+  @@map("inbox_retention_setting")
+}
+
+model InboxCleanupLog {
+  pkId                   BigInt   @id @default(autoincrement()) @map("pk_id")
+  triggerType            String   @map("trigger_type") @db.VarChar(20)
+  triggeredBy            String?  @map("triggered_by") @db.VarChar(255)
+  cutoffAt               DateTime @map("cutoff_at")
+  incomingHiddenCount    Int      @default(0) @map("incoming_hidden_count")
+  outgoingHiddenCount    Int      @default(0) @map("outgoing_hidden_count")
+  incomingDeletedCount   Int      @default(0) @map("incoming_deleted_count")
+  reactionDeletedCount   Int      @default(0) @map("reaction_deleted_count")
+  mediaDeletedCount      Int      @default(0) @map("media_deleted_count")
+  mediaDeleteFailedCount Int      @default(0) @map("media_delete_failed_count")
+  createdAt              DateTime @default(now()) @map("created_at")
+
+  @@index([createdAt], map: "idx_inbox_cleanup_log_created_at")
+  @@map("inbox_cleanup_log")
 }
 
 /// Persistent WhatsApp profile-picture cache. Keeping the binary outside
@@ -475,26 +509,26 @@ model Broadcast {
   broadcastType String?  @map("broadcast_type") @db.VarChar(20) // 'broadcast' | 'reminder' | 'feedback' | 'recurrence'
   deviceId      Int
   device        Device   @relation(fields: [deviceId], references: [pkId], onDelete: Cascade)
-  
+
   // Retry tracking fields
   lastAttemptAt DateTime? @map("last_attempt_at")
   attemptCount  Int       @default(0) @map("attempt_count")
   sentCount     Int?      @default(0) @map("sent_count")
   failedCount   Int?      @default(0) @map("failed_count")
   lastError     String?   @map("last_error") @db.Text
-  
-  createdAt     DateTime @default(now()) @map("created_at")
-  updatedAt     DateTime @default(now()) @map("updated_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @default(now()) @map("updated_at")
 
   // Relation to per-recipient tracking
   broadcastRecipients BroadcastRecipient[]
 
+  /// NOTE: Search optimization (ILIKE/contains) uses pg_trgm + GIN index created via SQL migration.
+  /// Prisma doesn't support gin_trgm_ops in schema; do NOT add @@index(type: Gin) here.
+
   @@index([deviceId, schedule], map: "idx_broadcast_device_schedule")
   @@index([deviceId, name], map: "idx_broadcast_device_name")
   @@index([deviceId, status, isSent, schedule], map: "idx_broadcast_device_status_sent_schedule")
-
-  /// NOTE: Search optimization (ILIKE/contains) uses pg_trgm + GIN index created via SQL migration.
-  /// Prisma doesn't support gin_trgm_ops in schema; do NOT add @@index(type: Gin) here.
 }
 
 /// Per-recipient tracking for atomic broadcast processing
@@ -710,40 +744,40 @@ model Notification {
 }
 
 model CourseReminder {
-    pkId        Int      @id @default(autoincrement())
-    id          String   @unique @default(uuid()) @db.Uuid
-    courseName  String   
-    lesson      Int      
-    message     String   @db.Text
-    createdAt   DateTime @default(now())
-    updatedAt   DateTime @updatedAt
+  pkId       Int      @id @default(autoincrement())
+  id         String   @unique @default(uuid()) @db.Uuid
+  courseName String
+  lesson     Int
+  message    String   @db.Text
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
 }
 
 model CourseFeedback {
-    pkId        Int      @id @default(autoincrement())
-    id          String   @unique @default(uuid()) @db.Uuid
-    courseName  String   
-    lesson      Int      
-    message     String   @db.Text   
-    createdAt   DateTime @default(now())
-    updatedAt   DateTime @updatedAt
+  pkId       Int      @id @default(autoincrement())
+  id         String   @unique @default(uuid()) @db.Uuid
+  courseName String
+  lesson     Int
+  message    String   @db.Text
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
 
-    @@index([courseName], map: "idx_course_feedback_course")
-    @@index([courseName, lesson], map: "idx_course_feedback_course_lesson")
+  @@index([courseName], map: "idx_course_feedback_course")
+  @@index([courseName, lesson], map: "idx_course_feedback_course_lesson")
 }
 
 model WhatsAppGroup {
-  pkId          Int      @id @default(autoincrement())
-  id            String   @unique @default(uuid()) @db.Uuid
-  groupId       String   @map("group_id") @db.VarChar(255)
-  groupName     String   @map("group_name") @db.VarChar(255)
-  participants  Int?     @default(0)
-  isActive      Boolean  @default(true) @map("is_active")
-  sessionId     String?  @map("session_id") @db.VarChar(255)
-  deviceId      Int      @map("device_id")
-  device        Device   @relation(fields: [deviceId], references: [pkId], onDelete: Cascade)
-  createdAt     DateTime @default(now()) @map("created_at")
-  updatedAt     DateTime @default(now()) @map("updated_at")
+  pkId         Int      @id @default(autoincrement())
+  id           String   @unique @default(uuid()) @db.Uuid
+  groupId      String   @map("group_id") @db.VarChar(255)
+  groupName    String   @map("group_name") @db.VarChar(255)
+  participants Int?     @default(0)
+  isActive     Boolean  @default(true) @map("is_active")
+  sessionId    String?  @map("session_id") @db.VarChar(255)
+  deviceId     Int      @map("device_id")
+  device       Device   @relation(fields: [deviceId], references: [pkId], onDelete: Cascade)
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @default(now()) @map("updated_at")
 
   @@unique([groupId, deviceId])
   @@index([sessionId])
@@ -751,17 +785,17 @@ model WhatsAppGroup {
 }
 
 model MonthlyTemplate {
-  pkId            Int      @id @default(autoincrement())
-  id              String   @unique @default(uuid()) @db.Uuid
-  courseName      String   @map("course_name") @db.VarChar(255)
-  code            String   @db.VarChar(50)
-  month           Int
-  level           String   @db.VarChar(100)
-  topicModule     String   @map("topic_module") @db.Text
-  result          String   @db.Text
-  skillsAcquired  String   @map("skills_acquired") @db.Text
-  createdAt       DateTime @default(now()) @map("created_at")
-  updatedAt       DateTime @default(now()) @map("updated_at")
+  pkId           Int      @id @default(autoincrement())
+  id             String   @unique @default(uuid()) @db.Uuid
+  courseName     String   @map("course_name") @db.VarChar(255)
+  code           String   @db.VarChar(50)
+  month          Int
+  level          String   @db.VarChar(100)
+  topicModule    String   @map("topic_module") @db.Text
+  result         String   @db.Text
+  skillsAcquired String   @map("skills_acquired") @db.Text
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @default(now()) @map("updated_at")
 
   @@unique([courseName, month], name: "courseName_month")
   @@index([courseName])
@@ -785,22 +819,21 @@ model MonthlyFeedbackLog {
 
 /// Code Snippet untuk tutor share kode ke murid
 model CodeSnippet {
-  pkId        Int       @id @default(autoincrement())
-  id          String    @unique @default(uuid()) @db.Uuid
-  title       String    @db.VarChar(255)
-  description String?   @db.Text
-  code        String    @db.Text
-  language    String    @db.VarChar(50)
-  shareToken  String    @unique @map("share_token") @db.VarChar(64)
-  isPublic    Boolean   @default(true) @map("is_public")
-  viewCount   Int       @default(0) @map("view_count")
-  userId      Int       @map("user_id")
-  user        User      @relation(fields: [userId], references: [pkId], onDelete: Cascade)
-  createdAt   DateTime  @default(now()) @map("created_at")
-  updatedAt   DateTime  @default(now()) @map("updated_at")
+  pkId        Int      @id @default(autoincrement())
+  id          String   @unique @default(uuid()) @db.Uuid
+  title       String   @db.VarChar(255)
+  description String?  @db.Text
+  code        String   @db.Text
+  language    String   @db.VarChar(50)
+  shareToken  String   @unique @map("share_token") @db.VarChar(64)
+  isPublic    Boolean  @default(true) @map("is_public")
+  viewCount   Int      @default(0) @map("view_count")
+  userId      Int      @map("user_id")
+  user        User     @relation(fields: [userId], references: [pkId], onDelete: Cascade)
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @default(now()) @map("updated_at")
 
   @@index([userId])
   @@index([shareToken])
   @@map("code_snippets")
 }
-

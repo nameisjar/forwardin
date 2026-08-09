@@ -29,6 +29,7 @@ import algorithmicsRoutes from './algorithmics';
 import deviceApiExternal from './deviceApiExternal';
 import healthRoutes from './health';
 import codeSnippetRoutes from './codeSnippets';
+import inboxRetentionRoutes from './inboxRetention';
 import { getSnippetByShareToken } from '../controllers/codeSnippet';
 
 const router = Router();
@@ -61,6 +62,7 @@ router.use('/privileges', authMiddleware, privilegeRoutes);
 router.use('/subscription-plans', authMiddleware, subsPlanRoutes);
 router.use('/customer-services', customerServiceRoutes);
 router.use('/analytics', authMiddleware, analyticsRoutes);
+router.use('/admin/inbox-retention', authMiddleware, inboxRetentionRoutes);
 router.use('/super-admin', superAdminRoutes);
 router.use('/api', deviceTokenOnly, deviceApi);
 // Reserve for future third-party usage
