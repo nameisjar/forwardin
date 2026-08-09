@@ -5,7 +5,7 @@ import logger from './config/logger';
 import { getComprehensivePDFStatus } from './services/pdfGenerator';
 import { jwtSecretKey } from './utils/jwtGenerator';
 import prisma from './utils/db';
-import { accessibleDeviceWhere } from './utils/deviceAccess';
+import { accessibleDeviceWhere, isDeviceAdmin } from './utils/deviceAccess';
 
 let io: Server;
 
@@ -13,8 +13,6 @@ let io: Server;
 let monitoringInterval: NodeJS.Timeout | null = null;
 
 // 🔐 Admin privilege ID from environment
-const SUPER_ADMIN_ID = Number(process.env.SUPER_ADMIN_ID) || 1;
-
 // 🔐 Socket.IO CORS Configuration with fail-safe defaults (Issue 4.5)
 function getSocketCorsOrigin(): string[] | boolean {
     const allowedOrigins = [process.env.CLIENT_URL1, process.env.CLIENT_URL2].filter(Boolean) as string[];
@@ -73,7 +71,7 @@ export function initSocketServer(app: Express.Application): http.Server {
             if (user) {
                 socket.data.authenticated = true;
                 socket.data.user = user;
-                socket.data.isAdmin = user.privilege?.pkId === SUPER_ADMIN_ID;
+                socket.data.isAdmin = isDeviceAdmin(user.privilege?.pkId);
             } else {
                 socket.data.authenticated = false;
                 socket.data.isAdmin = false;

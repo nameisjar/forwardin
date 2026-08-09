@@ -5,7 +5,7 @@ import { jwtSecretKey } from '../utils/jwtGenerator';
 import { User } from '@prisma/client';
 import { verifyDeviceAccessToken } from '../utils/jwtGenerator';
 import { hashApiKey, isHashedApiKey, verifyApiKey } from '../utils/apiKeyHash';
-import { accessibleDeviceWhere } from '../utils/deviceAccess';
+import { accessibleDeviceWhere, isDeviceAdmin } from '../utils/deviceAccess';
 
 export const authMiddleware: RequestHandler = (req, res, next) => {
     if (!req.header('Authorization')) {
@@ -124,6 +124,15 @@ export const superAdminOnly: RequestHandler = async (req, res, next) => {
         next();
     } else {
         res.status(403).json({ message: 'Access denied: Super admin only' });
+    }
+};
+
+// Read-only administration and monitoring routes shared by admin and super admin.
+export const adminOnly: RequestHandler = async (req, res, next) => {
+    if (isDeviceAdmin(req.privilege?.pkId)) {
+        next();
+    } else {
+        res.status(403).json({ message: 'Access denied: Admin only' });
     }
 };
 

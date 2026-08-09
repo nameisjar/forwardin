@@ -1,6 +1,7 @@
 import { expect } from 'chai';
 import {
     accessibleDeviceWhere,
+    classifyDeviceOwnership,
     isDeviceAdmin,
     ownedDeviceWhere,
 } from '../utils/deviceAccess';
@@ -34,14 +35,25 @@ describe('device access scope', () => {
         expect(ownedDeviceWhere(42, 3)).to.deep.equal({ userId: 42 });
     });
 
-    it('keeps the existing global scope for super admin', () => {
-        expect(accessibleDeviceWhere(42, 1)).to.deep.equal({});
-        expect(ownedDeviceWhere(42, 1)).to.deep.equal({});
+    it('keeps super admin operational access scoped to owned and assigned devices', () => {
+        expect(accessibleDeviceWhere(42, 1)).to.deep.equal({
+            OR: [
+                { userId: 42 },
+                { assignments: { some: { userId: 42 } } },
+            ],
+        });
+        expect(ownedDeviceWhere(42, 1)).to.deep.equal({ userId: 42 });
     });
 
     it('recognizes admin and super admin assignment managers', () => {
         expect(isDeviceAdmin(2)).to.equal(true);
         expect(isDeviceAdmin(1)).to.equal(true);
         expect(isDeviceAdmin(3)).to.equal(false);
+    });
+
+    it('classifies monitoring ownership without granting operational access', () => {
+        expect(classifyDeviceOwnership('tutor', 0)).to.equal('user_owned');
+        expect(classifyDeviceOwnership('admin', 0)).to.equal('admin_owned');
+        expect(classifyDeviceOwnership('super admin', 2)).to.equal('admin_assigned');
     });
 });

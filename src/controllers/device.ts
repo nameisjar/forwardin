@@ -13,7 +13,6 @@ import { getInstance, verifyInstance } from '../whatsapp';
 import { hashApiKey } from '../utils/apiKeyHash';
 import {
     accessibleDeviceWhere,
-    isSuperAdmin as hasSuperAdminAccess,
     ownedDeviceWhere,
 } from '../utils/deviceAccess';
 import {
@@ -68,7 +67,7 @@ export const getDevices: RequestHandler = async (req, res) => {
             devices.map(async (device) => {
                 const sessionId = device.sessions[0]?.sessionId;
                 const dbStatus = device.status;
-                const canManage = hasSuperAdminAccess(privilegeId) || device.userId === pkId;
+                const canManage = device.userId === pkId;
 
                 // Jika status di DB adalah 'open', validasi apakah instance benar-benar aktif
                 if (dbStatus === 'open' && sessionId) {

@@ -1,9 +1,12 @@
 import { Router, Request, Response } from 'express';
 import { getComprehensivePDFStatus, getPDFQueueStats, getBrowserHealthStatus } from '../services/pdfGenerator';
-import { authMiddleware, superAdminOnly } from '../middleware/auth';
+import { authMiddleware, adminOnly } from '../middleware/auth';
 import prisma from '../utils/db';
 import logger from '../config/logger';
 import { getConnectedSessionsInfo, getInstance, verifyInstance } from '../whatsapp';
+import { validate as isUUID } from 'uuid';
+import { classifyDeviceOwnership } from '../utils/deviceAccess';
+import { Prisma } from '@prisma/client';
 
 const router = Router();
 
@@ -13,6 +16,7 @@ const serverStartTime = Date.now();
 // 🔒 Input validation constants
 const ALLOWED_SORT_FIELDS = ['name', 'phone', 'messageCount', 'updatedAt'];
 const ALLOWED_STATUS_FILTERS = ['all', 'connected', 'disconnected'];
+const ALLOWED_OWNERSHIP_FILTERS = ['all', 'user_owned', 'admin_owned', 'admin_assigned'];
 const MAX_SEARCH_LENGTH = 100;
 const MAX_DAYS_ANALYTICS = 90;
 
@@ -55,7 +59,7 @@ router.get('/', async (req: Request, res: Response) => {
  * 🔧 PDF System Status Endpoint
  * GET /health/pdf - Detailed PDF system status (requires admin auth)
  */
-router.get('/pdf', authMiddleware, superAdminOnly, async (req: Request, res: Response) => {
+router.get('/pdf', authMiddleware, adminOnly, async (req: Request, res: Response) => {
     try {
         const status = await getComprehensivePDFStatus();
         
@@ -74,7 +78,7 @@ router.get('/pdf', authMiddleware, superAdminOnly, async (req: Request, res: Res
  * 🔧 Queue Stats Endpoint (lightweight)
  * GET /health/queue - Just queue stats without browser health check (requires admin auth)
  */
-router.get('/queue', authMiddleware, superAdminOnly, async (req: Request, res: Response) => {
+router.get('/queue', authMiddleware, adminOnly, async (req: Request, res: Response) => {
     try {
         const stats = getPDFQueueStats();
         
@@ -96,7 +100,7 @@ router.get('/queue', authMiddleware, superAdminOnly, async (req: Request, res: R
  * 🔧 Browser Health Endpoint
  * GET /health/browser - Puppeteer browser status (requires admin auth)
  */
-router.get('/browser', authMiddleware, superAdminOnly, async (req: Request, res: Response) => {
+router.get('/browser', authMiddleware, adminOnly, async (req: Request, res: Response) => {
     try {
         const browserHealth = await getBrowserHealthStatus();
         
@@ -118,7 +122,7 @@ router.get('/browser', authMiddleware, superAdminOnly, async (req: Request, res:
  * 🔧 System Overview Endpoint (for monitoring dashboard)
  * GET /health/overview - Complete system overview (requires admin auth)
  */
-router.get('/overview', authMiddleware, superAdminOnly, async (req: Request, res: Response) => {
+router.get('/overview', authMiddleware, adminOnly, async (req: Request, res: Response) => {
     try {
         const startTime = Date.now();
         
@@ -214,7 +218,7 @@ router.get('/overview', authMiddleware, superAdminOnly, async (req: Request, res
  * 🔧 Message Analytics Endpoint
  * GET /health/analytics/messages - Message statistics over time (requires admin auth)
  */
-router.get('/analytics/messages', authMiddleware, superAdminOnly, async (req: Request, res: Response) => {
+router.get('/analytics/messages', authMiddleware, adminOnly, async (req: Request, res: Response) => {
     try {
         // 🔒 Limit days parameter to prevent excessive data queries
         const days = Math.min(MAX_DAYS_ANALYTICS, Math.max(1, parseInt(req.query.days as string) || 7));
@@ -305,7 +309,7 @@ router.get('/analytics/messages', authMiddleware, superAdminOnly, async (req: Re
  *   - sortBy: string (field to sort: 'name' | 'phone' | 'messageCount' | 'updatedAt')
  *   - sortOrder: string ('asc' | 'desc')
  */
-router.get('/devices', authMiddleware, superAdminOnly, async (req: Request, res: Response) => {
+router.get('/devices', authMiddleware, adminOnly, async (req: Request, res: Response) => {
     try {
         // 🔒 Validate and sanitize all input parameters
         const page = Math.max(1, parseInt(req.query.page as string) || 1);
@@ -314,6 +318,15 @@ router.get('/devices', authMiddleware, superAdminOnly, async (req: Request, res:
         // 🔒 Validate status against whitelist
         const rawStatus = (req.query.status as string) || 'all';
         const statusFilter = ALLOWED_STATUS_FILTERS.includes(rawStatus) ? rawStatus : 'all';
+
+        const rawOwnership = (req.query.ownership as string) || 'all';
+        const ownershipFilter = ALLOWED_OWNERSHIP_FILTERS.includes(rawOwnership)
+            ? rawOwnership
+            : 'all';
+        const ownerId = (req.query.ownerId as string) || '';
+        if (ownerId && !isUUID(ownerId)) {
+            return res.status(400).json({ message: 'Invalid ownerId' });
+        }
         
         // 🔒 Sanitize search input
         const search = sanitizeSearch(req.query.search as string);
@@ -324,38 +337,106 @@ router.get('/devices', authMiddleware, superAdminOnly, async (req: Request, res:
         
         const sortOrder = (req.query.sortOrder as string) === 'asc' ? 'asc' : 'desc';
 
-        // Build where clause for search
-        const whereClause: any = {};
+        // Build a read-only cross-account monitoring scope. Operational device
+        // endpoints never use this scope.
+        const whereConditions: Prisma.DeviceWhereInput[] = [];
         if (search) {
-            whereClause.OR = [
-                { name: { contains: search, mode: 'insensitive' } },
-                { phone: { contains: search, mode: 'insensitive' } }
-            ];
+            whereConditions.push({
+                OR: [
+                    { name: { contains: search, mode: 'insensitive' } },
+                    { phone: { contains: search, mode: 'insensitive' } },
+                    {
+                        user: {
+                            is: {
+                                OR: [
+                                    { firstName: { contains: search, mode: 'insensitive' } },
+                                    { lastName: { contains: search, mode: 'insensitive' } },
+                                    { email: { contains: search, mode: 'insensitive' } },
+                                ],
+                            },
+                        },
+                    },
+                ],
+            });
         }
 
-        // Get total count for pagination
-        const totalCount = await prisma.device.count({ where: whereClause });
+        if (ownerId) {
+            whereConditions.push({ user: { is: { id: ownerId } } });
+        }
+
+        const adminPrivilegeIds = [
+            Number(process.env.ADMIN_ID),
+            Number(process.env.SUPER_ADMIN_ID),
+        ].filter(Number.isFinite);
+        const adminOwnerCondition = {
+            user: { is: { privilegeId: { in: adminPrivilegeIds } } },
+        };
+        if (ownershipFilter === 'user_owned') {
+            whereConditions.push({ NOT: adminOwnerCondition });
+        } else if (ownershipFilter === 'admin_owned') {
+            whereConditions.push(adminOwnerCondition, { assignments: { none: {} } });
+        } else if (ownershipFilter === 'admin_assigned') {
+            whereConditions.push(adminOwnerCondition, { assignments: { some: {} } });
+        }
+
+        const whereClause: Prisma.DeviceWhereInput =
+            whereConditions.length > 0 ? { AND: whereConditions } : {};
 
         // Get all devices with their sessions and broadcast counts
-        const devices = await prisma.device.findMany({
-            where: whereClause,
-            include: {
-                user: {
-                    select: { firstName: true, email: true }
+        const [devices, owners] = await Promise.all([
+            prisma.device.findMany({
+                where: whereClause,
+                include: {
+                    user: {
+                        select: {
+                            id: true,
+                            firstName: true,
+                            lastName: true,
+                            email: true,
+                            privilege: { select: { name: true } },
+                        },
+                    },
+                    assignments: {
+                        select: {
+                            id: true,
+                            createdAt: true,
+                            user: {
+                                select: {
+                                    id: true,
+                                    firstName: true,
+                                    lastName: true,
+                                    email: true,
+                                },
+                            },
+                        },
+                        orderBy: { createdAt: 'desc' },
+                    },
+                    sessions: {
+                        select: { id: true, sessionId: true },
+                    },
+                    _count: {
+                        select: {
+                            Broadcast: true,
+                            assignments: true,
+                        },
+                    },
                 },
-                sessions: {
-                    select: { id: true, sessionId: true }
+                orderBy:
+                    sortBy === 'name' || sortBy === 'phone' || sortBy === 'updatedAt'
+                        ? { [sortBy]: sortOrder }
+                        : { updatedAt: 'desc' },
+            }),
+            prisma.user.findMany({
+                where: { devices: { some: {} } },
+                select: {
+                    id: true,
+                    firstName: true,
+                    lastName: true,
+                    email: true,
                 },
-                _count: {
-                    select: {
-                        Broadcast: true
-                    }
-                }
-            },
-            orderBy: sortBy === 'name' || sortBy === 'phone' || sortBy === 'updatedAt' 
-                ? { [sortBy]: sortOrder }
-                : { updatedAt: 'desc' }
-        });
+                orderBy: [{ firstName: 'asc' }, { email: 'asc' }],
+            }),
+        ]);
 
         // Get session IDs for outgoing message count
         const sessionIds = devices
@@ -395,6 +476,10 @@ router.get('/devices', authMiddleware, superAdminOnly, async (req: Request, res:
             const broadcastCount = device._count?.Broadcast || 0;
             const outgoingCount = sessionId ? (outgoingCountMap.get(sessionId) || 0) : 0;
             const messageCount = broadcastCount + outgoingCount;
+            const ownershipType = classifyDeviceOwnership(
+                device.user.privilege?.name,
+                device.assignments.length,
+            );
 
             return {
                 id: device.id,
@@ -404,6 +489,13 @@ router.get('/devices', authMiddleware, superAdminOnly, async (req: Request, res:
                 status: device.status,
                 isConnected,
                 user: device.user,
+                ownershipType,
+                assignmentCount: device._count.assignments,
+                assignedTo: device.assignments.map(assignment => ({
+                    id: assignment.id,
+                    assignedAt: assignment.createdAt,
+                    user: assignment.user,
+                })),
                 messageCount,
                 broadcastCount,
                 outgoingCount,
@@ -434,10 +526,14 @@ router.get('/devices', authMiddleware, superAdminOnly, async (req: Request, res:
         const paginatedDevices = devicesWithStatus.slice(startIndex, startIndex + limit);
 
         const summary = {
-            total: totalCount,
+            total: filteredTotal,
             filtered: filteredTotal,
             connected: devicesWithStatus.filter(d => d.isConnected).length,
             disconnected: devicesWithStatus.filter(d => !d.isConnected).length,
+            userOwned: devicesWithStatus.filter(d => d.ownershipType === 'user_owned').length,
+            adminOwned: devicesWithStatus.filter(d => d.ownershipType === 'admin_owned').length,
+            adminAssigned: devicesWithStatus.filter(d => d.ownershipType === 'admin_assigned').length,
+            ownerAccounts: new Set(devicesWithStatus.map(d => d.user.id)).size,
             byStatus: devicesWithStatus.reduce((acc, d) => {
                 acc[d.status] = (acc[d.status] || 0) + 1;
                 return acc;
@@ -457,6 +553,7 @@ router.get('/devices', authMiddleware, superAdminOnly, async (req: Request, res:
             devices: paginatedDevices,
             summary,
             pagination,
+            owners,
             timestamp: new Date().toISOString()
         });
     } catch (error) {

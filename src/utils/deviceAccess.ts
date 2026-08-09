@@ -12,15 +12,15 @@ export function isDeviceAdmin(privilegeId: number | undefined): boolean {
 }
 
 /**
- * Device scope for normal product usage. Owners and explicitly assigned users
- * can use a device, while the super admin retains the existing global access.
+ * Device scope for normal product usage. Every role, including super admin,
+ * can only use devices they own or devices explicitly assigned to them.
+ * Cross-account visibility belongs exclusively to read-only monitoring APIs.
  */
 export function accessibleDeviceWhere(
     userPkId: number,
     privilegeId?: number,
 ): Prisma.DeviceWhereInput {
-    if (isSuperAdmin(privilegeId)) return {};
-
+    void privilegeId;
     return {
         OR: [
             { userId: userPkId },
@@ -37,5 +37,18 @@ export function ownedDeviceWhere(
     userPkId: number,
     privilegeId?: number,
 ): Prisma.DeviceWhereInput {
-    return isSuperAdmin(privilegeId) ? {} : { userId: userPkId };
+    void privilegeId;
+    return { userId: userPkId };
+}
+
+export type DeviceOwnershipType = 'user_owned' | 'admin_owned' | 'admin_assigned';
+
+export function classifyDeviceOwnership(
+    ownerPrivilegeName: string | null | undefined,
+    assignmentCount: number,
+): DeviceOwnershipType {
+    const role = ownerPrivilegeName?.trim().toLowerCase();
+    const ownerIsAdmin = role === 'admin' || role === 'super admin';
+    if (!ownerIsAdmin) return 'user_owned';
+    return assignmentCount > 0 ? 'admin_assigned' : 'admin_owned';
 }
