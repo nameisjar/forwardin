@@ -4,6 +4,7 @@ import prisma from '../utils/db';
 import logger from '../config/logger';
 import { generateAccessToken, generateRefreshToken } from '../utils/jwtGenerator';
 import { isUUID } from '../utils/uuidChecker';
+import { setRefreshTokenCookie } from '../utils/authCookie';
 
 export const registerCS: RequestHandler = async (req, res) => {
     try {
@@ -123,9 +124,9 @@ export const login: RequestHandler = async (req, res) => {
             data: { refreshToken },
         });
 
+        setRefreshTokenCookie(res, refreshToken);
         return res.status(200).json({
             accessToken,
-            refreshToken,
             id,
             role: cs.privilegeId,
             sessionId: cs.device?.sessions[0]?.sessionId,

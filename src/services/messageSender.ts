@@ -22,19 +22,15 @@ import { refreshInboxProfileCache } from './inboxProfileCache';
 
 type DeviceContext = { pkId: number; sessionId: string | null };
 
-// Cache deviceId -> database/session identifiers untuk mengurangi query DB
-const deviceContextCache = new Map<string, DeviceContext>();
-
 async function getDeviceContext(deviceId: string): Promise<DeviceContext | null> {
-    const cached = deviceContextCache.get(deviceId);
-    if (cached) return cached;
-
     const device = await prisma.device.findUnique({
         where: { id: deviceId },
         select: {
             pkId: true,
             sessions: {
+                where: { id: { contains: 'config' } },
                 select: { sessionId: true },
+                orderBy: { pkId: 'desc' },
                 take: 1,
             },
         },
@@ -46,7 +42,6 @@ async function getDeviceContext(deviceId: string): Promise<DeviceContext | null>
         pkId: device.pkId,
         sessionId: device.sessions[0]?.sessionId || null,
     };
-    deviceContextCache.set(deviceId, context);
     return context;
 }
 
@@ -69,10 +64,10 @@ async function persistOutgoingMessage(params: {
 
     try {
         const context = await getDeviceContext(params.deviceId);
-        if (!context?.sessionId) {
+        if (!context) {
             logger.warn(
                 { deviceId: params.deviceId, messageId: params.messageId },
-                '[MessageSender] Cannot persist outgoing message without sessionId',
+                '[MessageSender] Cannot persist outgoing message: device not found',
             );
             return;
         }
@@ -93,6 +88,7 @@ async function persistOutgoingMessage(params: {
                 waMessageId: params.messageId,
                 to: params.jid,
                 sessionId: context.sessionId,
+                deviceId: context.pkId,
                 ...(encryptedText ? { message: encryptedText } : {}),
                 ...(params.mediaPath ? { mediaPath: params.mediaPath } : {}),
                 contactId: contact?.pkId || null,
@@ -108,20 +104,24 @@ async function persistOutgoingMessage(params: {
                 schedule: new Date(),
                 status: 'server_ack',
                 sessionId: context.sessionId,
+                deviceId: context.pkId,
                 contactId: contact?.pkId || null,
                 isGroup: params.jid.includes('@g.us'),
                 readBy: [],
             },
         });
 
-        getSocketIO().to(`session:${context.sessionId}`).emit(`outgoing:${context.sessionId}`, {
-            ...savedMessage,
-            message: params.text || '',
-            isOutgoing: true,
-        });
+        if (context.sessionId) {
+            getSocketIO().to(`session:${context.sessionId}`).emit(`outgoing:${context.sessionId}`, {
+                ...savedMessage,
+                message: params.text || '',
+                isOutgoing: true,
+            });
+        }
 
         if (
             !params.jid.endsWith('@lid') &&
+            context.sessionId &&
             params.session &&
             typeof params.session.profilePictureUrl === 'function'
         ) {

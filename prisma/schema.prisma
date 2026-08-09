@@ -185,6 +185,7 @@ model Device {
   DeviceLog       DeviceLog[]
   whatsappGroups  WhatsAppGroup[]
   IncomingMessage IncomingMessage[]
+  OutgoingMessage OutgoingMessage[]
   inboxProfileCaches InboxProfileCache[]
   messageReactions MessageReaction[]
 
@@ -349,6 +350,7 @@ model OutgoingMessage {
   createdAt   DateTime @default(now()) @map("created_at")
   updatedAt   DateTime @default(now()) @map("updated_at")
   sessionId   String?
+  deviceId    Int?     @map("device_id")
   contactId   Int?
   broadcastId Int?     // Add reference to broadcast
   broadcastType String? @map("broadcast_type") @db.VarChar(20) // 🔥 NEW: 'broadcast' | 'reminder' | 'feedback' | 'recurrence'
@@ -356,10 +358,12 @@ model OutgoingMessage {
   /// For group messages: list of participant JIDs who have read the message (best-effort).
   readBy      Json?    @map("read_by")
   contact     Contact? @relation(fields: [contactId], references: [pkId], onDelete: Cascade)
+  device      Device?  @relation(fields: [deviceId], references: [pkId], onDelete: SetNull)
 
   @@unique([sessionId, to, id], map: "unique_outgoing_message_key_per_session_id")
   @@index([broadcastId], map: "idx_outgoing_message_broadcast")
   @@index([sessionId, createdAt], map: "idx_outgoing_message_session_time")
+  @@index([deviceId, createdAt], map: "idx_outgoing_message_device_time")
   @@index([status], map: "idx_outgoing_message_status")
 }
 

@@ -1,3 +1,4 @@
+import './config/env';
 import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
@@ -72,7 +73,7 @@ app.use(
             logger.warn({ origin, allowedOrigins }, '[Security] CORS blocked - origin not in allowlist');
             return cb(new Error('Not allowed by CORS'));
         },
-        credentials: false,
+        credentials: true,
         exposedHeaders: ['Retry-After', 'X-Profile-Status'],
     }),
 );

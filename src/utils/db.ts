@@ -1,4 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
+import '../config/env';
 import { PrismaClient } from '@prisma/client';
 import { MakeSerializedPrisma, MakeTransformedPrisma } from '../types';
 import Long from 'long';

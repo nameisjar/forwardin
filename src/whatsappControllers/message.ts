@@ -43,6 +43,15 @@ const whatsappMediaHttpsAgent = new https.Agent({
     maxSockets: 20,
 });
 
+// Baileys and the application currently resolve different generations of the
+// Node Buffer declarations. Copy binary values at API boundaries so Node's
+// newer crypto/fs types always receive a plain ArrayBuffer-backed view.
+const copyToNativeUint8Array = (value: ArrayLike<number>) => {
+    const copy = new Uint8Array(value.length);
+    copy.set(value);
+    return copy;
+};
+
 async function downloadWhatsAppMediaOverIpv4(
     media: {
         mediaKey?: Uint8Array | null;
@@ -58,7 +67,7 @@ async function downloadWhatsAppMediaOverIpv4(
     const downloadUrl = media.url?.startsWith('https://mmg.whatsapp.net/')
         ? media.url
         : getUrlFromDirectPath(media.directPath!);
-    const response = await axios.get<Buffer>(downloadUrl, {
+    const response = await axios.get<ArrayBuffer>(downloadUrl, {
         responseType: 'arraybuffer',
         timeout: 30_000,
         maxContentLength: 50 * 1024 * 1024,
@@ -70,7 +79,10 @@ async function downloadWhatsAppMediaOverIpv4(
             'User-Agent': 'Mozilla/5.0',
         },
     });
-    const encryptedPayload = Buffer.from(response.data);
+    // Axios returns a Node Buffer at runtime for arraybuffer responses, while
+    // newer TypeScript/Node declarations model this as ArrayBuffer. Copy via a
+    // native Uint8Array so both declaration variants remain compatible.
+    const encryptedPayload = Buffer.from(new Uint8Array(response.data));
     if (encryptedPayload.length <= 10) {
         throw new Error('WhatsApp CDN returned an empty encrypted payload');
     }
@@ -78,8 +90,20 @@ async function downloadWhatsAppMediaOverIpv4(
     // WhatsApp appends a 10-byte MAC after the AES-CBC ciphertext.
     const ciphertext = encryptedPayload.subarray(0, encryptedPayload.length - 10);
     const { cipherKey, iv } = await getMediaKeys(media.mediaKey, mediaType);
-    const decipher = createDecipheriv('aes-256-cbc', cipherKey, iv);
-    return Buffer.concat([decipher.update(ciphertext), decipher.final()]);
+    // Allocate fresh typed arrays backed by a plain ArrayBuffer. Baileys can
+    // expose Uint8Array<ArrayBufferLike>, while newer Node crypto declarations
+    // require an ArrayBuffer-backed view and reject Buffer/SharedArrayBuffer.
+    const cipherKeyBytes = copyToNativeUint8Array(cipherKey);
+    const ivBytes = copyToNativeUint8Array(iv);
+    const decipher = createDecipheriv('aes-256-cbc', cipherKeyBytes, ivBytes);
+    const decrypted = copyToNativeUint8Array(
+        decipher.update(copyToNativeUint8Array(ciphertext)),
+    );
+    const finalBlock = copyToNativeUint8Array(decipher.final());
+    const plaintext = new Uint8Array(decrypted.length + finalBlock.length);
+    plaintext.set(decrypted);
+    plaintext.set(finalBlock, decrypted.length);
+    return Buffer.from(plaintext);
 }
 
 const getKeyAuthor = (key: WAMessageKey | undefined | null) =>
@@ -138,7 +162,7 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
         const persistedTarget = targetKey.fromMe
             ? await prisma.outgoingMessage.findFirst({
                   where: {
-                      sessionId,
+                      deviceId: reactionDeviceId,
                       OR: [
                           { waMessageId: targetKey.id },
                           { id: targetKey.id },
@@ -196,27 +220,6 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
         return saved;
     };
 
-    // obtain messages history
-    const set: BaileysEventHandler<'messaging-history.set'> = async ({ messages, isLatest }) => {
-        try {
-            await prisma.$transaction(async (tx) => {
-                if (isLatest) await tx.message.deleteMany({ where: { sessionId } });
-
-                await tx.message.createMany({
-                    data: messages.map((message: { key: { remoteJid: any; id: any } }) => ({
-                        ...transformPrisma(message),
-                        remoteJid: message.key.remoteJid!,
-                        id: message.key.id!,
-                        sessionId,
-                    })),
-                });
-            });
-            logger.info({ messages: messages.length }, 'Synced messages');
-        } catch (e) {
-            logger.error(e, 'An error occured during messages set');
-        }
-    };
-
     const upsert: BaileysEventHandler<'messages.upsert'> = async ({ messages, type }) => {
         switch (type) {
             case 'append':
@@ -236,6 +239,7 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                             : getPhoneJid(remoteJidRaw, message.key.remoteJidAlt) ||
                               jidNormalizedUser(remoteJidRaw);
                         const data = transformPrisma(message);
+                        const messageDevicePkId = await getDevicePkId();
                         const messageContent = extractMessageContent(message.message);
                         const reactionMessage = messageContent?.reactionMessage;
 
@@ -317,11 +321,16 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                                 const currentMessage = await prisma.outgoingMessage.findFirst({
                                     where: {
                                         OR: [
-                                            { waMessageId: message.key.id!, sessionId },
-                                            { id: message.key.id!, sessionId },
+                                            { waMessageId: message.key.id! },
+                                            { id: message.key.id! },
                                         ],
                                     },
-                                    select: { pkId: true, status: true, waMessageId: true },
+                                    select: {
+                                        pkId: true,
+                                        status: true,
+                                        waMessageId: true,
+                                        deviceId: true,
+                                    },
                                 });
 
                                 // Define status hierarchy for comparison
@@ -342,14 +351,21 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                                 const newLevel =
                                     statusHierarchy[status as keyof typeof statusHierarchy] || 0;
 
-                                const shouldUpdate = !currentMessage || newLevel > currentLevel;
+                                const shouldUpdate =
+                                    !currentMessage ||
+                                    newLevel > currentLevel ||
+                                    !currentMessage.deviceId;
 
                                 if (shouldUpdate) {
                                     if (currentMessage?.pkId) {
                                         const outgoingMessage = await prisma.outgoingMessage.update({
                                             where: { pkId: currentMessage.pkId },
                                             data: {
-                                                status,
+                                                status:
+                                                    newLevel > currentLevel
+                                                        ? status
+                                                        : currentMessage.status,
+                                                deviceId: messageDevicePkId,
                                                 waMessageId: currentMessage.waMessageId || message.key.id!,
                                                 updatedAt: new Date(),
                                             },
@@ -363,7 +379,7 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                                     } else {
                                         // ⚠️ CRITICAL FIX: Check existing message before upsert to prevent downgrade
                                         const existingMessage = await prisma.outgoingMessage.findFirst({
-                                            where: { id: message.key.id!, sessionId },
+                                            where: { id: message.key.id! },
                                             select: { pkId: true, status: true },
                                         });
                                         
@@ -377,6 +393,7 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                                                     where: { pkId: existingMessage.pkId },
                                                     data: {
                                                         status,
+                                                        deviceId: messageDevicePkId,
                                                         waMessageId: message.key.id!,
                                                         updatedAt: new Date(),
                                                     },
@@ -406,6 +423,7 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                                                     schedule: new Date(),
                                                     status,
                                                     sessionId,
+                                                    deviceId: messageDevicePkId,
                                                     contactId: contact?.pkId || null,
                                                 },
                                                 include: { contact: true },
@@ -530,15 +548,22 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                                                         incomingMedia.content,
                                                         incomingMedia.kind as any,
                                                     );
-                                                    const chunks: Buffer[] = [];
+                                                    const chunks: Array<
+                                                        ReturnType<typeof copyToNativeUint8Array>
+                                                    > = [];
+                                                    let totalLength = 0;
                                                     for await (const chunk of stream) {
-                                                        chunks.push(
-                                                            Buffer.isBuffer(chunk)
-                                                                ? chunk
-                                                                : Buffer.from(chunk),
-                                                        );
+                                                        const bytes = copyToNativeUint8Array(chunk);
+                                                        chunks.push(bytes);
+                                                        totalLength += bytes.length;
                                                     }
-                                                    mediaBuffer = Buffer.concat(chunks);
+                                                    const combined = new Uint8Array(totalLength);
+                                                    let offset = 0;
+                                                    for (const bytes of chunks) {
+                                                        combined.set(bytes, offset);
+                                                        offset += bytes.length;
+                                                    }
+                                                    mediaBuffer = Buffer.from(combined);
                                                     if (mediaBuffer.length > 0) break;
                                                 } catch (directDownloadError) {
                                                     lastError = directDownloadError;
@@ -643,7 +668,10 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                                             ? `${safeMessageId}-${safeOriginalName}`
                                             : `${safeMessageId}.${extension}`;
                                         const mediaFilePath = path.join(dir, mediaFileName);
-                                        await fs.promises.writeFile(mediaFilePath, mediaBuffer);
+                                        await fs.promises.writeFile(
+                                            mediaFilePath,
+                                            copyToNativeUint8Array(mediaBuffer),
+                                        );
                                         return mediaFilePath.replace(/\\/g, '/');
                                     };
 
@@ -1392,8 +1420,9 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
     const listen = () => {
         if (listening) return;
 
-        // Jika ingin mengaktifkan messaging-history.set, uncomment kedua baris ini (on & off)
-        // event.on('messaging-history.set', set);
+        // Deliberately do not listen to messaging-history.set. Inbox represents
+        // activity recorded while this system is in use, not WhatsApp's old
+        // account history. Live incoming/outgoing events use messages.upsert.
         event.on('messages.upsert', upsert);
         event.on('messages.update', update);
         event.on('messages.delete', del);
@@ -1406,7 +1435,6 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
     const unlisten = () => {
         if (!listening) return;
 
-        // event.off('messaging-history.set', set);
         event.off('messages.upsert', upsert);
         event.off('messages.update', update);
         event.off('messages.delete', del);

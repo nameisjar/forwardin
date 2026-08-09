@@ -9,9 +9,9 @@ import { isUUID } from '../utils/uuidChecker';
 import fs from 'fs';
 import path from 'path';
 import { addWeeks, format } from 'date-fns'; // Anda bisa menggunakan date-fns atau moment.js untuk manipulasi tanggal
-import { sendDocument } from '../services/whatsapp';
 import { generateMonthlyFeedbackPDFWithPuppeteer } from '../services/pdfGenerator';
-import { executeWithRateLimit, RateLimitResult, setDeviceAsPersonal, setDeviceAsShared } from '../services/rateLimiter';
+import { setDeviceAsPersonal, setDeviceAsShared } from '../services/rateLimiter';
+import { sendMonthlyFeedbackBatch } from '../services/monthlyFeedbackSender';
 import { redactPhone } from '../utils/logRedaction';
 import { encryptMessage, decryptOutgoingMessage, decryptOutgoingMessages, decryptBroadcast, decryptBroadcasts } from '../utils/messageEncryption';
 import { getSocketIO } from '../socket';
@@ -162,6 +162,16 @@ export const sendMessages: RequestHandler = async (req, res) => {
                 // ✅ CRITICAL: Encrypt message before saving
                 const { encryptMessage } = await import('../utils/messageEncryption');
                 const encryptedMessage = encryptMessage(messageText);
+                const contactPhone = jid.split('@')[0].replace(/\D/g, '');
+                const contact = await prisma.contact.findFirst({
+                    where: {
+                        phone: { in: [contactPhone, `+${contactPhone}`] },
+                        contactDevices: {
+                            some: { deviceId: req.authenticatedDevice.deviceId },
+                        },
+                    },
+                    select: { pkId: true },
+                });
                 
                 try {
                     const savedMessageId = waMessageId || `msg-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
@@ -170,9 +180,11 @@ export const sendMessages: RequestHandler = async (req, res) => {
                         update: {
                             waMessageId,
                             sessionId,
+                            deviceId: req.authenticatedDevice.deviceId,
                             to: jid,
                             message: encryptedMessage,
                             status: 'server_ack',
+                            contactId: contact?.pkId || null,
                             isGroup: type === 'group',
                             updatedAt: new Date(),
                         },
@@ -180,10 +192,12 @@ export const sendMessages: RequestHandler = async (req, res) => {
                             id: savedMessageId,
                             waMessageId,
                             sessionId,
+                            deviceId: req.authenticatedDevice.deviceId,
                             to: jid,
                             message: encryptedMessage,
                             schedule: new Date(),
                             status: 'server_ack', // Default status: terkirim ke server (1 centang)
+                            contactId: contact?.pkId || null,
                             isGroup: type === 'group',
                             readBy: [], // Initialize empty readBy array
                         },
@@ -557,6 +571,7 @@ export const sendInboxMediaMessage: RequestHandler = async (req, res) => {
                     mediaPath,
                     status: 'server_ack',
                     sessionId,
+                    deviceId: devicePkId,
                     contactId: contact?.pkId || null,
                     isGroup,
                     updatedAt: new Date(),
@@ -570,6 +585,7 @@ export const sendInboxMediaMessage: RequestHandler = async (req, res) => {
                     schedule: new Date(),
                     status: 'server_ack',
                     sessionId,
+                    deviceId: devicePkId,
                     contactId: contact?.pkId || null,
                     isGroup,
                     readBy: [],
@@ -652,7 +668,7 @@ export const sendInboxReaction: RequestHandler = async (req, res) => {
         if (targetFromMe) {
             const target = await prisma.outgoingMessage.findFirst({
                 where: {
-                    sessionId,
+                    deviceId: devicePkId,
                     OR: [
                         { waMessageId: targetMessageId },
                         { id: targetMessageId },
@@ -763,7 +779,7 @@ export const deleteInboxMessage: RequestHandler = async (req, res) => {
         if (targetFromMe) {
             const target = await prisma.outgoingMessage.findFirst({
                 where: {
-                    sessionId,
+                    deviceId: devicePkId,
                     OR: [
                         { waMessageId: targetMessageId },
                         { id: targetMessageId },
@@ -3425,6 +3441,23 @@ export const sendMonthlyFeedbackDevice: RequestHandler = async (req, res) => {
         const privilegeId = (user as any)?.privilege?.pkId;
         configureDeviceRateLimit(deviceUuid, privilegeId);
 
+        const sessionId = req.authenticatedDevice.sessionId;
+        if (!sessionId || !isUUID(sessionId)) {
+            return res.status(400).json({ message: 'Invalid WhatsApp session' });
+        }
+
+        let session;
+        try {
+            session = getInstance(sessionId);
+        } catch (error) {
+            logger.warn({ sessionId, error }, 'Monthly feedback session is not available');
+            return res.status(503).json({ message: 'WhatsApp session not found or not connected' });
+        }
+
+        if (!session?.user) {
+            return res.status(503).json({ message: 'WhatsApp session not connected' });
+        }
+
         // Process recipients - expand labels to actual phone numbers with firstName
         // 🆕 Keep mapping of original phone to studentName (from frontend)
         const phoneToNameMap: Record<string, string> = {};
@@ -3471,23 +3504,17 @@ export const sendMonthlyFeedbackDevice: RequestHandler = async (req, res) => {
         
         const tutorName = reportBy || 'Tutor';
         
-        const sendResults: Array<{
-            recipient: string;
-            studentName: string;
-            status: string;
-            error?: string;
-            rateLimitInfo?: RateLimitResult;
-        }> = [];
+        // PDF generation remains parallel (up to three at once); sending is sequential.
 
         // 🚀 OPTIMIZED: Parallel PDF generation with concurrency limit
-        const CONCURRENCY_LIMIT = 3; // Max 3 PDFs generating at once
-        
-        // Helper function to process a single recipient
-        const processRecipient = async (recipientData: { phone: string; studentName: string }) => {
+        const createDocumentForRecipient = async (recipientData: {
+            phone: string;
+            studentName: string;
+        }) => {
             const { phone: recipient, studentName: recipientStudentName } = recipientData;
-            
-            try {
-                logger.info(`Generating PDF for: ${recipientStudentName?.substring(0, 2)}*** -> ${redactPhone(recipient)}`);
+            logger.info(
+                `Generating PDF for: ${recipientStudentName?.substring(0, 2)}*** -> ${redactPhone(recipient)}`,
+            );
                 
                 // Build tutor comment for this recipient
                 const finalTutorComment = Array.isArray(tutorComment) 
@@ -3526,61 +3553,38 @@ Penilaian ini meliputi bintang dan poin yang diperoleh ${recipientStudentName} a
 
 Jika ada hal yang ingin ditanyakan mengenai hasil ini atau tentang perkembangan ${recipientStudentName}, saya siap membantu menjelaskan lebih lanjut. Terima kasih atas dukungan Anda dalam proses belajar ${recipientStudentName}, dan mari kita terus bekerja sama untuk mencapai hasil yang lebih baik ke depannya! 💜`;
                 
-                logger.info(`Sending PDF (${pdfBuffer.length} bytes) to: ${redactPhone(recipient)}`);
-                
-                const { result: sendResult, rateLimitInfo } = await executeWithRateLimit(
-                    deviceUuid,
-                    async () => {
-                        await sendDocument(
-                            deviceUuid,
-                            recipient,
-                            pdfBuffer,
-                            fileName,
-                            caption
-                        );
-                        return { success: true };
-                    },
-                    `feedback-${recipientStudentName}-${recipient}-${Date.now()}`
-                );
-                
-                if (rateLimitInfo.delayed) {
-                    logger.info(`✅ Sent to ${redactPhone(recipient)} (${recipientStudentName}) (delayed ${Math.round(rateLimitInfo.delayMs/1000)}s)`);
-                } else {
-                    logger.info(`✅ Sent to ${redactPhone(recipient)} (${recipientStudentName})`);
-                }
-                
-                return { 
-                    recipient,
-                    studentName: recipientStudentName,
-                    status: 'success' as const,
-                    rateLimitInfo
+                return {
+                    buffer: pdfBuffer,
+                    fileName,
+                    caption,
                 };
                 
-            } catch (sendError) {
-                logger.error(`❌ Failed for ${recipientStudentName} -> ${redactPhone(recipient)}:`, sendError);
-                return { 
-                    recipient,
-                    studentName: recipientStudentName,
-                    status: 'failed' as const, 
-                    error: sendError instanceof Error ? sendError.message : 'Unknown error' 
-                };
-            }
         };
 
         // 🚀 Process recipients in parallel batches
-        logger.info(`Starting parallel processing with concurrency limit: ${CONCURRENCY_LIMIT}`);
         const startTime = Date.now();
-        
-        for (let i = 0; i < finalRecipientList.length; i += CONCURRENCY_LIMIT) {
-            const batch = finalRecipientList.slice(i, i + CONCURRENCY_LIMIT);
-            logger.info(`Processing batch ${Math.floor(i / CONCURRENCY_LIMIT) + 1}: ${batch.length} recipients`);
-            
-            const batchResults = await Promise.all(batch.map(processRecipient));
-            sendResults.push(...batchResults);
-        }
-        
+        const batchResult = await sendMonthlyFeedbackBatch({
+            session,
+            deviceUuid,
+            devicePkId,
+            recipients: finalRecipientList,
+            pdfConcurrency: 3,
+            createDocument: createDocumentForRecipient,
+        });
+        const sendResults = batchResult.results;
         const totalTime = ((Date.now() - startTime) / 1000).toFixed(1);
-        logger.info(`Parallel processing completed in ${totalTime}s`);
+        logger.info(
+            {
+                totalTime,
+                success: batchResult.success,
+                failed: batchResult.failed,
+                paused: batchResult.paused,
+                invalid: batchResult.invalid,
+                duplicatesRemoved: batchResult.duplicatesRemoved,
+                stoppedReason: batchResult.stoppedReason,
+            },
+            'Protected monthly feedback processing completed',
+        );
 
         // 🚀 OPTIMIZED: Batch database insert instead of individual inserts
         try {
@@ -3593,7 +3597,7 @@ Jika ada hal yang ingin ditanyakan mengenai hasil ini atau tentang perkembangan 
                         studentName: result.studentName,
                         courseName,
                         month: Number(month),
-                        recipientPhone: result.recipient,
+                        recipientPhone: result.normalizedRecipient || result.recipient,
                         sentBy: userId,
                         sentAt: new Date()
                     }));
@@ -3611,17 +3615,26 @@ Jika ada hal yang ingin ditanyakan mengenai hasil ini atau tentang perkembangan 
 
         const successCount = sendResults.filter(r => r.status === 'success').length;
         const failedCount = sendResults.filter(r => r.status === 'failed').length;
+        const pausedCount = sendResults.filter(r => r.status === 'paused').length;
 
-        logger.info(`=== Monthly feedback sent: ${successCount} success, ${failedCount} failed ===`);
+        logger.info(
+            `=== Monthly feedback sent: ${successCount} success, ${failedCount} failed, ${pausedCount} paused ===`,
+        );
         
         res.status(200).json({ 
-            message: `Monthly feedback sent to ${successCount} recipient(s)`,
+            message: batchResult.stoppedReason
+                ? `Monthly feedback paused: ${batchResult.stoppedReason}`
+                : `Monthly feedback sent to ${successCount} recipient(s)`,
             results: sendResults,
             summary: {
-                total: finalRecipientList.length,
+                total: batchResult.total,
                 success: successCount,
-                failed: failedCount
-            }
+                failed: failedCount,
+                paused: pausedCount,
+                invalid: batchResult.invalid,
+                duplicatesRemoved: batchResult.duplicatesRemoved,
+            },
+            stoppedReason: batchResult.stoppedReason,
         });
     } catch (error) {
         logger.error('=== Error sending monthly feedback ===');

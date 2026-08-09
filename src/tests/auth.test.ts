@@ -60,7 +60,9 @@ describe('------Auth API------', () => {
 
             expect(response.status).to.equal(201);
             expect(response.body).to.have.property('accessToken');
-            expect(response.body).to.have.property('refreshToken');
+            expect(response.body).not.to.have.property('refreshToken');
+            expect(response.headers['set-cookie']?.[0]).to.include('forwardin_refresh_token=');
+            expect(response.headers['set-cookie']?.[0]).to.include('HttpOnly');
             expect(response.body).to.have.property('accountApiKey');
         });
     });

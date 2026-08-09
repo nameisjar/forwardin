@@ -170,7 +170,8 @@ export async function createInstance(options: createInstanceOptions) {
         const operations = [
             { name: 'Message', fn: () => prisma.message.updateMany({ where: { sessionId }, data: { sessionId: null } }) },
             // NOTE: IncomingMessage NOT nullified here - messages persist via deviceId for Inbox feature
-            { name: 'OutgoingMessage', fn: () => prisma.outgoingMessage.updateMany({ where: { sessionId }, data: { sessionId: null } }) },
+            // OutgoingMessage keeps its historical sessionId and permanent deviceId
+            // so Inbox history survives logout and QR relinking.
             { name: 'Session', fn: () => prisma.session.deleteMany({ where: { sessionId } }) },
         ];
         
@@ -564,6 +565,11 @@ export async function createInstance(options: createInstanceOptions) {
         },
         logger: logger as any,
         markOnlineOnConnect: false,
+        // Inbox only records messages that occur while this system is active.
+        // Do not import the account's pre-existing WhatsApp chat history when
+        // pairing or reconnecting a device.
+        syncFullHistory: false,
+        shouldSyncHistoryMessage: () => false,
 
         getMessage: async (key) => {
             const data = await prisma.message.findFirst({
@@ -1282,7 +1288,6 @@ export async function createInstance(options: createInstanceOptions) {
     });
 
     // Debug events
-    // sock.ev.on('messaging-history.set', (data) => dump('messaging-history.set', data));
     // sock.ev.on('chats.upsert', (data) => dump('chats.upsert', data));
     // sock.ev.on('contacts.update', (data) => dump('contacts.update', data));
 

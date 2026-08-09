@@ -907,22 +907,12 @@ export const deleteConversation: RequestHandler = async (req, res) => {
         const userPkId = req.authenticatedUser.pkId;
         const device = await prisma.device.findFirst({
             where: { id: deviceUuid, userId: userPkId },
-            select: {
-                pkId: true,
-                sessions: { select: { sessionId: true } },
-                Broadcast: { select: { pkId: true } },
-            },
+            select: { pkId: true },
         });
 
         if (!device) {
             return res.status(404).json({ message: 'Device not found' });
         }
-
-        const sessionIds = [...new Set(device.sessions.map((session) => session.sessionId))];
-        const broadcastIds = device.Broadcast.map((broadcast) => broadcast.pkId);
-        const outgoingOwnership: any[] = [];
-        if (sessionIds.length > 0) outgoingOwnership.push({ sessionId: { in: sessionIds } });
-        if (broadcastIds.length > 0) outgoingOwnership.push({ broadcastId: { in: broadcastIds } });
 
         const [incomingResult, outgoingResult] = await prisma.$transaction([
             prisma.incomingMessage.deleteMany({
@@ -933,8 +923,8 @@ export const deleteConversation: RequestHandler = async (req, res) => {
             }),
             prisma.outgoingMessage.deleteMany({
                 where: {
+                    deviceId: device.pkId,
                     to: from,
-                    ...(outgoingOwnership.length > 0 ? { OR: outgoingOwnership } : { pkId: -1 }),
                 },
             }),
         ]);
@@ -1022,29 +1012,19 @@ export const deleteAllInbox: RequestHandler = async (req, res) => {
         const userPkId = req.authenticatedUser.pkId;
         const device = await prisma.device.findFirst({
             where: { id: deviceUuid, userId: userPkId },
-            select: {
-                pkId: true,
-                sessions: { select: { sessionId: true } },
-                Broadcast: { select: { pkId: true } },
-            },
+            select: { pkId: true },
         });
 
         if (!device) {
             return res.status(404).json({ message: 'Device not found' });
         }
 
-        const sessionIds = [...new Set(device.sessions.map((session) => session.sessionId))];
-        const broadcastIds = device.Broadcast.map((broadcast) => broadcast.pkId);
-        const outgoingOwnership: any[] = [];
-        if (sessionIds.length > 0) outgoingOwnership.push({ sessionId: { in: sessionIds } });
-        if (broadcastIds.length > 0) outgoingOwnership.push({ broadcastId: { in: broadcastIds } });
-
         const [incomingResult, outgoingResult] = await prisma.$transaction([
             prisma.incomingMessage.deleteMany({
                 where: { deviceId: device.pkId },
             }),
             prisma.outgoingMessage.deleteMany({
-                where: outgoingOwnership.length > 0 ? { OR: outgoingOwnership } : { pkId: -1 },
+                where: { deviceId: device.pkId },
             }),
         ]);
         await deleteAllDeviceReactions(device.pkId).catch((error) => {
@@ -1084,26 +1064,16 @@ export const getDeviceOutbox: RequestHandler = async (req, res) => {
 
         const device = await prisma.device.findFirst({
             where: { id: deviceUuid, userId: userPkId },
-            select: { 
-                pkId: true,
-                sessions: {
-                    select: { sessionId: true },
-                },
-            },
+            select: { pkId: true },
         });
 
         if (!device) {
             return res.status(404).json({ message: 'Device not found' });
         }
 
-        const sessionIds = [...new Set(device.sessions.map((session) => session.sessionId))];
-        if (sessionIds.length === 0) {
-            return res.status(200).json([]);
-        }
-
         // Build where clause
         const where: any = {
-            sessionId: { in: sessionIds },
+            deviceId: device.pkId,
         };
 
         // Filter by recipient if provided
@@ -1162,19 +1132,11 @@ export const getDeviceOutboxConversations: RequestHandler = async (req, res) => 
         const userPkId = req.authenticatedUser.pkId;
         const device = await prisma.device.findFirst({
             where: { id: deviceUuid, userId: userPkId },
-            select: {
-                pkId: true,
-                sessions: { select: { sessionId: true } },
-            },
+            select: { pkId: true },
         });
 
         if (!device) {
             return res.status(404).json({ message: 'Device not found' });
-        }
-
-        const sessionIds = [...new Set(device.sessions.map((session) => session.sessionId))];
-        if (sessionIds.length === 0) {
-            return res.status(200).json([]);
         }
 
         const recipients =
@@ -1184,7 +1146,7 @@ export const getDeviceOutboxConversations: RequestHandler = async (req, res) => 
         const groupedRecipients = await prisma.outgoingMessage.groupBy({
             by: ['to'],
             where: {
-                sessionId: { in: sessionIds },
+                deviceId: device.pkId,
                 ...(recipients.length > 0 ? { to: { in: recipients } } : {}),
             },
             _max: { createdAt: true },
@@ -1199,7 +1161,7 @@ export const getDeviceOutboxConversations: RequestHandler = async (req, res) => 
 
         const latestMessages = await prisma.outgoingMessage.findMany({
             where: {
-                sessionId: { in: sessionIds },
+                deviceId: device.pkId,
                 OR: groupedRecipients
                     .filter((group) => group._max.createdAt)
                     .map((group) => ({ to: group.to, createdAt: group._max.createdAt! })),
@@ -1588,7 +1550,9 @@ export const getInboxProfilePicture: RequestHandler = async (req, res) => {
             return res.status(204).end();
         }
 
-        const imageData = Buffer.from(picture.imageData);
+        // Copy through plain byte values because the cache and the application
+        // currently resolve different generations of Node's Buffer types.
+        const imageData = Buffer.from(Array.from(picture.imageData));
         res.setHeader('Content-Type', picture.mimeType);
         res.setHeader('Content-Length', String(imageData.length));
         res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
@@ -1620,10 +1584,7 @@ export const getDeviceInbox: RequestHandler = async (req, res) => {
         const userPkId = req.authenticatedUser.pkId;
         const device = await prisma.device.findFirst({
             where: { id: deviceUuid, userId: userPkId },
-            select: {
-                pkId: true,
-                sessions: { select: { sessionId: true } },
-            },
+            select: { pkId: true },
         });
 
         if (!device) {
@@ -1651,7 +1612,6 @@ export const getDeviceInbox: RequestHandler = async (req, res) => {
             };
         }
 
-        const sessionIds = [...new Set(device.sessions.map((session) => session.sessionId))];
         const hasSearchFilter = Boolean(phoneNumber || message || contactName);
         const [incomingGroups, outgoingGroups] = await Promise.all([
             prisma.incomingMessage.groupBy({
@@ -1660,10 +1620,10 @@ export const getDeviceInbox: RequestHandler = async (req, res) => {
                 _max: { receivedAt: true },
                 _count: { _all: true },
             }),
-            !hasSearchFilter && sessionIds.length > 0
+            !hasSearchFilter
                 ? prisma.outgoingMessage.groupBy({
                       by: ['to'],
-                      where: { sessionId: { in: sessionIds } },
+                      where: { deviceId: device.pkId },
                       _max: { createdAt: true },
                       _count: { _all: true },
                   })

@@ -15,6 +15,11 @@ import { refreshTokenPayload } from '../types';
 import refresh from 'passport-oauth2-refresh';
 import { otpTemplate } from '../utils/templateEmailOtp';
 import { forgotTemplateEmail } from '../utils/templateEmail';
+import {
+    clearRefreshTokenCookie,
+    getRefreshToken,
+    setRefreshTokenCookie,
+} from '../utils/authCookie';
 
 export const register: RequestHandler = async (req, res) => {
     try {
@@ -78,9 +83,9 @@ export const register: RequestHandler = async (req, res) => {
             where: { pkId: newUser.pkId },
             data: { refreshToken },
         });
+        setRefreshTokenCookie(res, refreshToken);
         res.status(201).json({
             accessToken,
-            refreshToken,
             accountApiKey,
             id,
             role: newUser.privilegeId,
@@ -191,7 +196,8 @@ export const login: RequestHandler = async (req, res) => {
             data: { refreshToken },
         });
 
-        return res.status(200).json({ accessToken, refreshToken, id, role: user.privilegeId });
+        setRefreshTokenCookie(res, refreshToken);
+        return res.status(200).json({ accessToken, id, role: user.privilegeId });
     } catch (error) {
         logger.error(error);
         res.status(500).json({ message: 'Internal server error' });
@@ -200,46 +206,80 @@ export const login: RequestHandler = async (req, res) => {
 
 export const refreshToken: RequestHandler = async (req, res) => {
     try {
-        const { refreshToken } = req.body;
+        const token = getRefreshToken(req);
+        if (!token) {
+            clearRefreshTokenCookie(res);
+            return res.status(401).json({ message: 'Refresh token is missing' });
+        }
 
-        jwt.verify(refreshToken, jwtSecretKey, async (err: unknown, decoded: unknown) => {
-            if (err) {
-                return res.status(401).json({ message: 'Invalid refresh token' });
-            }
-            if (!decoded || !(decoded as refreshTokenPayload).id) {
-                return res.status(401).json({ message: 'Decoded token is missing' });
-            }
+        const decoded = jwt.verify(token, jwtSecretKey) as refreshTokenPayload;
+        if (!decoded?.id) {
+            clearRefreshTokenCookie(res);
+            return res.status(401).json({ message: 'Invalid refresh token' });
+        }
 
-            const userId = (decoded as refreshTokenPayload).id;
-
-            const user = await prisma.user.findUnique({
-                where: { id: userId },
-            });
-
-            if (!user) {
-                const cs = await prisma.customerService.findUnique({
-                    where: { id: userId },
-                });
-
-                if (!cs) {
-                    return res.status(401).json({ message: 'User not found' });
-                }
-
-                const accessToken = generateAccessToken(cs);
-                const id = cs.id;
-
-                return res.status(200).json({ accessToken, id });
-            }
-
-            const accessToken = generateAccessToken(user);
-            const id = user.id;
-
-            return res.status(200).json({ accessToken, id });
+        const user = await prisma.user.findFirst({
+            where: { id: decoded.id, deletedAt: null },
         });
+
+        if (user) {
+            if (user.refreshToken !== token) {
+                clearRefreshTokenCookie(res);
+                return res.status(401).json({ message: 'Refresh token has been revoked' });
+            }
+
+            return res.status(200).json({ accessToken: generateAccessToken(user), id: user.id });
+        }
+
+        const cs = await prisma.customerService.findUnique({
+            where: { id: decoded.id },
+        });
+
+        if (!cs || cs.refreshToken !== token) {
+            clearRefreshTokenCookie(res);
+            return res.status(401).json({ message: 'Refresh token has been revoked' });
+        }
+
+        return res.status(200).json({ accessToken: generateAccessToken(cs), id: cs.id });
     } catch (error) {
+        clearRefreshTokenCookie(res);
+        if (error instanceof jwt.JsonWebTokenError) {
+            return res.status(401).json({ message: 'Invalid or expired refresh token' });
+        }
         logger.error(error);
-        res.status(500).json({ message: 'Internal server error' });
+        return res.status(500).json({ message: 'Internal server error' });
     }
+};
+
+export const logout: RequestHandler = async (req, res) => {
+    const token = getRefreshToken(req);
+
+    try {
+        if (token) {
+            const decoded = jwt.verify(token, jwtSecretKey) as refreshTokenPayload;
+            if (decoded?.id) {
+                await Promise.all([
+                    prisma.user.updateMany({
+                        where: { id: decoded.id, refreshToken: token },
+                        data: { refreshToken: null },
+                    }),
+                    prisma.customerService.updateMany({
+                        where: { id: decoded.id, refreshToken: token },
+                        data: { refreshToken: null },
+                    }),
+                ]);
+            }
+        }
+    } catch (error) {
+        if (!(error instanceof jwt.JsonWebTokenError)) {
+            logger.error(error);
+            clearRefreshTokenCookie(res);
+            return res.status(500).json({ message: 'Failed to revoke session' });
+        }
+    }
+
+    clearRefreshTokenCookie(res);
+    return res.status(200).json({ message: 'Logged out successfully' });
 };
 
 export const sendVerificationEmail: RequestHandler = async (req, res) => {

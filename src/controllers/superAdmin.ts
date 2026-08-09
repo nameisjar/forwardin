@@ -6,6 +6,7 @@ import { hashApiKey } from '../utils/apiKeyHash';
 import { generatePassword, sendEmail } from '../utils/otpHelper';
 import bcrypt from 'bcrypt';
 import { generateAccessToken, generateRefreshToken } from '../utils/jwtGenerator';
+import { setRefreshTokenCookie } from '../utils/authCookie';
 import { passwordTemplate } from '../utils/templateEmailPassword';
 
 export const addSuperAdmin: RequestHandler = async (req, res) => {
@@ -149,7 +150,8 @@ export const login: RequestHandler = async (req, res) => {
             data: { refreshToken },
         });
 
-        return res.status(200).json({ accessToken, refreshToken, id, role: user.privilegeId });
+        setRefreshTokenCookie(res, refreshToken);
+        return res.status(200).json({ accessToken, id, role: user.privilegeId });
     } catch (error) {
         logger.error(error);
         res.status(500).json({ message: 'Internal server error' });
