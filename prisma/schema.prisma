@@ -438,6 +438,7 @@ model InboxCleanupLog {
   incomingHiddenCount    Int      @default(0) @map("incoming_hidden_count")
   outgoingHiddenCount    Int      @default(0) @map("outgoing_hidden_count")
   incomingDeletedCount   Int      @default(0) @map("incoming_deleted_count")
+  outgoingDeletedCount   Int      @default(0) @map("outgoing_deleted_count")
   reactionDeletedCount   Int      @default(0) @map("reaction_deleted_count")
   mediaDeletedCount      Int      @default(0) @map("media_deleted_count")
   mediaDeleteFailedCount Int      @default(0) @map("media_delete_failed_count")

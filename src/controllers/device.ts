@@ -30,6 +30,7 @@ import {
     deleteConversationReactions,
     getConversationMessageReactions,
 } from '../services/messageReaction';
+import { cleanupMediaFilesIfUnreferenced } from '../services/mediaCleanup';
 import { 
     getDeviceHealth, 
     pauseDevice, 
@@ -931,6 +932,19 @@ export const deleteConversation: RequestHandler = async (req, res) => {
             return res.status(404).json({ message: 'Device not found' });
         }
 
+        const [incomingMedia, outgoingMedia] = await Promise.all([
+            prisma.incomingMessage.findMany({
+                where: { deviceId: device.pkId, from, mediaPath: { not: null } },
+                select: { mediaPath: true },
+                distinct: ['mediaPath'],
+            }),
+            prisma.outgoingMessage.findMany({
+                where: { deviceId: device.pkId, to: from, mediaPath: { not: null } },
+                select: { mediaPath: true },
+                distinct: ['mediaPath'],
+            }),
+        ]);
+
         const [incomingResult, outgoingResult] = await prisma.$transaction([
             prisma.incomingMessage.deleteMany({
                 where: {
@@ -951,6 +965,10 @@ export const deleteConversation: RequestHandler = async (req, res) => {
                 'Failed to delete conversation reaction metadata',
             );
         });
+        const mediaCleanup = await cleanupMediaFilesIfUnreferenced(
+            [...incomingMedia, ...outgoingMedia].map((item) => item.mediaPath),
+            'delete-inbox-conversation',
+        );
 
         const deletedCount = incomingResult.count + outgoingResult.count;
 
@@ -959,6 +977,9 @@ export const deleteConversation: RequestHandler = async (req, res) => {
             deletedCount,
             deletedIncomingCount: incomingResult.count,
             deletedOutgoingCount: outgoingResult.count,
+            mediaDeletedCount: mediaCleanup.deleted,
+            mediaRetainedCount: mediaCleanup.referenced,
+            mediaDeleteFailedCount: mediaCleanup.failed,
         });
     } catch (error) {
         logger.error(error);

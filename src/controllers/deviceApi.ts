@@ -16,6 +16,7 @@ import { redactPhone } from '../utils/logRedaction';
 import { encryptMessage, decryptOutgoingMessage, decryptOutgoingMessages, decryptBroadcast, decryptBroadcasts } from '../utils/messageEncryption';
 import { getSocketIO } from '../socket';
 import { deleteMessageReactions, saveMessageReaction } from '../services/messageReaction';
+import { cleanupMediaFilesIfUnreferenced } from '../services/mediaCleanup';
 import axios from 'axios';
 import https from 'https';
 
@@ -775,6 +776,7 @@ export const deleteInboxMessage: RequestHandler = async (req, res) => {
         let participant: string | null = null;
         let messageTimestamp: Date;
         let targetPkId: number;
+        let targetMediaPath: string | null = null;
 
         if (targetFromMe) {
             const target = await prisma.outgoingMessage.findFirst({
@@ -791,6 +793,7 @@ export const deleteInboxMessage: RequestHandler = async (req, res) => {
                     waMessageId: true,
                     to: true,
                     createdAt: true,
+                    mediaPath: true,
                 },
             });
             if (!target) {
@@ -800,6 +803,7 @@ export const deleteInboxMessage: RequestHandler = async (req, res) => {
             whatsappTargetId = target.waMessageId || target.id;
             messageTimestamp = target.createdAt;
             targetPkId = target.pkId;
+            targetMediaPath = target.mediaPath;
         } else {
             const target = await prisma.incomingMessage.findFirst({
                 where: { deviceId: devicePkId, id: targetMessageId },
@@ -809,6 +813,7 @@ export const deleteInboxMessage: RequestHandler = async (req, res) => {
                     from: true,
                     participant: true,
                     receivedAt: true,
+                    mediaPath: true,
                 },
             });
             if (!target) {
@@ -819,6 +824,7 @@ export const deleteInboxMessage: RequestHandler = async (req, res) => {
             participant = target.participant;
             messageTimestamp = target.receivedAt;
             targetPkId = target.pkId;
+            targetMediaPath = target.mediaPath;
         }
 
         const jid = conversationJid.includes('@')
@@ -886,6 +892,10 @@ export const deleteInboxMessage: RequestHandler = async (req, res) => {
                 'Failed to delete reaction metadata for deleted message',
             );
         });
+        const mediaCleanup = await cleanupMediaFilesIfUnreferenced(
+            [targetMediaPath],
+            `delete-inbox-message:${scope}`,
+        );
 
         const event = {
             targetMessageId: whatsappTargetId,
@@ -899,7 +909,15 @@ export const deleteInboxMessage: RequestHandler = async (req, res) => {
             .to(`session:${sessionId}`)
             .emit(`message-deleted:${sessionId}`, event);
 
-        return res.status(200).json({ success: true, deleted: event });
+        return res.status(200).json({
+            success: true,
+            deleted: event,
+            mediaCleanup: {
+                deleted: mediaCleanup.deleted,
+                retainedBecauseReferenced: mediaCleanup.referenced,
+                failed: mediaCleanup.failed,
+            },
+        });
     } catch (error) {
         logger.warn(
             { code: (error as { code?: unknown })?.code },
