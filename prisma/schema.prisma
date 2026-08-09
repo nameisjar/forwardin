@@ -30,6 +30,8 @@ model User {
   customerServices CustomerService[]
   transactions     Transaction[]
   devices          Device[]
+  deviceAssignments DeviceAssignment[] @relation("AssignedDeviceUser")
+  createdDeviceAssignments DeviceAssignment[] @relation("DeviceAssignmentCreator")
   Group            Group[]
   Subscription     Subscription[]
   Template         Template[]
@@ -188,6 +190,7 @@ model Device {
   OutgoingMessage OutgoingMessage[]
   inboxProfileCaches InboxProfileCache[]
   messageReactions MessageReaction[]
+  assignments      DeviceAssignment[]
 
   // Health monitoring fields
   healthStatus    String           @default("healthy") @map("health_status") @db.VarChar(20) // healthy, warning, critical, paused, banned
@@ -199,6 +202,24 @@ model Device {
   
   // Relations
   deviceSignals   DeviceSignal[]
+}
+
+model DeviceAssignment {
+  pkId         Int      @id @default(autoincrement()) @map("pk_id")
+  id           String   @unique @default(uuid()) @db.Uuid
+  deviceId     Int      @map("device_id")
+  userId       Int      @map("user_id")
+  assignedById Int?     @map("assigned_by_id")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+  device       Device   @relation(fields: [deviceId], references: [pkId], onDelete: Cascade)
+  user         User     @relation("AssignedDeviceUser", fields: [userId], references: [pkId], onDelete: Cascade)
+  assignedBy   User?    @relation("DeviceAssignmentCreator", fields: [assignedById], references: [pkId], onDelete: SetNull)
+
+  @@unique([deviceId, userId], map: "device_assignments_device_user_key")
+  @@index([userId], map: "idx_device_assignments_user")
+  @@index([assignedById], map: "idx_device_assignments_assigned_by")
+  @@map("device_assignments")
 }
 
 model DeviceLog {

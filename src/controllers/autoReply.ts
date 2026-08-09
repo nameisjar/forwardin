@@ -8,6 +8,7 @@ import { generateSlug } from '../utils/slug';
 import { diskUpload } from '../config/multer';
 import { useAutoReply } from '../utils/quota';
 import { isUUID } from '../utils/uuidChecker';
+import { accessibleDeviceWhere } from '../utils/deviceAccess';
 
 export const createAutoReplies: RequestHandler = async (req, res) => {
     const subscription = req.subscription;
@@ -31,8 +32,11 @@ export const createAutoReplies: RequestHandler = async (req, res) => {
                 });
             }
 
-            const device = await prisma.device.findUnique({
-                where: { id: deviceId },
+            const device = await prisma.device.findFirst({
+                where: {
+                    id: deviceId,
+                    ...accessibleDeviceWhere(req.authenticatedUser.pkId, req.privilege?.pkId),
+                },
             });
 
             if (!device) {
@@ -81,16 +85,8 @@ export const getAutoReplies: RequestHandler = async (req, res) => {
         const autoRepliesRaw = await prisma.autoReply.findMany({
             where: {
                 device: {
-                    userId: privilegeId !== Number(process.env.ADMIN_ID) ? undefined : userId,
-                    user: {
-                        customerServices: {
-                            some: {
-                                pkId:
-                                    privilegeId !== Number(process.env.CS_ID) ? undefined : userId,
-                            },
-                        },
-                    },
                     id: deviceId,
+                    ...accessibleDeviceWhere(userId, privilegeId),
                 },
             },
 
@@ -241,8 +237,11 @@ export const updateAutoReply: RequestHandler = async (req, res) => {
                 });
             }
 
-            const device = await prisma.device.findUnique({
-                where: { id: deviceId },
+            const device = await prisma.device.findFirst({
+                where: {
+                    id: deviceId,
+                    ...accessibleDeviceWhere(req.authenticatedUser.pkId, req.privilege?.pkId),
+                },
             });
 
             if (!device) {

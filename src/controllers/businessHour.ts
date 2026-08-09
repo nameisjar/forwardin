@@ -5,6 +5,7 @@ import logger from '../config/logger';
 import { replaceVariables } from '../utils/variableHelper';
 import { sendAutoReply } from './autoReply';
 import { isUUID } from '../utils/uuidChecker';
+import { accessibleDeviceWhere } from '../utils/deviceAccess';
 
 export const createBusinessHour: RequestHandler = async (req, res) => {
     const {
@@ -27,8 +28,11 @@ export const createBusinessHour: RequestHandler = async (req, res) => {
         timeZone,
     } = req.body;
     try {
-        const device = await prisma.device.findUnique({
-            where: { id: deviceId },
+        const device = await prisma.device.findFirst({
+            where: {
+                id: deviceId,
+                ...accessibleDeviceWhere(req.authenticatedUser.pkId, req.privilege?.pkId),
+            },
         });
 
         if (!device) {
@@ -96,8 +100,11 @@ export const updateBusinessHour: RequestHandler = async (req, res) => {
     } = req.body;
 
     try {
-        const device = await prisma.device.findUnique({
-            where: { id: deviceId },
+        const device = await prisma.device.findFirst({
+            where: {
+                id: deviceId,
+                ...accessibleDeviceWhere(req.authenticatedUser.pkId, req.privilege?.pkId),
+            },
         });
 
         if (!device) {
@@ -139,8 +146,11 @@ export const getAllBusinessHours: RequestHandler = async (req, res) => {
         return res.status(400).json({ message: 'Invalid deviceId' });
     }
 
-    const device = await prisma.device.findUnique({
-        where: { id: deviceId },
+    const device = await prisma.device.findFirst({
+        where: {
+            id: deviceId,
+            ...accessibleDeviceWhere(req.authenticatedUser.pkId, req.privilege?.pkId),
+        },
     });
 
     if (!device) {

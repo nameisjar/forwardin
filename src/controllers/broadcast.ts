@@ -28,6 +28,7 @@ import {
 } from '../services/naturalDelay';
 import { redactPhone } from '../utils/logRedaction';
 import { canDeviceSend, incrementMessageCount, recordRateLimitWithError } from '../services/signalDetector';
+import { accessibleDeviceWhere } from '../utils/deviceAccess';
 
 // Constants untuk retry mechanism
 const MAX_ATTEMPTS = 5;
@@ -228,8 +229,11 @@ export const createBroadcast: RequestHandler = async (req, res) => {
                 });
             }
 
-            const device = await prisma.device.findUnique({
-                where: { id: deviceId },
+            const device = await prisma.device.findFirst({
+                where: {
+                    id: deviceId,
+                    ...accessibleDeviceWhere(req.authenticatedUser.pkId, req.privilege?.pkId),
+                },
                 include: { sessions: { select: { sessionId: true } } },
             });
 
@@ -308,7 +312,7 @@ export const createBroadcastFeedback: RequestHandler = async (req, res) => {
         const device = await prisma.device.findFirst({
             where: { 
                 id: deviceId,
-                userId: req.authenticatedUser.pkId,
+                ...accessibleDeviceWhere(req.authenticatedUser.pkId, req.privilege?.pkId),
             },
             include: { sessions: { select: { sessionId: true } } },
         });
@@ -396,7 +400,7 @@ export const createBroadcastReminder: RequestHandler = async (req, res) => {
             const device = await prisma.device.findFirst({
                 where: { 
                     id: deviceId,
-                    userId: req.authenticatedUser.pkId,
+                    ...accessibleDeviceWhere(req.authenticatedUser.pkId, req.privilege?.pkId),
                 },
                 include: { sessions: { select: { sessionId: true } } },
             });
@@ -499,8 +503,11 @@ export const createBroadcastScheduled: RequestHandler = async (req, res) => {
                 });
             }
 
-            const device = await prisma.device.findUnique({
-                where: { id: deviceId },
+            const device = await prisma.device.findFirst({
+                where: {
+                    id: deviceId,
+                    ...accessibleDeviceWhere(req.authenticatedUser.pkId, req.privilege?.pkId),
+                },
                 include: { sessions: { select: { sessionId: true } } },
             });
 
@@ -584,7 +591,7 @@ export const getBroadcastsSummary: RequestHandler = async (req, res) => {
         const device = await prisma.device.findFirst({
             where: {
                 id: deviceId,
-                userId: privilegeId !== Number(process.env.SUPER_ADMIN_ID) ? userId : undefined,
+                ...accessibleDeviceWhere(userId, privilegeId),
             },
             select: { pkId: true },
         });
@@ -630,7 +637,7 @@ export const getAllBroadcasts: RequestHandler = async (req, res) => {
         const device = await prisma.device.findFirst({
             where: {
                 id: deviceId,
-                userId: privilegeId !== Number(process.env.SUPER_ADMIN_ID) ? userId : undefined,
+                ...accessibleDeviceWhere(userId, privilegeId),
             },
             select: { pkId: true },
         });
@@ -753,7 +760,7 @@ export const getBroadcastNameGroups: RequestHandler = async (req, res) => {
         const device = await prisma.device.findFirst({
             where: {
                 id: deviceId,
-                userId: privilegeId !== Number(process.env.SUPER_ADMIN_ID) ? userId : undefined,
+                ...accessibleDeviceWhere(userId, privilegeId),
             },
             select: { pkId: true },
         });
@@ -1075,8 +1082,11 @@ export const updateBroadcast: RequestHandler = async (req, res) => {
                 });
             }
 
-            const device = await prisma.device.findUnique({
-                where: { id: deviceId },
+            const device = await prisma.device.findFirst({
+                where: {
+                    id: deviceId,
+                    ...accessibleDeviceWhere(req.authenticatedUser.pkId, req.privilege?.pkId),
+                },
                 include: { sessions: { select: { sessionId: true } } },
             });
 
@@ -1122,7 +1132,6 @@ export const updateBroadcastStatus: RequestHandler = async (req, res) => {
         const status = req.body.status;
         const userId = req.authenticatedUser.pkId;
         const privilegeId = req.privilege.pkId;
-        const isSuperAdmin = privilegeId === Number(process.env.SUPER_ADMIN_ID);
 
         if (!isUUID(id)) {
             return res.status(400).json({ message: 'Invalid broadcastId' });
@@ -1132,7 +1141,7 @@ export const updateBroadcastStatus: RequestHandler = async (req, res) => {
         const broadcast = await prisma.broadcast.findFirst({
             where: {
                 id,
-                device: isSuperAdmin ? undefined : { userId },
+                device: accessibleDeviceWhere(userId, privilegeId),
             },
         });
 
@@ -1200,7 +1209,7 @@ export const deleteBroadcastsByName: RequestHandler = async (req, res) => {
         const device = await prisma.device.findFirst({
             where: {
                 id: deviceUuid,
-                userId: privilegeId !== Number(process.env.SUPER_ADMIN_ID) ? userId : undefined,
+                ...accessibleDeviceWhere(userId, privilegeId),
             },
             select: { pkId: true },
         });

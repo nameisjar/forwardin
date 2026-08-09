@@ -1,12 +1,17 @@
 import { Router } from 'express';
 import * as controller from '../controllers/device';
+import * as assignmentController from '../controllers/deviceAssignment';
 import { checkSubscriptionQuota, isDeviceQuotaAvailable } from '../middleware/subscription';
 
 const router = Router();
 
 router.get('/', controller.getDevices);
 router.get('/labels', controller.getDeviceLabels);
+router.get('/assignment-users', assignmentController.getAssignmentUsers);
 router.post('/create', checkSubscriptionQuota, isDeviceQuotaAvailable, controller.createDevice);
+router.get('/:deviceId/assignments', assignmentController.getDeviceAssignments);
+router.post('/:deviceId/assignments', assignmentController.assignDevice);
+router.delete('/:deviceId/assignments/:userId', assignmentController.revokeDeviceAssignment);
 router.get('/:deviceId', controller.getDevice);
 router.get('/api-key/:deviceId', controller.generateApiKeyDevice);
 router.put('/:deviceId', controller.updateDevice);

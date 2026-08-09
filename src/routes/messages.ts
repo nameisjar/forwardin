@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import * as controller from '../controllers/message';
-import { checkPrivilege } from '../middleware/auth';
+import { checkPrivilege, requireAccessibleSession } from '../middleware/auth';
 // add controllers and middlewares for broadcasts/auto-replies alias endpoints
 import * as broadcastController from '../controllers/broadcast';
 import * as autoReplyController from '../controllers/autoReply';
@@ -13,6 +13,7 @@ import {
 const router = Router();
 
 router.use(checkPrivilege('message'));
+router.use('/:sessionId', requireAccessibleSession);
 router.post('/:sessionId/send', controller.sendMessages);
 router.post('/:sessionId/send/image', controller.sendImageMessages);
 router.post('/:sessionId/send/doc', controller.sendDocumentMessages);

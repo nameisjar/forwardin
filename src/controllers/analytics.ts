@@ -1,6 +1,7 @@
 import { RequestHandler } from 'express';
 import logger from '../config/logger';
 import prisma from '../utils/db';
+import { accessibleDeviceWhere } from '../utils/deviceAccess';
 
 export const getOrder: RequestHandler = async (req, res) => {
     try {
@@ -56,7 +57,12 @@ export const getMessageStatistics: RequestHandler = async (req, res) => {
         tomorrow.setDate(today.getDate() + 1);
 
         const sessions = await prisma.session.findFirst({
-            where: { device: { id: deviceId } },
+            where: {
+                device: {
+                    id: deviceId,
+                    ...accessibleDeviceWhere(req.authenticatedUser.pkId, req.privilege?.pkId),
+                },
+            },
         });
 
         if (!sessions) {

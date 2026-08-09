@@ -5,6 +5,7 @@ import { jwtSecretKey } from '../utils/jwtGenerator';
 import { User } from '@prisma/client';
 import { verifyDeviceAccessToken } from '../utils/jwtGenerator';
 import { hashApiKey, isHashedApiKey, verifyApiKey } from '../utils/apiKeyHash';
+import { accessibleDeviceWhere } from '../utils/deviceAccess';
 
 export const authMiddleware: RequestHandler = (req, res, next) => {
     if (!req.header('Authorization')) {
@@ -123,6 +124,28 @@ export const superAdminOnly: RequestHandler = async (req, res, next) => {
         next();
     } else {
         res.status(403).json({ message: 'Access denied: Super admin only' });
+    }
+};
+
+export const requireAccessibleSession: RequestHandler = async (req, res, next) => {
+    const sessionId = req.params.sessionId;
+    if (!sessionId) {
+        return res.status(400).json({ message: 'sessionId is required' });
+    }
+
+    try {
+        const device = await prisma.device.findFirst({
+            where: {
+                sessions: { some: { sessionId } },
+                ...accessibleDeviceWhere(req.authenticatedUser.pkId, req.privilege?.pkId),
+            },
+            select: { pkId: true },
+        });
+
+        if (!device) return res.status(404).json({ message: 'Session not found' });
+        next();
+    } catch {
+        res.status(500).json({ message: 'Internal server error' });
     }
 };
 
@@ -335,13 +358,21 @@ export const deviceTokenOnly: RequestHandler = async (req, res, next) => {
                 .json({ message: 'Authentication failed: Invalid device access token' });
         }
 
-        // Resolve device (UUID) and enforce ownership
+        const actor = await prisma.user.findUnique({
+            where: { pkId: payload.userId },
+            include: { privilege: true },
+        });
+        if (!actor || !actor.privilege) {
+            return res.status(401).json({ message: 'Authentication failed: User not found' });
+        }
+
+        // Resolve the device using the same owner-or-assignment rules as the UI.
         const device = await prisma.device.findFirst({
             where: {
                 id: payload.deviceId,
-                userId: payload.userId,
+                ...accessibleDeviceWhere(actor.pkId, actor.privilege.pkId),
             },
-            include: { user: true },
+            select: { pkId: true, id: true },
         });
 
         if (!device) {
@@ -361,7 +392,8 @@ export const deviceTokenOnly: RequestHandler = async (req, res, next) => {
 
         req.authenticatedDevice = existingSession as any;
         (req.authenticatedDevice as any).deviceUuid = device.id;
-        req.authenticatedUser = device.user as any;
+        req.authenticatedUser = actor as any;
+        req.privilege = actor.privilege;
 
         // attach for downstream audit/debug (do not log tokens)
         (req as any).deviceAccessToken = payload;

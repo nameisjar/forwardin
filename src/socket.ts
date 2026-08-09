@@ -5,6 +5,7 @@ import logger from './config/logger';
 import { getComprehensivePDFStatus } from './services/pdfGenerator';
 import { jwtSecretKey } from './utils/jwtGenerator';
 import prisma from './utils/db';
+import { accessibleDeviceWhere } from './utils/deviceAccess';
 
 let io: Server;
 
@@ -97,7 +98,10 @@ export function initSocketServer(app: Express.Application): http.Server {
             socket.join(`user:${socket.data.user.pkId}`);
             try {
                 const devices = await prisma.device.findMany({
-                    where: { userId: socket.data.user.pkId },
+                    where: accessibleDeviceWhere(
+                        socket.data.user.pkId,
+                        socket.data.user.privilege?.pkId,
+                    ),
                     select: {
                         id: true,
                         sessions: { select: { sessionId: true } },
@@ -127,7 +131,10 @@ export function initSocketServer(app: Express.Application): http.Server {
                 const ownedSession = await prisma.device.findFirst({
                     where: {
                         id: payload.deviceId,
-                        userId: socket.data.user.pkId,
+                        ...accessibleDeviceWhere(
+                            socket.data.user.pkId,
+                            socket.data.user.privilege?.pkId,
+                        ),
                         sessions: { some: { sessionId: payload.sessionId } },
                     },
                     select: { id: true },
@@ -178,6 +185,25 @@ export function getSocketIO(): Server {
         throw new Error('Socket.IO server not initialized.');
     }
     return io;
+}
+
+export async function syncUserDeviceSocketAccess(
+    userPkId: number,
+    deviceId: string,
+    sessionIds: string[],
+    grant: boolean,
+): Promise<void> {
+    if (!io) return;
+
+    const sockets = await io.in(`user:${userPkId}`).fetchSockets();
+    for (const socket of sockets) {
+        const updateRoom = grant ? socket.join.bind(socket) : socket.leave.bind(socket);
+        await updateRoom(`device:${deviceId}`);
+        for (const sessionId of sessionIds) {
+            await updateRoom(`session:${sessionId}`);
+        }
+        socket.emit('device:access-changed', { deviceId, granted: grant });
+    }
 }
 
 /**

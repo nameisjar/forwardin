@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import { WhatsAppGroupService } from '../services/whatsappGroup';
 import prisma from '../utils/db';
+import { accessibleDeviceWhere } from '../utils/deviceAccess';
 
 export const getActiveGroups = async (req: Request, res: Response) => {
   try {
@@ -9,7 +10,6 @@ export const getActiveGroups = async (req: Request, res: Response) => {
     const shouldIncludeInactive = ['1', 'true', 'yes'].includes(includeInactive);
     const userId = (req as any).authenticatedUser?.pkId;
     const privilegeId = (req as any).privilege?.pkId;
-    const isSuperAdmin = privilegeId === Number(process.env.SUPER_ADMIN_ID);
 
     // 🆕 Pagination and search parameters
     const { q, page = '1', pageSize = '50' } = req.query;
@@ -29,7 +29,7 @@ export const getActiveGroups = async (req: Request, res: Response) => {
     const device = await prisma.device.findFirst({
       where: {
         id: deviceId,
-        ...(isSuperAdmin ? {} : { userId }),
+        ...accessibleDeviceWhere(userId, privilegeId),
       },
       include: {
         sessions: {
@@ -122,7 +122,6 @@ export const getAllGroups = async (req: Request, res: Response) => {
     const { deviceId } = req.params; // This is UUID from URL
     const userId = (req as any).authenticatedUser?.pkId;
     const privilegeId = (req as any).privilege?.pkId;
-    const isSuperAdmin = privilegeId === Number(process.env.SUPER_ADMIN_ID);
     
     if (!deviceId) {
       return res.status(400).json({
@@ -135,7 +134,7 @@ export const getAllGroups = async (req: Request, res: Response) => {
     const device = await prisma.device.findFirst({
       where: {
         id: deviceId,
-        ...(isSuperAdmin ? {} : { userId }),
+        ...accessibleDeviceWhere(userId, privilegeId),
       },
     });
 
@@ -167,7 +166,6 @@ export const searchGroups = async (req: Request, res: Response) => {
     const { search } = req.query;
     const userId = (req as any).authenticatedUser?.pkId;
     const privilegeId = (req as any).privilege?.pkId;
-    const isSuperAdmin = privilegeId === Number(process.env.SUPER_ADMIN_ID);
     
     if (!deviceId) {
       return res.status(400).json({
@@ -187,7 +185,7 @@ export const searchGroups = async (req: Request, res: Response) => {
     const device = await prisma.device.findFirst({
       where: {
         id: deviceId,
-        ...(isSuperAdmin ? {} : { userId }),
+        ...accessibleDeviceWhere(userId, privilegeId),
       },
     });
 
@@ -219,7 +217,6 @@ export const updateGroupStatus = async (req: Request, res: Response) => {
     const { isActive } = req.body;
     const userId = (req as any).authenticatedUser?.pkId;
     const privilegeId = (req as any).privilege?.pkId;
-    const isSuperAdmin = privilegeId === Number(process.env.SUPER_ADMIN_ID);
     
     if (!deviceId || !groupId) {
       return res.status(400).json({
@@ -239,7 +236,7 @@ export const updateGroupStatus = async (req: Request, res: Response) => {
     const device = await prisma.device.findFirst({
       where: {
         id: deviceId,
-        ...(isSuperAdmin ? {} : { userId }),
+        ...accessibleDeviceWhere(userId, privilegeId),
       },
       select: { pkId: true },
     });
@@ -271,7 +268,6 @@ export const deleteGroup = async (req: Request, res: Response) => {
     const { deviceId, groupId } = req.params;
     const userId = (req as any).authenticatedUser?.pkId;
     const privilegeId = (req as any).privilege?.pkId;
-    const isSuperAdmin = privilegeId === Number(process.env.SUPER_ADMIN_ID);
     
     if (!deviceId || !groupId) {
       return res.status(400).json({
@@ -284,7 +280,7 @@ export const deleteGroup = async (req: Request, res: Response) => {
     const device = await prisma.device.findFirst({
       where: {
         id: deviceId,
-        ...(isSuperAdmin ? {} : { userId }),
+        ...accessibleDeviceWhere(userId, privilegeId),
       },
       select: { pkId: true },
     });
@@ -316,7 +312,6 @@ export const syncGroups = async (req: Request, res: Response) => {
     const { deviceId } = req.params; // This is UUID from URL
     const userId = (req as any).authenticatedUser?.pkId;
     const privilegeId = (req as any).privilege?.pkId;
-    const isSuperAdmin = privilegeId === Number(process.env.SUPER_ADMIN_ID);
     
     if (!deviceId) {
       return res.status(400).json({
@@ -331,7 +326,7 @@ export const syncGroups = async (req: Request, res: Response) => {
     const device = await prisma.device.findFirst({
       where: {
         id: deviceId,
-        ...(isSuperAdmin ? {} : { userId }),
+        ...accessibleDeviceWhere(userId, privilegeId),
       },
       include: {
         sessions: {
@@ -443,7 +438,6 @@ export const joinGroup = async (req: Request, res: Response) => {
     const { inviteLink } = req.body;
     const userId = (req as any).authenticatedUser?.pkId;
     const privilegeId = (req as any).privilege?.pkId;
-    const isSuperAdmin = privilegeId === Number(process.env.SUPER_ADMIN_ID);
     
     // console.log('=== JOIN GROUP REQUEST ===');
     // console.log('Device UUID:', deviceId);
@@ -468,7 +462,7 @@ export const joinGroup = async (req: Request, res: Response) => {
     const device = await prisma.device.findFirst({
       where: {
         id: deviceId,
-        ...(isSuperAdmin ? {} : { userId }),
+        ...accessibleDeviceWhere(userId, privilegeId),
       },
       include: {
         sessions: {
@@ -612,7 +606,6 @@ export const leaveGroup = async (req: Request, res: Response) => {
     const { deviceId, groupJid } = req.params;
     const userId = (req as any).authenticatedUser?.pkId;
     const privilegeId = (req as any).privilege?.pkId;
-    const isSuperAdmin = privilegeId === Number(process.env.SUPER_ADMIN_ID);
     
     // console.log('=== LEAVE GROUP REQUEST ===');
     // console.log('Device UUID:', deviceId);
@@ -629,7 +622,7 @@ export const leaveGroup = async (req: Request, res: Response) => {
     const device = await prisma.device.findFirst({
       where: {
         id: deviceId,
-        ...(isSuperAdmin ? {} : { userId }),
+        ...accessibleDeviceWhere(userId, privilegeId),
       },
       include: {
         sessions: {

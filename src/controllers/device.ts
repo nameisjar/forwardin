@@ -12,6 +12,11 @@ import { generateDeviceAccessToken } from '../utils/jwtGenerator';
 import { getInstance, verifyInstance } from '../whatsapp';
 import { hashApiKey } from '../utils/apiKeyHash';
 import {
+    accessibleDeviceWhere,
+    isSuperAdmin as hasSuperAdminAccess,
+    ownedDeviceWhere,
+} from '../utils/deviceAccess';
+import {
     createInboxProfileUrl,
     serializeInboxMediaPath,
     verifyInboxMediaToken,
@@ -36,12 +41,11 @@ import {
 
 export const getDevices: RequestHandler = async (req, res) => {
     const pkId = req.authenticatedUser.pkId;
+    const privilegeId = req.privilege?.pkId;
 
     try {
         const devices = await prisma.device.findMany({
-            where: {
-                userId: pkId,
-            },
+            where: accessibleDeviceWhere(pkId, privilegeId),
             include: {
                 DeviceLabel: {
                     select: {
@@ -54,7 +58,8 @@ export const getDevices: RequestHandler = async (req, res) => {
                 sessions: {
                     where: { id: { contains: 'config' } },
                     select: { sessionId: true }
-                }
+                },
+                _count: { select: { assignments: true } },
             },
         });
 
@@ -63,6 +68,7 @@ export const getDevices: RequestHandler = async (req, res) => {
             devices.map(async (device) => {
                 const sessionId = device.sessions[0]?.sessionId;
                 const dbStatus = device.status;
+                const canManage = hasSuperAdminAccess(privilegeId) || device.userId === pkId;
 
                 // Jika status di DB adalah 'open', validasi apakah instance benar-benar aktif
                 if (dbStatus === 'open' && sessionId) {
@@ -83,7 +89,11 @@ export const getDevices: RequestHandler = async (req, res) => {
                         // Return device dengan status yang sudah dikoreksi
                         const { sessions, ...deviceWithoutSessions } = device;
                         return { 
-                            ...deviceWithoutSessions, 
+                            ...deviceWithoutSessions,
+                            isOwner: device.userId === pkId,
+                            accessType: device.userId === pkId ? 'owner' : 'assigned',
+                            canManage,
+                            assignmentCount: device._count.assignments,
                             status: 'close',
                             sessionId: sessions[0]?.sessionId || null // ✅ Include sessionId
                         };
@@ -102,7 +112,11 @@ export const getDevices: RequestHandler = async (req, res) => {
 
                     const { sessions, ...deviceWithoutSessions } = device;
                     return { 
-                        ...deviceWithoutSessions, 
+                        ...deviceWithoutSessions,
+                        isOwner: device.userId === pkId,
+                        accessType: device.userId === pkId ? 'owner' : 'assigned',
+                        canManage,
+                        assignmentCount: device._count.assignments,
                         status: 'close',
                         sessionId: null // ✅ Include sessionId (null in this case)
                     };
@@ -111,7 +125,11 @@ export const getDevices: RequestHandler = async (req, res) => {
                 // Remove sessions array but preserve sessionId field for socket listeners
                 const { sessions, ...deviceWithoutSessions } = device;
                 return { 
-                    ...deviceWithoutSessions, 
+                    ...deviceWithoutSessions,
+                    isOwner: device.userId === pkId,
+                    accessType: device.userId === pkId ? 'owner' : 'assigned',
+                    canManage,
+                    assignmentCount: device._count.assignments,
                     sessionId: sessions[0]?.sessionId || null // ✅ Include sessionId for frontend socket listeners
                 };
             })
@@ -129,7 +147,11 @@ export const getDeviceLabels: RequestHandler = async (req, res) => {
 
     try {
         const labels = await prisma.label.findMany({
-            where: { DeviceLabel: { some: { device: { userId: pkId } } } },
+            where: {
+                DeviceLabel: {
+                    some: { device: accessibleDeviceWhere(pkId, req.privilege?.pkId) },
+                },
+            },
         });
 
         res.status(200).json(labels.map((label) => label.name));
@@ -147,12 +169,10 @@ export const generateApiKeyDevice: RequestHandler = async (req, res) => {
         }
 
         const userPkId = req.authenticatedUser.pkId;
-        const isSuperAdmin = req.privilege?.pkId === Number(process.env.SUPER_ADMIN_ID);
-
         const device = await prisma.device.findFirst({
             where: {
                 id: deviceId,
-                ...(isSuperAdmin ? {} : { userId: userPkId }),
+                ...ownedDeviceWhere(userPkId, req.privilege?.pkId),
             },
             select: { pkId: true },
         });
@@ -244,12 +264,10 @@ export const getDevice: RequestHandler = async (req, res) => {
         }
 
         const userPkId = req.authenticatedUser.pkId;
-        const isSuperAdmin = req.privilege?.pkId === Number(process.env.SUPER_ADMIN_ID);
-
         const device = await prisma.device.findFirst({
             where: {
                 id: deviceId,
-                ...(isSuperAdmin ? {} : { userId: userPkId }),
+                ...accessibleDeviceWhere(userPkId, req.privilege?.pkId),
             },
             include: {
                 sessions: { where: { id: { contains: 'config' } }, select: { sessionId: true } },
@@ -285,9 +303,10 @@ export const updateDevice: RequestHandler = async (req, res) => {
         }
 
         await prisma.$transaction(async (transaction) => {
-            const existingDevice = await transaction.device.findUnique({
+            const existingDevice = await transaction.device.findFirst({
                 where: {
                     id: deviceId,
+                    ...ownedDeviceWhere(req.authenticatedUser.pkId, req.privilege?.pkId),
                 },
             });
 
@@ -380,7 +399,6 @@ export const deleteDevices: RequestHandler = async (req, res) => {
         const deviceIds = req.body.deviceIds;
         const userId = req.authenticatedUser.pkId;
         const privilegeId = req.privilege.pkId;
-        const isSuperAdmin = privilegeId === Number(process.env.SUPER_ADMIN_ID);
 
         if (!deviceIds || !Array.isArray(deviceIds) || deviceIds.length === 0) {
             return res.status(400).json({ message: 'Invalid deviceIds' });
@@ -394,7 +412,7 @@ export const deleteDevices: RequestHandler = async (req, res) => {
             const device = await prisma.device.findFirst({
                 where: {
                     id: deviceId,
-                    ...(isSuperAdmin ? {} : { userId }),
+                    ...ownedDeviceWhere(userId, privilegeId),
                 },
             });
 
@@ -493,7 +511,7 @@ export const issueDeviceAccessToken: RequestHandler = async (req, res) => {
         const device = await prisma.device.findFirst({
             where: {
                 id: deviceId,
-                userId: userPkId,
+                ...accessibleDeviceWhere(userPkId, req.privilege?.pkId),
             },
             select: { id: true },
         });
@@ -535,7 +553,7 @@ export const getDeviceHealthStatus: RequestHandler = async (req, res) => {
         const device = await prisma.device.findFirst({
             where: {
                 id: deviceId,
-                userId: req.authenticatedUser.pkId,
+                ...accessibleDeviceWhere(req.authenticatedUser.pkId, req.privilege?.pkId),
             },
             select: { pkId: true },
         });
@@ -592,7 +610,7 @@ export const pauseDeviceManually: RequestHandler = async (req, res) => {
         const device = await prisma.device.findFirst({
             where: {
                 id: deviceId,
-                userId: req.authenticatedUser.pkId,
+                ...ownedDeviceWhere(req.authenticatedUser.pkId, req.privilege?.pkId),
             },
             select: { pkId: true, healthStatus: true },
         });
@@ -636,7 +654,7 @@ export const resumeDeviceManually: RequestHandler = async (req, res) => {
         const device = await prisma.device.findFirst({
             where: {
                 id: deviceId,
-                userId: req.authenticatedUser.pkId,
+                ...ownedDeviceWhere(req.authenticatedUser.pkId, req.privilege?.pkId),
             },
             select: { pkId: true, healthStatus: true },
         });
@@ -682,7 +700,7 @@ export const getDeviceSignals: RequestHandler = async (req, res) => {
         const device = await prisma.device.findFirst({
             where: {
                 id: deviceId,
-                userId: req.authenticatedUser.pkId,
+                ...accessibleDeviceWhere(req.authenticatedUser.pkId, req.privilege?.pkId),
             },
             select: { pkId: true },
         });
@@ -906,7 +924,7 @@ export const deleteConversation: RequestHandler = async (req, res) => {
 
         const userPkId = req.authenticatedUser.pkId;
         const device = await prisma.device.findFirst({
-            where: { id: deviceUuid, userId: userPkId },
+            where: { id: deviceUuid, ...accessibleDeviceWhere(userPkId, req.privilege?.pkId) },
             select: { pkId: true },
         });
 
@@ -968,7 +986,7 @@ export const markConversationAsRead: RequestHandler = async (req, res) => {
 
         const userPkId = req.authenticatedUser.pkId;
         const device = await prisma.device.findFirst({
-            where: { id: deviceUuid, userId: userPkId },
+            where: { id: deviceUuid, ...accessibleDeviceWhere(userPkId, req.privilege?.pkId) },
             select: { pkId: true },
         });
 
@@ -1011,7 +1029,7 @@ export const deleteAllInbox: RequestHandler = async (req, res) => {
 
         const userPkId = req.authenticatedUser.pkId;
         const device = await prisma.device.findFirst({
-            where: { id: deviceUuid, userId: userPkId },
+            where: { id: deviceUuid, ...accessibleDeviceWhere(userPkId, req.privilege?.pkId) },
             select: { pkId: true },
         });
 
@@ -1063,7 +1081,7 @@ export const getDeviceOutbox: RequestHandler = async (req, res) => {
         const userPkId = req.authenticatedUser.pkId;
 
         const device = await prisma.device.findFirst({
-            where: { id: deviceUuid, userId: userPkId },
+            where: { id: deviceUuid, ...accessibleDeviceWhere(userPkId, req.privilege?.pkId) },
             select: { pkId: true },
         });
 
@@ -1131,7 +1149,7 @@ export const getDeviceOutboxConversations: RequestHandler = async (req, res) => 
 
         const userPkId = req.authenticatedUser.pkId;
         const device = await prisma.device.findFirst({
-            where: { id: deviceUuid, userId: userPkId },
+            where: { id: deviceUuid, ...accessibleDeviceWhere(userPkId, req.privilege?.pkId) },
             select: { pkId: true },
         });
 
@@ -1583,7 +1601,7 @@ export const getDeviceInbox: RequestHandler = async (req, res) => {
 
         const userPkId = req.authenticatedUser.pkId;
         const device = await prisma.device.findFirst({
-            where: { id: deviceUuid, userId: userPkId },
+            where: { id: deviceUuid, ...accessibleDeviceWhere(userPkId, req.privilege?.pkId) },
             select: { pkId: true },
         });
 
@@ -1777,7 +1795,10 @@ export const getInboxConversationReactions: RequestHandler = async (req, res) =>
         }
 
         const device = await prisma.device.findFirst({
-            where: { id: deviceUuid, userId: req.authenticatedUser.pkId },
+            where: {
+                id: deviceUuid,
+                ...accessibleDeviceWhere(req.authenticatedUser.pkId, req.privilege?.pkId),
+            },
             select: { pkId: true },
         });
         if (!device) return res.status(404).json({ message: 'Device not found' });

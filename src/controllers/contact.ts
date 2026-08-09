@@ -10,6 +10,7 @@ import ExcelJS from 'exceljs';
 import axios from 'axios';
 import { isUUID } from '../utils/uuidChecker';
 import fs from 'fs';
+import { accessibleDeviceWhere } from '../utils/deviceAccess';
 
 // Helper to format phone number (08 -> 628)
 const formatPhoneNumber = (phone: any): string => {
@@ -43,10 +44,7 @@ export const createContact: RequestHandler = async (req, res) => {
                         some: {
                             device: {
                                 id: deviceId,
-                                userId:
-                                    privilegeId !== Number(process.env.SUPER_ADMIN_ID)
-                                        ? pkId
-                                        : undefined,
+                                ...accessibleDeviceWhere(pkId, privilegeId),
                             },
                         },
                     },
@@ -60,9 +58,10 @@ export const createContact: RequestHandler = async (req, res) => {
             });
         }
 
-        const existingDevice = await prisma.device.findUnique({
+        const existingDevice = await prisma.device.findFirst({
             where: {
                 id: deviceId,
+                ...accessibleDeviceWhere(pkId, privilegeId),
             },
             include: { sessions: { select: { sessionId: true } } },
         });
@@ -241,9 +240,10 @@ export const importContacts: RequestHandler = async (req, res) => {
             const pkId = req.authenticatedUser.pkId;
             
             // Optimization: Fetch device once outside the loop
-            const existingDevice = await prisma.device.findUnique({
+            const existingDevice = await prisma.device.findFirst({
                 where: {
                     id: deviceId,
+                    ...accessibleDeviceWhere(pkId, privilegeId),
                 },
                 include: { sessions: { select: { sessionId: true } } },
             });
@@ -282,10 +282,7 @@ export const importContacts: RequestHandler = async (req, res) => {
                                     some: {
                                         device: {
                                             id: deviceId,
-                                            userId:
-                                                privilegeId !== Number(process.env.SUPER_ADMIN_ID)
-                                                    ? pkId
-                                                    : undefined,
+                                            ...accessibleDeviceWhere(pkId, privilegeId),
                                         },
                                     },
                                 },
@@ -412,8 +409,6 @@ export const updateContact: RequestHandler = async (req, res) => {
         const phone = req.body.phone ? formatPhoneNumber(req.body.phone) : undefined;
         const userId = req.authenticatedUser.pkId;
         const privilegeId = req.privilege.pkId;
-        const isSuperAdmin = privilegeId === Number(process.env.SUPER_ADMIN_ID);
-
         if (!isUUID(contactId)) {
             return res.status(400).json({ message: 'Invalid contactId' });
         }
@@ -423,8 +418,8 @@ export const updateContact: RequestHandler = async (req, res) => {
             const existingContact = await transaction.contact.findFirst({
                 where: {
                     id: contactId,
-                    contactDevices: isSuperAdmin ? undefined : {
-                        some: { device: { userId } },
+                    contactDevices: {
+                        some: { device: accessibleDeviceWhere(userId, privilegeId) },
                     },
                 },
                 include: { contactDevices: { select: { id: true } } },
@@ -448,8 +443,11 @@ export const updateContact: RequestHandler = async (req, res) => {
             });
 
             if (deviceId) {
-                const existingDevice = await transaction.device.findUnique({
-                    where: { id: deviceId },
+                const existingDevice = await transaction.device.findFirst({
+                    where: {
+                        id: deviceId,
+                        ...accessibleDeviceWhere(userId, privilegeId),
+                    },
                 });
                 if (!existingDevice) {
                     throw new Error('Device not found');
@@ -600,10 +598,7 @@ export const syncGoogle: RequestHandler = async (req, res) => {
                                     some: {
                                         device: {
                                             id: deviceId,
-                                            userId:
-                                                privilegeId !== Number(process.env.SUPER_ADMIN_ID)
-                                                    ? pkId
-                                                    : undefined,
+                                            ...accessibleDeviceWhere(pkId, privilegeId),
                                         },
                                     },
                                 },
@@ -625,9 +620,10 @@ export const syncGoogle: RequestHandler = async (req, res) => {
                             },
                         });
 
-                        const existingDevice = await transaction.device.findUnique({
+                        const existingDevice = await transaction.device.findFirst({
                             where: {
                                 id: deviceId,
+                                ...accessibleDeviceWhere(pkId, privilegeId),
                             },
                             include: { sessions: { select: { sessionId: true } } },
                         });
@@ -738,7 +734,7 @@ export const getContacts: RequestHandler = async (req, res) => {
                 some: {
                     device: {
                         id: deviceId ? String(deviceId) : undefined,
-                        userId: privilegeId !== Number(process.env.SUPER_ADMIN_ID) ? pkId : undefined,
+                        ...accessibleDeviceWhere(pkId, privilegeId),
                     },
                 },
             },
@@ -843,7 +839,7 @@ export const getContact: RequestHandler = async (req, res) => {
                 contactDevices: {
                     some: {
                         device: {
-                            userId: privilegeId !== Number(process.env.SUPER_ADMIN_ID) ? pkId : undefined,
+                            ...accessibleDeviceWhere(pkId, privilegeId),
                         },
                     },
                 },
@@ -906,7 +902,7 @@ export const getContactLabels: RequestHandler = async (req, res) => {
                             some: {
                                 device: {
                                     id: deviceId ? String(deviceId) : undefined,
-                                    userId: privilegeId !== Number(process.env.SUPER_ADMIN_ID) ? pkId : undefined,
+                                    ...accessibleDeviceWhere(pkId, privilegeId),
                                 },
                             },
                         },
@@ -969,7 +965,7 @@ export const exportContacts: RequestHandler = async (req, res) => {
                     some: {
                         device: {
                             id: deviceId ? String(deviceId) : undefined,
-                            userId: privilegeId !== Number(process.env.SUPER_ADMIN_ID) ? pkId : undefined,
+                            ...accessibleDeviceWhere(pkId, privilegeId),
                         },
                     },
                 },
@@ -1048,7 +1044,7 @@ export const deleteContacts: RequestHandler = async (req, res) => {
                 contactDevices: {
                     some: {
                         device: {
-                            userId: privilegeId !== Number(process.env.SUPER_ADMIN_ID) ? pkId : undefined,
+                            ...accessibleDeviceWhere(pkId, privilegeId),
                         },
                     },
                 },
@@ -1108,7 +1104,7 @@ export const deleteAllContacts: RequestHandler = async (req, res) => {
         const device = await prisma.device.findFirst({
             where: {
                 id: deviceId,
-                userId: privilegeId !== Number(process.env.SUPER_ADMIN_ID) ? pkId : undefined,
+                ...accessibleDeviceWhere(pkId, privilegeId),
             },
             select: { pkId: true },
         });
@@ -1204,7 +1200,7 @@ export const addContactToGroup: RequestHandler = async (req, res) => {
                 contactDevices: {
                     some: {
                         device: {
-                            userId: privilegeId !== Number(process.env.SUPER_ADMIN_ID) ? pkId : undefined,
+                            ...accessibleDeviceWhere(pkId, privilegeId),
                         },
                     },
                 },

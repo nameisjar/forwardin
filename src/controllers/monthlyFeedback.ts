@@ -5,6 +5,7 @@ import { sendDocument } from '../services/whatsapp';
 import { generateMonthlyFeedbackPDFWithPuppeteer } from '../services/pdfGenerator';
 import { executeWithRateLimit, RateLimitResult, setDeviceAsPersonal, setDeviceAsShared } from '../services/rateLimiter';
 import { redactPhone } from '../utils/logRedaction';
+import { accessibleDeviceWhere } from '../utils/deviceAccess';
 
 // 🔥 Environment variables untuk role checking
 const ADMIN_ID = Number(process.env.ADMIN_ID);
@@ -151,7 +152,7 @@ export const sendMonthlyFeedback: RequestHandler = async (req, res) => {
         const device = await prisma.device.findFirst({
             where: { 
                 id: deviceId,
-                userId: req.authenticatedUser.pkId,
+                ...accessibleDeviceWhere(req.authenticatedUser.pkId, req.privilege?.pkId),
             }
         });
 

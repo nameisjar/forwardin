@@ -10,6 +10,7 @@ import { generateSlug } from '../utils/slug';
 import { getRandomColor } from '../utils/profilePic';
 import { diskUpload } from '../config/multer';
 import { isUUID } from '../utils/uuidChecker';
+import { accessibleDeviceWhere } from '../utils/deviceAccess';
 import { 
     sendTextMessage, 
     sendMediaMessage, 
@@ -72,8 +73,11 @@ export const createCampaign: RequestHandler = async (req, res) => {
 
             const userId = req.authenticatedUser.pkId;
 
-            const device = await prisma.device.findUnique({
-                where: { id: deviceId },
+            const device = await prisma.device.findFirst({
+                where: {
+                    id: deviceId,
+                    ...accessibleDeviceWhere(req.authenticatedUser.pkId, req.privilege?.pkId),
+                },
                 include: { sessions: { select: { sessionId: true } } },
             });
 
@@ -376,8 +380,8 @@ export const getAllCampaigns: RequestHandler = async (req, res) => {
         const campaigns = await prisma.campaign.findMany({
             where: {
                 device: {
-                    userId: privilegeId !== Number(process.env.SUPER_ADMIN_ID) ? userId : undefined,
                     id: deviceId ?? undefined,
+                    ...accessibleDeviceWhere(userId, privilegeId),
                 },
             },
             select: {
@@ -866,8 +870,11 @@ export const updateCampaign: RequestHandler = async (req, res) => {
                 });
             }
 
-            const device = await prisma.device.findUnique({
-                where: { id: deviceId },
+            const device = await prisma.device.findFirst({
+                where: {
+                    id: deviceId,
+                    ...accessibleDeviceWhere(req.authenticatedUser.pkId, req.privilege?.pkId),
+                },
                 include: { sessions: { select: { sessionId: true } } },
             });
 

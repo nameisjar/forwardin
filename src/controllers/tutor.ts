@@ -7,6 +7,7 @@ import logger from '../config/logger';
 import { createSSE as createSessionSSE } from './session';
 import { Prisma } from '@prisma/client';
 import fs from 'fs';
+import { accessibleDeviceWhere } from '../utils/deviceAccess';
 
 const ADMIN_ID = Number(process.env.ADMIN_ID);
 const SUPER_ADMIN_ID = Number(process.env.SUPER_ADMIN_ID);
@@ -209,7 +210,10 @@ export const listOutgoingMessages: RequestHandler = async (req, res) => {
     try {
         const pkId = req.authenticatedUser.pkId;
         const sessions = await prisma.session.findMany({
-            where: { device: { userId: pkId }, id: { contains: 'config' } },
+            where: {
+                device: accessibleDeviceWhere(pkId, req.privilege?.pkId),
+                id: { contains: 'config' },
+            },
             select: { sessionId: true },
         });
         const sessionIds = sessions.map((s) => s.sessionId);
@@ -737,8 +741,11 @@ export const getDeviceMessageStats: RequestHandler = async (req, res) => {
         }
 
         // Check if device exists and user has access
-        const device = await prisma.device.findUnique({
-            where: { pkId: deviceId },
+        const device = await prisma.device.findFirst({
+            where: {
+                pkId: deviceId,
+                ...accessibleDeviceWhere(req.authenticatedUser.pkId, req.privilege?.pkId),
+            },
             include: { sessions: { select: { sessionId: true } } },
         });
 
@@ -802,7 +809,7 @@ export const getAllDevicesMessageStats: RequestHandler = async (req, res) => {
         } else {
             // Tutor/CS can only see their own devices
             devices = await prisma.device.findMany({
-                where: { userId: pkId },
+                where: accessibleDeviceWhere(pkId, roleId),
                 select: {
                     id: true,
                     pkId: true,

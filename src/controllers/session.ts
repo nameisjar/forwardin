@@ -14,6 +14,7 @@ import prisma from '../utils/db';
 import { generateUuid } from '../utils/keyGenerator';
 import logger from '../config/logger';
 import { isUUID } from '../utils/uuidChecker';
+import { accessibleDeviceWhere, ownedDeviceWhere } from '../utils/deviceAccess';
 
 // one device, one session
 // one whatsapp number, multiple devices == one whatsapp number, multiple sessions
@@ -22,8 +23,11 @@ export const createSession: RequestHandler = async (req, res) => {
         const { deviceId } = req.body;
         const sessionId = generateUuid();
 
-        const existingDevice = await prisma.device.findUnique({
-            where: { id: deviceId },
+        const existingDevice = await prisma.device.findFirst({
+            where: {
+                id: deviceId,
+                ...ownedDeviceWhere(req.authenticatedUser.pkId, req.privilege?.pkId),
+            },
         });
 
         if (!existingDevice) {
@@ -93,8 +97,11 @@ export const createSSE: RequestHandler = async (req, res) => {
     req.on('close', () => {
         logger.info({ sessionId, deviceId }, 'Client closed SSE connection - marking as aborted');
         
-        prisma.device.findUnique({
-            where: { id: deviceId },
+        prisma.device.findFirst({
+            where: {
+                id: deviceId,
+                ...ownedDeviceWhere(req.authenticatedUser.pkId, req.privilege?.pkId),
+            },
         }).then(device => {
             if (device) {
                 markSSEAborted(device.pkId);
@@ -105,8 +112,11 @@ export const createSSE: RequestHandler = async (req, res) => {
     });
 
     try {
-        const existingDevice = await prisma.device.findUnique({
-            where: { id: deviceId },
+        const existingDevice = await prisma.device.findFirst({
+            where: {
+                id: deviceId,
+                ...ownedDeviceWhere(req.authenticatedUser.pkId, req.privilege?.pkId),
+            },
         });
 
         if (!existingDevice) {
@@ -202,6 +212,17 @@ export const getSessionStatus: RequestHandler = async (req, res) => {
             return res.status(400).json({ message: 'Invalid sessionId' });
         }
 
+        const accessibleDevice = await prisma.device.findFirst({
+            where: {
+                sessions: { some: { sessionId: req.params.sessionId } },
+                ...accessibleDeviceWhere(req.authenticatedUser.pkId, req.privilege?.pkId),
+            },
+            select: { pkId: true },
+        });
+        if (!accessibleDevice) {
+            return res.status(404).json({ message: 'Session not found' });
+        }
+
         const session = getInstance(req.params.sessionId);
         if (!session) {
             return res.status(404).json({ message: 'Session not found or not connected' });
@@ -221,9 +242,7 @@ export const getSessions: RequestHandler = async (req, res) => {
 
         const sessions = await prisma.session.findMany({
             where: {
-                device: {
-                    userId: privilegeId !== Number(process.env.SUPER_ADMIN_ID) ? pkId : undefined,
-                },
+                device: accessibleDeviceWhere(pkId, privilegeId),
                 id: { contains: 'config' },
             },
             select: {
@@ -280,25 +299,26 @@ export const deleteSession: RequestHandler = async (req, res) => {
             where: { 
                 sessions: { 
                     some: { sessionId: req.params.sessionId } 
-                } 
+                },
+                ...ownedDeviceWhere(req.authenticatedUser.pkId, req.privilege?.pkId),
             },
             select: { pkId: true },
         });
         
-        if (device) {
-            markManualLogout(device.pkId);
-            logger.info(
-                { sessionId: req.params.sessionId, devicePkId: device.pkId },
-                'Manual logout initiated - marked to skip signal recording'
-            );
-        }
+        if (!device) return res.status(404).json({ message: 'Session not found' });
+
+        markManualLogout(device.pkId);
+        logger.info(
+            { sessionId: req.params.sessionId, devicePkId: device.pkId },
+            'Manual logout initiated - marked to skip signal recording'
+        );
+
+        await deleteInstance(req.params.sessionId);
+        res.status(200).json({ message: 'Session deleted' });
     } catch (err) {
-        logger.warn({ err }, 'Failed to mark manual logout, continuing with delete');
+        logger.error({ err }, 'Failed to delete session');
+        res.status(500).json({ message: 'Internal server error' });
     }
-
-    await deleteInstance(req.params.sessionId);
-
-    res.status(200).json({ message: 'Session deleted' });
 };
 
 export const getSessionProfile: RequestHandler = async (req, res) => {
@@ -309,8 +329,11 @@ export const getSessionProfile: RequestHandler = async (req, res) => {
             return res.status(400).json({ message: 'Invalid deviceId' });
         }
 
-        const device = await prisma.device.findUnique({
-            where: { id: deviceId },
+        const device = await prisma.device.findFirst({
+            where: {
+                id: deviceId,
+                ...accessibleDeviceWhere(req.authenticatedUser.pkId, req.privilege?.pkId),
+            },
             select: {
                 name: true,
                 phone: true,
@@ -357,8 +380,11 @@ export const updateSessionProfile: RequestHandler = async (req, res) => {
         if (!isUUID(req.params.deviceId)) {
             return res.status(400).json({ message: 'Invalid deviceId' });
         }
-        const device = await prisma.device.findUnique({
-            where: { id: deviceId },
+        const device = await prisma.device.findFirst({
+            where: {
+                id: deviceId,
+                ...ownedDeviceWhere(req.authenticatedUser.pkId, req.privilege?.pkId),
+            },
             select: {
                 sessions: { where: { id: { contains: 'config' } }, select: { sessionId: true } },
             },
