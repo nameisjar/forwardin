@@ -677,6 +677,10 @@ export const getAllBroadcasts: RequestHandler = async (req, res) => {
             where.isSent = false;
             where.status = { not: false };
             where.schedule = { gt: now };
+        } else if (statusFilter === 'pending') {
+            where.isSent = false;
+            where.status = { not: false };
+            where.schedule = { lte: now };
         }
 
         const orderBy: any[] = [];
@@ -793,6 +797,10 @@ export const getBroadcastNameGroups: RequestHandler = async (req, res) => {
             where.isSent = false;
             where.status = { not: false };
             where.schedule = { gt: now };
+        } else if (statusFilter === 'pending') {
+            where.isSent = false;
+            where.status = { not: false };
+            where.schedule = { lte: now };
         }
 
         // ✅ Tambahkan filter berdasarkan broadcastType
