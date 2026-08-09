@@ -25,9 +25,32 @@ const ALLOWED_MIME_TYPES = [
     'application/vnd.ms-excel', // xls
     'application/vnd.openxmlformats-officedocument.wordprocessingml.document', // docx
     'application/msword', // doc
+    'application/vnd.openxmlformats-officedocument.presentationml.presentation', // pptx
+    'application/vnd.ms-powerpoint', // ppt
+    'application/vnd.oasis.opendocument.text', // odt
+    'application/vnd.oasis.opendocument.spreadsheet', // ods
+    'application/vnd.oasis.opendocument.presentation', // odp
+    'application/rtf',
+    'text/rtf',
+    'application/json',
+    // Archives (executables and scripts remain blocked)
+    'application/zip',
+    'application/x-zip-compressed',
+    'application/vnd.rar',
+    'application/x-rar-compressed',
+    'application/x-7z-compressed',
     'text/csv',
     'text/plain',
 ];
+
+const ALLOWED_FILE_EXTENSIONS = new Set([
+    '.jpg', '.jpeg', '.png', '.gif', '.webp',
+    '.mp4', '.mov', '.webm',
+    '.mp3', '.ogg', '.wav',
+    '.pdf', '.doc', '.docx', '.xls', '.xlsx', '.csv', '.txt',
+    '.ppt', '.pptx', '.odt', '.ods', '.odp', '.rtf', '.json',
+    '.zip', '.rar', '.7z',
+]);
 
 // 🔒 File size limits
 const MAX_FILE_SIZE = 25 * 1024 * 1024; // 25MB per file
@@ -35,10 +58,17 @@ const MAX_FILES = 10; // Max 10 files per request
 
 // 🔒 File filter to validate MIME types
 const fileFilter = (req: Express.Request, file: Express.Multer.File, cb: multer.FileFilterCallback) => {
-    if (ALLOWED_MIME_TYPES.includes(file.mimetype)) {
+    const extension = path.extname(file.originalname || '').toLowerCase();
+    const hasAllowedMimeType = ALLOWED_MIME_TYPES.includes(file.mimetype.toLowerCase());
+    const hasAllowedExtension = ALLOWED_FILE_EXTENSIONS.has(extension);
+
+    if (hasAllowedMimeType && hasAllowedExtension) {
         cb(null, true); // Accept file
     } else {
-        cb(new Error(`File type '${file.mimetype}' is not allowed. Allowed types: images, videos, audio, PDF, Excel, Word, CSV, TXT`));
+        cb(new Error(
+            `File type '${extension || 'unknown'}' (${file.mimetype}) is not allowed. ` +
+            'Allowed types: images, videos, audio, documents, presentations, OpenDocument, ZIP, RAR, 7Z, RTF, JSON, CSV, TXT',
+        ));
     }
 };
 
