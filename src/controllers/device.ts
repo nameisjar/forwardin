@@ -26,6 +26,7 @@ import {
 import {
     getInboxProfileCache,
     getInboxProfileCacheSummaries,
+    refreshInboxProfileCache,
 } from '../services/inboxProfileCache';
 import {
     deleteAllDeviceReactions,
@@ -1781,7 +1782,17 @@ export const getInboxConversationReactions: RequestHandler = async (req, res) =>
                 id: deviceUuid,
                 ...accessibleDeviceWhere(req.authenticatedUser.pkId, req.privilege?.pkId),
             },
-            select: { pkId: true },
+            select: {
+                pkId: true,
+                id: true,
+                phone: true,
+                sessions: {
+                    where: { id: { contains: 'config' } },
+                    select: { sessionId: true },
+                    orderBy: { pkId: 'desc' },
+                    take: 1,
+                },
+            },
         });
         if (!device) return res.status(404).json({ message: 'Device not found' });
 
@@ -1789,8 +1800,78 @@ export const getInboxConversationReactions: RequestHandler = async (req, res) =>
             device.pkId,
             conversationJid,
         );
+        const ownPhone = String(device.phone || '').replace(/\D/g, '');
+        const ownJid = ownPhone ? `${ownPhone}@s.whatsapp.net` : null;
+        const getProfileJid = (reactorJid: string) =>
+            reactorJid === 'me' ? ownJid : reactorJid;
+        const reactorJids = [
+            ...new Set(
+                reactions
+                    .map((reaction) => getProfileJid(reaction.reactorJid))
+                    .filter((jid) =>
+                        Boolean(jid)
+                        && !jid!.endsWith('@lid')
+                        && !jid!.endsWith('@g.us'),
+                    ),
+            ),
+        ] as string[];
+        const profileSummaries = await getInboxProfileCacheSummaries(
+            device.pkId,
+            reactorJids,
+        );
+        const reactionsWithProfiles = reactions.map((reaction) => {
+            const profileJid = getProfileJid(reaction.reactorJid);
+            const eligible = Boolean(profileJid && reactorJids.includes(profileJid));
+            const summary = eligible && profileJid
+                ? profileSummaries.get(profileJid)
+                : undefined;
+            return {
+                ...reaction,
+                reactorProfilePicUrl: eligible && profileJid
+                    ? createInboxProfileUrl(device.id, profileJid)
+                    : null,
+                reactorProfileStatus: summary?.status
+                    || (eligible ? 'pending' : 'unavailable'),
+            };
+        });
+
+        const sessionId = device.sessions[0]?.sessionId;
+        let profileSession: ReturnType<typeof getInstance> | null = null;
+        if (sessionId && verifyInstance(sessionId)) {
+            try {
+                profileSession = getInstance(sessionId);
+            } catch {
+                profileSession = null;
+            }
+        }
+        if (profileSession && reactorJids.length > 0) {
+            const now = Date.now();
+            const refreshQueue = reactorJids.filter((jid) => {
+                const summary = profileSummaries.get(jid);
+                if (!summary) return true;
+                if (summary.nextRetryAt && summary.nextRetryAt.getTime() > now) return false;
+                return !summary.expiresAt || summary.expiresAt.getTime() <= now;
+            });
+
+            void (async () => {
+                const worker = async () => {
+                    while (refreshQueue.length > 0) {
+                        const jid = refreshQueue.shift();
+                        if (!jid) return;
+                        await refreshInboxProfileCache({
+                            deviceId: device.pkId,
+                            jid,
+                            session: profileSession!,
+                        });
+                        await new Promise((resolve) => setTimeout(resolve, 150));
+                    }
+                };
+                await Promise.allSettled([worker(), worker()]);
+            })().catch(() => undefined);
+        }
+
         res.setHeader('Cache-Control', 'no-store');
-        return res.status(200).json(reactions);
+        return res.status(200).json(reactionsWithProfiles);
     } catch (error) {
         // Reaction metadata is optional. Keep the chat usable if its migration
         // has not reached a deployment yet or the table is temporarily down.
