@@ -58,6 +58,7 @@ async function persistOutgoingMessage(params: {
     messageId?: string;
     text?: string;
     mediaPath?: string | null;
+    fileName?: string | null;
     session?: any;
 }): Promise<void> {
     if (!params.messageId) return;
@@ -91,6 +92,7 @@ async function persistOutgoingMessage(params: {
                 deviceId: context.pkId,
                 ...(encryptedText ? { message: encryptedText } : {}),
                 ...(params.mediaPath ? { mediaPath: params.mediaPath } : {}),
+                ...(params.fileName ? { fileName: params.fileName } : {}),
                 contactId: contact?.pkId || null,
                 isGroup: params.jid.includes('@g.us'),
                 updatedAt: new Date(),
@@ -101,6 +103,7 @@ async function persistOutgoingMessage(params: {
                 to: params.jid,
                 message: encryptedText,
                 mediaPath: params.mediaPath || null,
+                fileName: params.fileName || null,
                 schedule: new Date(),
                 status: 'server_ack',
                 sessionId: context.sessionId,
@@ -286,6 +289,7 @@ export async function sendImageMessage(
             messageId,
             text: options?.caption || '[Gambar]',
             mediaPath: !Buffer.isBuffer(image) ? image.url : null,
+            fileName: options?.fileName || null,
             session,
         });
         
@@ -357,6 +361,7 @@ export async function sendDocumentMessage(
             messageId,
             text: options?.caption || options?.fileName || '[Dokumen]',
             mediaPath: !Buffer.isBuffer(document) ? document.url : null,
+            fileName: options?.fileName || null,
             session,
         });
         
@@ -425,6 +430,7 @@ export async function sendVideoMessage(
             messageId,
             text: options?.caption || '[Video]',
             mediaPath: !Buffer.isBuffer(video) ? video.url : null,
+            fileName: options?.fileName || null,
             session,
         });
         
@@ -495,6 +501,7 @@ export async function sendAudioMessage(
             messageId,
             text: options?.fileName || '[Audio]',
             mediaPath: !Buffer.isBuffer(audio) ? audio.url : null,
+            fileName: options?.fileName || null,
             session,
         });
         
@@ -596,6 +603,7 @@ export async function sendGenericMessage(
             messageId,
             text: genericText,
             mediaPath: genericMedia,
+            fileName: content?.fileName || null,
             session,
         });
         

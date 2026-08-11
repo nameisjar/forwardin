@@ -495,6 +495,9 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                                     let groupName: string | null = null;
                                     let groupPicUrl: string | null = null;
                                     let incomingMediaPath: string | null = null;
+                                    const incomingFileName = messageContent?.documentMessage?.fileName
+                                        ? path.basename(messageContent.documentMessage.fileName)
+                                        : null;
                                     
                                     const session = getInstance(sessionId);
 
@@ -726,6 +729,7 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                                             profilePicUrl: null, // Will be fetched in background
                                             message: messageText,
                                             mediaPath: incomingMediaPath,
+                                            fileName: incomingFileName,
                                             receivedAt: new Date(Number(data.messageTimestamp) * 1000),
                                             sessionId,
                                             deviceId: deviceId || null,
@@ -737,6 +741,7 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                                             pushName,
                                             message: messageText,
                                             ...(incomingMediaPath ? { mediaPath: incomingMediaPath } : {}),
+                                            ...(incomingFileName ? { fileName: incomingFileName } : {}),
                                         },
                                         include: { contact: true },
                                     });

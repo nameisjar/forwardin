@@ -1472,14 +1472,14 @@ export async function sendMediaFile(
                 message = {
                     video: file.buffer,
                     caption: caption,
-                    fileName: file.newName ?? file.originalName,
+                    fileName: file.originalName ?? file.newName,
                 };
             } else {
                 message = {
                     mimetype: file.mimetype,
                     [type]: file.buffer ?? { url: file.url },
                     caption: caption,
-                    fileName: file.newName ?? file.originalName,
+                    fileName: file.originalName ?? file.newName,
                 };
             }
 
