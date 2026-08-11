@@ -4,6 +4,8 @@ export interface MessageReactionState {
     targetMessageId: string;
     targetFromMe: boolean;
     reactorJid: string;
+    reactorDisplayName?: string | null;
+    reactorPhone?: string | null;
     emoji: string;
     reactionMessageId: string | null;
     reactedAt: string;
@@ -38,6 +40,20 @@ const serializeReaction = (row: MessageReactionRow): MessageReactionState => ({
     reactionMessageId: row.reaction_message_id,
     reactedAt: row.reacted_at.toISOString(),
 });
+
+const normalizeReactionPhone = (value: string | null | undefined): string =>
+    String(value || '')
+        .split('@')[0]
+        .split(':')[0]
+        .replace(/\D/g, '');
+
+const getContactDisplayName = (contact: {
+    firstName: string;
+    lastName: string | null;
+} | null | undefined): string | null => {
+    if (!contact) return null;
+    return [contact.firstName, contact.lastName].filter(Boolean).join(' ').trim() || null;
+};
 
 export const reactionTimestamp = (value: unknown): Date => {
     let numericValue: number;
@@ -112,7 +128,95 @@ export const getConversationMessageReactions = async (
           AND "conversation_jid" = ${conversationJid}
         ORDER BY "reacted_at" ASC
     `;
-    return rows.map(serializeReaction);
+    const reactions = rows.map(serializeReaction);
+    const reactorJids = [
+        ...new Set(
+            reactions
+                .map((reaction) => reaction.reactorJid)
+                .filter((jid) => jid && jid !== 'me'),
+        ),
+    ];
+    const reactorPhones = [
+        ...new Set(reactorJids.map(normalizeReactionPhone).filter(Boolean)),
+    ];
+
+    if (reactorJids.length === 0) {
+        return reactions.map((reaction) => ({
+            ...reaction,
+            reactorDisplayName: reaction.reactorJid === 'me' ? 'Anda' : null,
+            reactorPhone: null,
+        }));
+    }
+
+    const contactPhoneCandidates = [
+        ...new Set(reactorPhones.flatMap((phone) => [phone, `+${phone}`])),
+    ];
+    const [contacts, incomingIdentities] = await Promise.all([
+        contactPhoneCandidates.length > 0
+            ? prisma.contact.findMany({
+                  where: {
+                      phone: { in: contactPhoneCandidates },
+                      contactDevices: { some: { deviceId } },
+                  },
+                  select: { firstName: true, lastName: true, phone: true },
+              })
+            : Promise.resolve([]),
+        prisma.incomingMessage.findMany({
+            where: {
+                deviceId,
+                OR: [
+                    { participant: { in: reactorJids } },
+                    { from: { in: reactorJids } },
+                ],
+            },
+            orderBy: { receivedAt: 'desc' },
+            select: {
+                from: true,
+                participant: true,
+                pushName: true,
+                contact: {
+                    select: { firstName: true, lastName: true, phone: true },
+                },
+            },
+        }),
+    ]);
+
+    const contactsByPhone = new Map(
+        contacts.map((contact) => [normalizeReactionPhone(contact.phone), contact]),
+    );
+    const identitiesByKey = new Map<string, (typeof incomingIdentities)[number]>();
+    for (const identity of incomingIdentities) {
+        for (const value of [identity.participant, identity.from]) {
+            if (!value) continue;
+            const jidKey = value.toLowerCase();
+            const phoneKey = normalizeReactionPhone(value);
+            if (!identitiesByKey.has(jidKey)) identitiesByKey.set(jidKey, identity);
+            if (phoneKey && !identitiesByKey.has(phoneKey)) {
+                identitiesByKey.set(phoneKey, identity);
+            }
+        }
+    }
+
+    return reactions.map((reaction) => {
+        if (reaction.reactorJid === 'me') {
+            return { ...reaction, reactorDisplayName: 'Anda', reactorPhone: null };
+        }
+
+        const reactorPhone = normalizeReactionPhone(reaction.reactorJid) || null;
+        const identity = identitiesByKey.get(reaction.reactorJid.toLowerCase())
+            || (reactorPhone ? identitiesByKey.get(reactorPhone) : undefined);
+        const contact = (reactorPhone ? contactsByPhone.get(reactorPhone) : undefined)
+            || identity?.contact;
+        const reactorDisplayName = getContactDisplayName(contact)
+            || identity?.pushName?.trim()
+            || null;
+
+        return {
+            ...reaction,
+            reactorDisplayName,
+            reactorPhone,
+        };
+    });
 };
 
 export const deleteReactionPlaceholder = async (input: {
