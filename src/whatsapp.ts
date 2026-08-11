@@ -17,7 +17,7 @@ import { Boom } from '@hapi/boom';
 import { delay } from './utils/delay';
 import { useSession } from './utils/useSession';
 import { Store } from './store';
-import { getSocketIO } from './socket';
+import { emitDeviceStatusChange, getSocketIO } from './socket';
 import { warmInboxProfileCache } from './services/inboxProfileCache';
 import { createInboxProfileUrl } from './utils/inboxMedia';
 import { Server } from 'socket.io';
@@ -28,12 +28,18 @@ import {
     getSessionState,
     updateConnectionState,
     markConnectionSuccessful,
+    markReconnecting,
     isConnectionSuccessful,
     isSessionConnected,
     getSessionQR,
     getLastDisconnect,
     removeSessionState,
 } from './utils/sessionState';
+import {
+    DeviceConnectionStatus,
+    getReconnectDelay,
+    normalizeConnectionUpdate,
+} from './utils/connectionPolicy';
 import {
     recordConnectionError,
     recordReconnection,
@@ -47,6 +53,7 @@ type Instance = WASocket & {
 
 const instances = new Map<string, Instance>();
 const retries = new Map<string, number>();
+const reconnectTimers = new Map<string, NodeJS.Timeout>();
 const SSEQRGenerations = new Map<string, number>();
 // 🆕 Track active SSE connections to prevent conflicts
 const activeSSEConnections = new Map<number, { sessionId: string; aborted: boolean }>();
@@ -76,10 +83,38 @@ export function isManualLogout(devicePkId: number): boolean {
     return manualLogoutInProgress.has(devicePkId);
 }
 
-const RECONNECT_INTERVAL = Number(process.env.RECONNECT_INTERVAL || 0);
+const RECONNECT_INTERVAL = Number(process.env.RECONNECT_INTERVAL || 2000);
+const RECONNECT_MAX_INTERVAL = Number(process.env.RECONNECT_MAX_INTERVAL || 60000);
 const MAX_RECONNECT_RETRIES = Number(process.env.MAX_RECONNECT_RETRIES || 5);
 const SSE_MAX_QR_GENERATION = Number(process.env.SSE_MAX_QR_GENERATION || 5);
 const SESSION_CONFIG_ID = 'session-config';
+
+async function publishDeviceConnectionStatus(
+    deviceId: number,
+    sessionId: string,
+    status: DeviceConnectionStatus,
+): Promise<void> {
+    const device = await prisma.device.update({
+        where: { pkId: deviceId },
+        data: { status, updatedAt: new Date() },
+    });
+
+    try {
+        await prisma.deviceLog.create({
+            data: { sessionId, deviceId, status },
+        });
+    } catch (error) {
+        // Status delivery is more important than its audit entry. A logging
+        // failure must not leave connected clients with a stale indicator.
+        logger.warn({ error, sessionId, deviceId, status }, 'Failed to record device status log');
+    }
+
+    const isConnected = status === 'open';
+    getSocketIO()
+        .to(`device:${device.id}`)
+        .emit(`device:${device.id}:status`, status);
+    emitDeviceStatusChange(device.id, status, isConnected);
+}
 
 export async function init() {
     const sessions = await prisma.session.findMany({
@@ -87,10 +122,21 @@ export async function init() {
         where: { id: { startsWith: SESSION_CONFIG_ID } },
     });
 
-    for (const { sessionId, deviceId, data } of sessions) {
-        const { readIncomingMessages, ...socketConfig } = JSON.parse(data);
-        createInstance({ sessionId, deviceId, readIncomingMessages, socketConfig });
-    }
+    const results = await Promise.allSettled(
+        sessions.map(({ sessionId, deviceId, data }) => {
+            const { readIncomingMessages, ...socketConfig } = JSON.parse(data);
+            return createInstance({ sessionId, deviceId, readIncomingMessages, socketConfig });
+        }),
+    );
+
+    results.forEach((result, index) => {
+        if (result.status === 'rejected') {
+            logger.error(
+                { error: result.reason, sessionId: sessions[index]?.sessionId },
+                'Failed to restore WhatsApp session during startup',
+            );
+        }
+    });
 }
 
 // 🆕 Export helper function untuk akses activeSSEConnections Map
@@ -98,15 +144,10 @@ export function getActiveSSEConnections() {
     return activeSSEConnections;
 }
 
-function shouldReconnect(sessionId: string) {
-    let attempts = retries.get(sessionId) ?? 0;
-
-    if (attempts < MAX_RECONNECT_RETRIES) {
-        attempts += 1;
-        retries.set(sessionId, attempts);
-        return true;
-    }
-    return false;
+function nextReconnectAttempt(sessionId: string): number {
+    const attempts = (retries.get(sessionId) ?? 0) + 1;
+    retries.set(sessionId, attempts);
+    return attempts;
 }
 
 // 🆕 Helper untuk check apakah SSE sudah di-abort
@@ -149,6 +190,9 @@ export async function createInstance(options: createInstanceOptions) {
     // 🔧 FIX: Gunakan centralized state management (Issue 3.5)
     // State disimpan di Map global, bukan local variable yang di-capture closure
     const sessionState = getOrCreateSessionState(sessionId, deviceId);
+    if (!sessionState.isReconnecting) {
+        updateConnectionState(sessionId, { connection: 'connecting' });
+    }
     
     // Helper untuk akses state terkini (selalu ambil dari Map, bukan closure)
     const getState = () => getSessionState(sessionId);
@@ -264,6 +308,21 @@ export async function createInstance(options: createInstanceOptions) {
 
     // Main destroy function - orchestrates all cleanup
     const destroy = async (logout = true) => {
+        const currentInstance = instances.get(sessionId);
+        if (currentInstance && currentInstance.ws !== sock.ws) {
+            logger.info(
+                { sessionId, deviceId },
+                'Ignoring cleanup from a superseded WhatsApp instance',
+            );
+            return;
+        }
+
+        const reconnectTimer = reconnectTimers.get(sessionId);
+        if (reconnectTimer) {
+            clearTimeout(reconnectTimer);
+            reconnectTimers.delete(sessionId);
+        }
+
         // 🔧 CRITICAL FIX: Delete dari Maps FIRST (before any async operations)
         // Ini mencegah race condition di mana destroy() lama menghapus entry baru
         if (SSE) {
@@ -327,13 +386,12 @@ export async function createInstance(options: createInstanceOptions) {
         }
     };
 
-    const handleConnectionClose = () => {
+    const handleConnectionClose = async () => {
         // 🔧 FIX: Gunakan centralized state (Issue 3.5)
         const currentState = getState();
         const lastDisconnect = currentState?.connectionState.lastDisconnect;
         const code = (lastDisconnect?.error as Boom)?.output?.statusCode;
         const restartRequired = code === DisconnectReason.restartRequired;
-        const doNotReconnect = !shouldReconnect(sessionId);
         
         // 🆕 Check if SSE was aborted - jika iya, jangan reconnect
         if (SSE && isSSEAborted(deviceId)) {
@@ -341,13 +399,14 @@ export async function createInstance(options: createInstanceOptions) {
                 { sessionId, deviceId },
                 'SSE was aborted by user - skipping reconnection'
             );
-            destroy(false);
+            await publishDeviceConnectionStatus(deviceId, sessionId, 'close');
+            await destroy(false);
             return;
         }
         
         // 🆕 Log disconnect reason untuk debugging
         logger.info(
-            { sessionId, deviceId, code, restartRequired, doNotReconnect },
+            { sessionId, deviceId, code, restartRequired },
             'Connection closed - evaluating reconnection'
         );
 
@@ -384,39 +443,43 @@ export async function createInstance(options: createInstanceOptions) {
                 }
                 res.end();
             }
-            destroy(false); // false = jangan coba logout lagi
+            await publishDeviceConnectionStatus(deviceId, sessionId, 'logged_out');
+            await destroy(false); // false = jangan coba logout lagi
             return;
         }
 
-        // Jika sudah mencapai max retry, destroy session
-        if (doNotReconnect) {
-            logger.info({ sessionId, deviceId }, 'Max reconnection attempts reached - destroying session');
+        const attempt = nextReconnectAttempt(sessionId);
+
+        // Pairing via SSE has a bounded lifetime. Existing authenticated sessions
+        // keep retrying with a capped delay so a temporary outage never deletes
+        // credentials or forces a new QR pairing.
+        if (SSE && attempt > MAX_RECONNECT_RETRIES) {
+            logger.info({ sessionId, deviceId }, 'Max pairing reconnection attempts reached');
             if (res && !res.writableEnded) {
-                if (SSE) {
-                    res.write(
-                        `data: ${JSON.stringify({
-                            error: 'Gagal terhubung setelah beberapa percobaan. Silakan coba lagi.',
-                            maxRetriesReached: true,
-                        })}\n\n`,
-                    );
-                } else {
-                    res.status(500).json({ error: 'Unable to create session after multiple retries' });
-                }
+                res.write(
+                    `data: ${JSON.stringify({
+                        error: 'Gagal terhubung setelah beberapa percobaan. Silakan coba lagi.',
+                        maxRetriesReached: true,
+                    })}\n\n`,
+                );
                 res.end();
             }
-            destroy(false);
+            await publishDeviceConnectionStatus(deviceId, sessionId, 'close');
+            await destroy(false);
             return;
         }
+
+        markReconnecting(sessionId);
+        await publishDeviceConnectionStatus(deviceId, sessionId, 'reconnecting');
 
         // 🆕 Inform user tentang reconnection attempt
         if (res && !res.writableEnded && SSE) {
-            const attempt = retries.get(sessionId) || 1;
             res.write(
                 `data: ${JSON.stringify({
                     connection: 'reconnecting',
                     attempt,
                     maxAttempts: MAX_RECONNECT_RETRIES,
-                    message: `Mencoba menghubungkan ulang... (${attempt}/${MAX_RECONNECT_RETRIES})`,
+                    message: `Mencoba menghubungkan ulang... (${Math.min(attempt, MAX_RECONNECT_RETRIES)}/${MAX_RECONNECT_RETRIES})`,
                 })}\n\n`,
             );
         }
@@ -424,7 +487,8 @@ export async function createInstance(options: createInstanceOptions) {
         // 🆕 Check lagi sebelum reconnect
         if (SSE && isSSEAborted(deviceId)) {
             logger.info({ sessionId, deviceId }, 'SSE aborted during reconnect evaluation');
-            destroy(false);
+            await publishDeviceConnectionStatus(deviceId, sessionId, 'close');
+            await destroy(false);
             return;
         }
 
@@ -432,7 +496,30 @@ export async function createInstance(options: createInstanceOptions) {
         if (!restartRequired) {
             logger.info({ attempts: retries.get(sessionId) ?? 1, sessionId }, 'Reconnecting...');
         }
-        setTimeout(() => createInstance(options), restartRequired ? 0 : RECONNECT_INTERVAL);
+        const reconnectDelay = restartRequired
+            ? 0
+            : getReconnectDelay(attempt, RECONNECT_INTERVAL, RECONNECT_MAX_INTERVAL);
+        const existingTimer = reconnectTimers.get(sessionId);
+        if (existingTimer) clearTimeout(existingTimer);
+
+        const timer = setTimeout(() => {
+            reconnectTimers.delete(sessionId);
+            void createInstance(options).catch(async (error) => {
+                logger.error(
+                    { error, sessionId, deviceId, attempt },
+                    'Failed to recreate WhatsApp instance',
+                );
+                if (!SSE) {
+                    await handleConnectionClose().catch((reconnectError) => {
+                        logger.error(
+                            { error: reconnectError, sessionId, deviceId },
+                            'Failed to schedule the next WhatsApp reconnect',
+                        );
+                    });
+                }
+            });
+        }, reconnectDelay);
+        reconnectTimers.set(sessionId, timer);
     };
 
     const handleNormalConnectionUpdate = async () => {
@@ -600,11 +687,24 @@ export async function createInstance(options: createInstanceOptions) {
 
         // 🔧 FIX: Update centralized state (Issue 3.5)
         updateConnectionState(sessionId, update);
-        const { connection } = update;
+        const connection = normalizeConnectionUpdate(update.connection);
 
+        // QR and other Baileys events are partial updates. They still need to
+        // reach the pairing handler, but must never overwrite device status.
+        if (!connection) {
+            await handleConnectionUpdate();
+            return;
+        }
+
+        try {
         if (connection === 'open') {
             retries.delete(sessionId);
             SSEQRGenerations.delete(sessionId);
+            const reconnectTimer = reconnectTimers.get(sessionId);
+            if (reconnectTimer) {
+                clearTimeout(reconnectTimer);
+                reconnectTimers.delete(sessionId);
+            }
 
             // 🔧 FIX: Mark connection successful di centralized state
             markConnectionSuccessful(sessionId);
@@ -621,6 +721,10 @@ export async function createInstance(options: createInstanceOptions) {
                 where: { pkId: deviceId },
                 data: { phone, updatedAt: new Date() },
             });
+
+            // Publish online immediately. Group/profile synchronization is
+            // intentionally background work and may take several seconds.
+            await publishDeviceConnectionStatus(deviceId, sessionId, 'open');
 
             // Populate missing/stale profile pictures without putting WhatsApp
             // or CDN work in the browser-facing profile endpoint.
@@ -663,8 +767,10 @@ export async function createInstance(options: createInstanceOptions) {
                 }, 1000);
             }
 
-            // Auto-sync WhatsApp groups saat koneksi berhasil
-            try {
+            // Auto-sync WhatsApp groups saat koneksi berhasil. A slow group
+            // fetch must not delay the real-time Online indicator.
+            void (async () => {
+              try {
                 logger.info({ sessionId, deviceId }, 'Fetching WhatsApp groups...');
                 const groups = await sock.groupFetchAllParticipating();
                 const groupsArray = Object.values(groups).map((group: any) => ({
@@ -689,50 +795,22 @@ export async function createInstance(options: createInstanceOptions) {
                 } else {
                     logger.info({ sessionId, deviceId }, 'No WhatsApp groups found');
                 }
-            } catch (error) {
+              } catch (error) {
                 logger.error(
                     { error, sessionId, deviceId },
                     'Failed to sync WhatsApp groups'
                 );
-            }
+              }
+            })();
+        } else if (connection === 'close') {
+            // Keep cached WhatsApp groups during temporary disconnects. They
+            // are cleared only by explicit logout/device destruction.
+            await handleConnectionClose();
+        } else {
+            await publishDeviceConnectionStatus(deviceId, sessionId, connection);
         }
-        
-        // Clear WhatsApp groups saat koneksi terputus
-        if (connection === 'close') {
-            try {
-                await WhatsAppGroupService.clearWhatsAppGroups(deviceId, sessionId);
-                logger.info({ sessionId, deviceId }, 'WhatsApp groups cleared on connection close');
-            } catch (error) {
-                logger.error(
-                    { error, sessionId, deviceId },
-                    'Failed to clear WhatsApp groups on connection close'
-                );
-            }
-            handleConnectionClose();
-        }
-        
-        handleConnectionUpdate();
 
-        // back here: Record to update not found
-        // Add error handling to prevent crash when device is already deleted
-        try {
-            const device = await prisma.device.update({
-                where: { pkId: deviceId },
-                data: { status: connection, updatedAt: new Date() },
-            });
-
-            if (connection) {
-                await prisma.deviceLog.create({
-                    data: {
-                        sessionId,
-                        deviceId,
-                        status: connection,
-                    },
-                });
-            }
-
-            const io: Server = getSocketIO();
-            io.to(`device:${device.id}`).emit(`device:${device.id}:status`, connection);
+        await handleConnectionUpdate();
         } catch (error: any) {
             // Handle case where device no longer exists
             if (error.code === 'P2025') {
@@ -741,14 +819,12 @@ export async function createInstance(options: createInstanceOptions) {
                     'Device not found during status update - device may have been deleted'
                 );
                 // Optionally destroy the instance if device is gone
-                destroy(false);
+                await destroy(false);
             } else {
-                // Re-throw other errors
                 logger.error(
                     { error, sessionId, deviceId, connection },
                     'Error updating device status'
                 );
-                throw error;
             }
         }
     });
@@ -1462,7 +1538,7 @@ export function getConnectedSessionsInfo(): Array<{ sessionId: string; phone: st
     const result: Array<{ sessionId: string; phone: string }> = [];
     
     for (const [sessionId, instance] of instances.entries()) {
-        if (instance?.user) {
+        if (isSessionConnected(sessionId) && instance?.user) {
             result.push({
                 sessionId,
                 phone: instance.user.id?.split(':')[0] || 'unknown'

@@ -10,6 +10,8 @@ import schedule from 'node-schedule';
 import { isUUID } from '../utils/uuidChecker';
 import { generateDeviceAccessToken } from '../utils/jwtGenerator';
 import { getInstance, verifyInstance } from '../whatsapp';
+import { getConnectionStatus, isReconnecting } from '../utils/sessionState';
+import { deriveDeviceRuntimeStatus } from '../utils/connectionPolicy';
 import { hashApiKey } from '../utils/apiKeyHash';
 import {
     accessibleDeviceWhere,
@@ -63,77 +65,32 @@ export const getDevices: RequestHandler = async (req, res) => {
             },
         });
 
-        // 🆕 Validasi status device: jika status 'open' tapi tidak ada instance aktif, update ke 'close'
-        const validatedDevices = await Promise.all(
-            devices.map(async (device) => {
-                const sessionId = device.sessions[0]?.sessionId;
-                const dbStatus = device.status;
-                const canManage = device.userId === pkId;
+        // Runtime state is the source of truth. Keep this endpoint read-only so
+        // a request during startup cannot overwrite a session being restored.
+        const validatedDevices = devices.map((device) => {
+            const sessionId = device.sessions[0]?.sessionId;
+            const canManage = device.userId === pkId;
+            const hasInstance = Boolean(sessionId && verifyInstance(sessionId));
+            const status = deriveDeviceRuntimeStatus({
+                databaseStatus: device.status,
+                hasSession: Boolean(sessionId),
+                hasInstance,
+                connection: sessionId ? getConnectionStatus(sessionId) : undefined,
+                reconnecting: sessionId ? isReconnecting(sessionId) : false,
+            });
 
-                // Jika status di DB adalah 'open', validasi apakah instance benar-benar aktif
-                if (dbStatus === 'open' && sessionId) {
-                    const isInstanceActive = verifyInstance(sessionId);
-                    
-                    if (!isInstanceActive) {
-                        // Instance tidak aktif, update status di DB ke 'close'
-                        logger.warn(
-                            { deviceId: device.id, sessionId },
-                            'Device status mismatch: DB says open but no active instance. Updating to close.'
-                        );
-                        
-                        await prisma.device.update({
-                            where: { pkId: device.pkId },
-                            data: { status: 'close', updatedAt: new Date() }
-                        });
-
-                        // Return device dengan status yang sudah dikoreksi
-                        const { sessions, ...deviceWithoutSessions } = device;
-                        return { 
-                            ...deviceWithoutSessions,
-                            isOwner: device.userId === pkId,
-                            accessType: device.userId === pkId ? 'owner' : 'assigned',
-                            canManage,
-                            assignmentCount: device._count.assignments,
-                            status: 'close',
-                            sessionId: sessions[0]?.sessionId || null // ✅ Include sessionId
-                        };
-                    }
-                } else if (dbStatus === 'open' && !sessionId) {
-                    // Status open tapi tidak ada session sama sekali
-                    logger.warn(
-                        { deviceId: device.id },
-                        'Device status mismatch: DB says open but no session found. Updating to close.'
-                    );
-                    
-                    await prisma.device.update({
-                        where: { pkId: device.pkId },
-                        data: { status: 'close', updatedAt: new Date() }
-                    });
-
-                    const { sessions, ...deviceWithoutSessions } = device;
-                    return { 
-                        ...deviceWithoutSessions,
-                        isOwner: device.userId === pkId,
-                        accessType: device.userId === pkId ? 'owner' : 'assigned',
-                        canManage,
-                        assignmentCount: device._count.assignments,
-                        status: 'close',
-                        sessionId: null // ✅ Include sessionId (null in this case)
-                    };
-                }
-
-                // Remove sessions array but preserve sessionId field for socket listeners
-                const { sessions, ...deviceWithoutSessions } = device;
-                return { 
-                    ...deviceWithoutSessions,
-                    isOwner: device.userId === pkId,
-                    accessType: device.userId === pkId ? 'owner' : 'assigned',
-                    canManage,
-                    assignmentCount: device._count.assignments,
-                    sessionId: sessions[0]?.sessionId || null // ✅ Include sessionId for frontend socket listeners
-                };
-            })
-        );
+            // Remove sessions array but preserve sessionId field for socket listeners
+            const { sessions, ...deviceWithoutSessions } = device;
+            return {
+                ...deviceWithoutSessions,
+                isOwner: device.userId === pkId,
+                accessType: device.userId === pkId ? 'owner' : 'assigned',
+                canManage,
+                assignmentCount: device._count.assignments,
+                status,
+                sessionId: sessions[0]?.sessionId || null // ✅ Include sessionId for frontend socket listeners
+            };
+        });
 
         res.status(200).json(validatedDevices);
     } catch (error) {

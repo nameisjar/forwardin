@@ -3,7 +3,9 @@ import { getComprehensivePDFStatus, getPDFQueueStats, getBrowserHealthStatus } f
 import { authMiddleware, adminOnly } from '../middleware/auth';
 import prisma from '../utils/db';
 import logger from '../config/logger';
-import { getConnectedSessionsInfo, getInstance, verifyInstance } from '../whatsapp';
+import { getConnectedSessionsInfo, verifyInstance } from '../whatsapp';
+import { getConnectionStatus, isReconnecting } from '../utils/sessionState';
+import { deriveDeviceRuntimeStatus } from '../utils/connectionPolicy';
 import { validate as isUUID } from 'uuid';
 import { classifyDeviceOwnership } from '../utils/deviceAccess';
 import { Prisma } from '@prisma/client';
@@ -460,17 +462,14 @@ router.get('/devices', authMiddleware, adminOnly, async (req: Request, res: Resp
         let devicesWithStatus = devices.map(device => {
             const session = device.sessions[0];
             const sessionId = session?.sessionId;
-            let isConnected = false;
-            
-            // Check if session exists and is connected
-            if (sessionId && verifyInstance(sessionId)) {
-                try {
-                    const instance = getInstance(sessionId);
-                    isConnected = !!instance?.user;
-                } catch {
-                    isConnected = false;
-                }
-            }
+            const runtimeStatus = deriveDeviceRuntimeStatus({
+                databaseStatus: device.status,
+                hasSession: Boolean(sessionId),
+                hasInstance: Boolean(sessionId && verifyInstance(sessionId)),
+                connection: sessionId ? getConnectionStatus(sessionId) : undefined,
+                reconnecting: sessionId ? isReconnecting(sessionId) : false,
+            });
+            const isConnected = runtimeStatus === 'open';
 
             // Calculate total messages (broadcasts + outgoing messages from session)
             const broadcastCount = device._count?.Broadcast || 0;
@@ -486,7 +485,7 @@ router.get('/devices', authMiddleware, adminOnly, async (req: Request, res: Resp
                 pkId: device.pkId,
                 name: device.name,
                 phone: device.phone,
-                status: device.status,
+                status: runtimeStatus,
                 isConnected,
                 user: device.user,
                 ownershipType,
