@@ -1591,14 +1591,25 @@ export const getDeviceInbox: RequestHandler = async (req, res) => {
             return res.status(404).json({ message: 'Device not found' });
         }
 
-        const { page = 1, pageSize = 25, phoneNumber, message, contactName } = req.query;
+        const {
+            page = 1,
+            pageSize = 25,
+            phoneNumber,
+            message,
+            contactName,
+            conversationJid,
+        } = req.query;
         const requestedPage = Math.max(1, Number(page) || 1);
         const requestedPageSize = Math.min(50, Math.max(1, Number(pageSize) || 25));
+        const directConversationJid = typeof conversationJid === 'string'
+            ? conversationJid.trim()
+            : '';
 
         const whereClause: any = {
             deviceId: device.pkId,
             inboxHiddenAt: null,
-            from: phoneNumber ? { contains: phoneNumber.toString() } : undefined,
+            from: directConversationJid
+                || (phoneNumber ? { contains: phoneNumber.toString() } : undefined),
             message: message
                 ? { contains: message.toString(), mode: 'insensitive' as const }
                 : undefined,
@@ -1621,10 +1632,14 @@ export const getDeviceInbox: RequestHandler = async (req, res) => {
                 _max: { receivedAt: true },
                 _count: { _all: true },
             }),
-            !hasSearchFilter
+            (!hasSearchFilter || Boolean(directConversationJid))
                 ? prisma.outgoingMessage.groupBy({
                       by: ['to'],
-                      where: { deviceId: device.pkId, inboxHiddenAt: null },
+                      where: {
+                          deviceId: device.pkId,
+                          inboxHiddenAt: null,
+                          ...(directConversationJid ? { to: directConversationJid } : {}),
+                      },
                       _max: { createdAt: true },
                       _count: { _all: true },
                   })

@@ -11,6 +11,12 @@ import axios from 'axios';
 import { isUUID } from '../utils/uuidChecker';
 import fs from 'fs';
 import { accessibleDeviceWhere } from '../utils/deviceAccess';
+import { createInboxProfileUrl } from '../utils/inboxMedia';
+import {
+    getInboxProfileCacheSummaries,
+    refreshInboxProfileCache,
+} from '../services/inboxProfileCache';
+import { getInstance, verifyInstance } from '../whatsapp';
 
 // Helper to format phone number (08 -> 628)
 const formatPhoneNumber = (phone: any): string => {
@@ -729,6 +735,29 @@ export const getContacts: RequestHandler = async (req, res) => {
         const limitNum = parseInt(pageSize as string, 10) || 50;
         const skip = (pageNum - 1) * limitNum;
 
+        const selectedDevice = deviceId
+            ? await prisma.device.findFirst({
+                where: {
+                    id: String(deviceId),
+                    ...accessibleDeviceWhere(pkId, privilegeId),
+                },
+                select: {
+                    pkId: true,
+                    id: true,
+                    sessions: {
+                        where: { id: { contains: 'config' } },
+                        select: { sessionId: true },
+                        orderBy: { pkId: 'desc' },
+                        take: 1,
+                    },
+                },
+            })
+            : null;
+
+        if (deviceId && !selectedDevice) {
+            return res.status(404).json({ message: 'Device not found' });
+        }
+
         const whereClause: any = {
             contactDevices: {
                 some: {
@@ -806,10 +835,64 @@ export const getContacts: RequestHandler = async (req, res) => {
             prisma.contact.count({ where: whereClause }),
         ]);
 
+        const contactJids = selectedDevice
+            ? contacts.map((contact) => `${formatPhoneNumber(contact.phone)}@s.whatsapp.net`)
+            : [];
+        const profileSummaries = selectedDevice
+            ? await getInboxProfileCacheSummaries(selectedDevice.pkId, contactJids)
+            : new Map();
+        const contactsWithProfiles = contacts.map((contact, index) => {
+            const jid = contactJids[index];
+            const summary = jid ? profileSummaries.get(jid) : undefined;
+            return {
+                ...contact,
+                profilePicUrl: selectedDevice && jid
+                    ? createInboxProfileUrl(selectedDevice.id, jid)
+                    : null,
+                profilePictureStatus: summary?.status || (jid ? 'pending' : 'unavailable'),
+            };
+        });
+
+        const sessionId = selectedDevice?.sessions[0]?.sessionId;
+        let profileSession: ReturnType<typeof getInstance> | null = null;
+        if (sessionId && verifyInstance(sessionId)) {
+            try {
+                profileSession = getInstance(sessionId);
+            } catch {
+                profileSession = null;
+            }
+        }
+
+        if (selectedDevice && profileSession && contactJids.length > 0) {
+            const now = Date.now();
+            const refreshQueue = [...new Set(contactJids)].filter((jid) => {
+                const summary = profileSummaries.get(jid);
+                if (!summary) return true;
+                if (summary.nextRetryAt && summary.nextRetryAt.getTime() > now) return false;
+                return !summary.expiresAt || summary.expiresAt.getTime() <= now;
+            });
+
+            void (async () => {
+                const worker = async () => {
+                    while (refreshQueue.length > 0) {
+                        const jid = refreshQueue.shift();
+                        if (!jid) return;
+                        await refreshInboxProfileCache({
+                            deviceId: selectedDevice.pkId,
+                            jid,
+                            session: profileSession!,
+                        });
+                        await new Promise((resolve) => setTimeout(resolve, 150));
+                    }
+                };
+                await Promise.allSettled([worker(), worker()]);
+            })().catch(() => undefined);
+        }
+
         const totalPages = Math.ceil(total / limitNum);
 
         res.status(200).json({
-            data: contacts,
+            data: contactsWithProfiles,
             metadata: {
                 totalContacts: total,
                 currentPage: pageNum,

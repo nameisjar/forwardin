@@ -2,6 +2,11 @@ import { Request, Response } from 'express';
 import { WhatsAppGroupService } from '../services/whatsappGroup';
 import prisma from '../utils/db';
 import { accessibleDeviceWhere } from '../utils/deviceAccess';
+import { createInboxProfileUrl } from '../utils/inboxMedia';
+import {
+  getInboxProfileCacheSummaries,
+  refreshInboxProfileCache,
+} from '../services/inboxProfileCache';
 
 export const getActiveGroups = async (req: Request, res: Response) => {
   try {
@@ -71,31 +76,50 @@ export const getActiveGroups = async (req: Request, res: Response) => {
       // ignore
     }
 
-    const transformedGroupsPromises = groups.map(async (group: any) => {
-      let profilePicUrl: string | null = null;
-
-      if (instance) {
-        try {
-          profilePicUrl = await instance.profilePictureUrl(group.groupId, 'image');
-        } catch {
-          // ignore
-        }
-      }
-
+    const groupJids = groups.map((group: any) => String(group.groupId || '')).filter(Boolean);
+    const profileSummaries = await getInboxProfileCacheSummaries(device.pkId, groupJids);
+    const transformedGroups = groups.map((group: any) => {
+      const summary = profileSummaries.get(group.groupId);
       return {
         id: group.groupId,
         groupId: group.groupId,
         name: group.groupName,
         subject: group.groupName,
         participants: group.participants,
-        profilePicUrl,
+        profilePicUrl: createInboxProfileUrl(device.id, group.groupId),
+        profilePictureStatus: summary?.status || 'pending',
         isActive: group.isActive,
         createdAt: group.createdAt,
         updatedAt: group.updatedAt,
       };
     });
 
-    const transformedGroups = await Promise.all(transformedGroupsPromises);
+    if (instance && groupJids.length > 0) {
+      const now = Date.now();
+      const refreshQueue = [...new Set(groupJids)].filter((jid) => {
+        const summary = profileSummaries.get(jid);
+        if (!summary) return true;
+        if (summary.nextRetryAt && summary.nextRetryAt.getTime() > now) return false;
+        return !summary.expiresAt || summary.expiresAt.getTime() <= now;
+      });
+
+      void (async () => {
+        const worker = async () => {
+          while (refreshQueue.length > 0) {
+            const jid = refreshQueue.shift();
+            if (!jid) return;
+            await refreshInboxProfileCache({
+              deviceId: device.pkId,
+              jid,
+              session: instance,
+            });
+            await new Promise((resolve) => setTimeout(resolve, 150));
+          }
+        };
+        await Promise.allSettled([worker(), worker()]);
+      })().catch(() => undefined);
+    }
+
     const totalPages = Math.ceil(total / limitNum);
 
     res.json({
