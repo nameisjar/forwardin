@@ -1194,7 +1194,8 @@ export const getDeviceOutboxConversations: RequestHandler = async (req, res) => 
                     .filter(Boolean),
             ),
         ];
-        const [matchingContacts, incomingIdentities] = await Promise.all([
+        const groupRecipientJids = recipientJids.filter((jid) => jid.endsWith('@g.us'));
+        const [matchingContacts, incomingIdentities, matchingGroups] = await Promise.all([
             recipientPhones.length > 0
                 ? prisma.contact.findMany({
                       where: {
@@ -1238,6 +1239,15 @@ export const getDeviceOutboxConversations: RequestHandler = async (req, res) => 
                       },
                   })
                 : Promise.resolve([]),
+            groupRecipientJids.length > 0
+                ? prisma.whatsAppGroup.findMany({
+                      where: {
+                          deviceId: device.pkId,
+                          groupId: { in: groupRecipientJids },
+                      },
+                      select: { groupId: true, groupName: true },
+                  })
+                : Promise.resolve([]),
         ]);
         const contactsByPhone = new Map(
             matchingContacts.map((contact) => [contact.phone.replace(/\D/g, ''), contact]),
@@ -1248,6 +1258,9 @@ export const getDeviceOutboxConversations: RequestHandler = async (req, res) => 
                 incomingIdentityByJid.set(identity.from, identity);
             }
         }
+        const groupNameByJid = new Map(
+            matchingGroups.map((group) => [group.groupId, group.groupName]),
+        );
         const counts = new Map(
             groupedRecipients.map((group) => [group.to, group._count._all]),
         );
@@ -1274,7 +1287,8 @@ export const getDeviceOutboxConversations: RequestHandler = async (req, res) => 
                     ...message,
                     contact,
                     pushName: incomingIdentity?.pushName || null,
-                    groupName: incomingIdentity?.groupName || null,
+                    groupName:
+                        incomingIdentity?.groupName || groupNameByJid.get(message.to) || null,
                     groupPicUrl: message.to.endsWith('@g.us') && hasCachedProfile
                         ? createInboxProfileUrl(deviceUuid, message.to)
                         : null,
@@ -1722,12 +1736,28 @@ export const getDeviceInbox: RequestHandler = async (req, res) => {
             messages,
             device.pkId,
         );
-        const profileCacheByJid = await getInboxProfileCacheSummaries(
-            device.pkId,
-            normalizedMessages.map((message) => message.from),
+        const normalizedJids = [...new Set(normalizedMessages.map((message) => message.from))];
+        const normalizedGroupJids = normalizedJids.filter((jid) => jid.endsWith('@g.us'));
+        const [profileCacheByJid, inboxGroups] = await Promise.all([
+            getInboxProfileCacheSummaries(device.pkId, normalizedJids),
+            normalizedGroupJids.length > 0
+                ? prisma.whatsAppGroup.findMany({
+                      where: {
+                          deviceId: device.pkId,
+                          groupId: { in: normalizedGroupJids },
+                      },
+                      select: { groupId: true, groupName: true },
+                  })
+                : Promise.resolve([]),
+        ]);
+        const inboxGroupNameByJid = new Map(
+            inboxGroups.map((group) => [group.groupId, group.groupName]),
         );
         const serialized = normalizedMessages.map((message) => {
             const item = serializePrisma(message);
+            if (message.from.endsWith('@g.us') && !item.groupName) {
+                item.groupName = inboxGroupNameByJid.get(message.from) || null;
+            }
             item.mediaPath = serializeInboxMediaPath(
                 message.mediaPath,
                 deviceUuid,
