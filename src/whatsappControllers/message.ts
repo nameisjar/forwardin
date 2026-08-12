@@ -36,7 +36,6 @@ import {
     reactionTimestamp,
     saveMessageReaction,
 } from '../services/messageReaction';
-import { recordRecipientRestriction } from '../services/outboundPrivacyGuard';
 
 const whatsappMediaHttpsAgent = new https.Agent({
     family: 4,
@@ -1138,23 +1137,6 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                                             },
                                             '[DeliveryReceipt] WhatsApp rejected outgoing message',
                                         );
-                                        if (failureCode === '463') {
-                                            void recordRecipientRestriction({
-                                                devicePkId: deviceId,
-                                                sessionId,
-                                                jid: outgoingMessage.to,
-                                                code: 463,
-                                            }).catch((error) => {
-                                                logger.warn(
-                                                    {
-                                                        error: error instanceof Error
-                                                            ? error.message
-                                                            : error,
-                                                    },
-                                                    '[PrivacyGuard] Failed to persist recipient restriction',
-                                                );
-                                            });
-                                        }
                                     }
                                     
                                     // ✅ For group messages: include readBy count

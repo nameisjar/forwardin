@@ -44,7 +44,6 @@ import {
     recordConnectionError,
     recordReconnection,
 } from './services/signalDetector';
-import { recordRecipientRestriction } from './services/outboundPrivacyGuard';
 
 type Instance = WASocket & {
     destroy: () => Promise<void>;
@@ -1388,31 +1387,6 @@ async function createInstanceInternal(options: createInstanceOptions): Promise<v
                                 '[DeliveryReceipt] WhatsApp rejected outgoing message',
                             );
 
-                            if (failureCode === '463') {
-                                const rejected = await prisma.outgoingMessage.findFirst({
-                                    where: {
-                                        sessionId,
-                                        OR: [
-                                            { waMessageId: messageId },
-                                            { id: messageId },
-                                        ],
-                                    },
-                                    select: { to: true, deviceId: true },
-                                });
-                                if (rejected?.deviceId && rejected.to) {
-                                    void recordRecipientRestriction({
-                                        devicePkId: rejected.deviceId,
-                                        sessionId,
-                                        jid: rejected.to,
-                                        code: 463,
-                                    }).catch((error) => {
-                                        logger.warn(
-                                            { error: error instanceof Error ? error.message : error },
-                                            '[PrivacyGuard] Failed to persist recipient restriction',
-                                        );
-                                    });
-                                }
-                            }
                         }
                         
                         // First, try to update by waMessageId (only if status would upgrade)

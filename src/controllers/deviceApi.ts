@@ -811,7 +811,7 @@ export const sendInboxReaction: RequestHandler = async (req, res) => {
             (req.authenticatedDevice as any).deviceUuid,
             deliveryJid,
             { react: { text: emoji, key: targetKey } },
-            { persist: false, trackHealth: false, resolveToLid: false },
+            { persist: false, trackHealth: false },
         );
         if (!queuedReaction.success) {
             throw new Error(queuedReaction.error || 'Gagal mengirim reaction');

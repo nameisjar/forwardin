@@ -8,7 +8,6 @@ import { encryptMessage } from '../utils/messageEncryption';
 import { getSocketIO } from '../socket';
 import { createInboxProfileUrl } from '../utils/inboxMedia';
 import { refreshInboxProfileCache } from './inboxProfileCache';
-import { assertOutboundRecipientAvailable } from './outboundPrivacyGuard';
 
 // ============================================
 // 🚀 MESSAGE SENDER SERVICE
@@ -172,12 +171,6 @@ export interface SendMessageOptions {
     messageId?: string;
     persist?: boolean;
     trackHealth?: boolean;
-    /**
-     * Explicitly resolve a personal PN JID to LID before sending.
-     * Normal sends leave this disabled so Baileys can manage addressing and
-     * its trusted-contact token lifecycle consistently.
-     */
-    resolveToLid?: boolean;
 }
 
 export interface SendMediaOptions extends SendMessageOptions {
@@ -203,92 +196,6 @@ function createSendFailure(error: any, fallback: string): SendResult {
         errorCode: typeof error?.code === 'string' ? error.code : undefined,
         statusCode: typeof error?.statusCode === 'number' ? error.statusCode : undefined,
     };
-}
-
-function isPersonalPhoneJid(jid: string): boolean {
-    return jid.endsWith('@s.whatsapp.net') || jid.endsWith('@hosted');
-}
-
-function isPersonalUserJid(jid: string): boolean {
-    return (
-        isPersonalPhoneJid(jid) ||
-        jid.endsWith('@lid') ||
-        jid.endsWith('@hosted.lid')
-    );
-}
-
-function isProtocolMessageContent(content: any): boolean {
-    return Boolean(
-        content?.react ||
-        content?.delete ||
-        content?.edit ||
-        content?.pin ||
-        content?.keepInChat ||
-        content?.protocolMessage,
-    );
-}
-
-/**
- * Baileys 7 stores a PN <-> LID mapping for multi-device contacts. Sending to
- * the canonical LID avoids stale PN device fan-out for contacts that can
- * otherwise remain at SERVER_ACK even though their mapping already exists.
- *
- * The original PN JID remains the Inbox/database conversation key. If the
- * mapping is unavailable (or lookup fails), sending safely falls back to PN.
- */
-export async function resolveCanonicalOutboundJid(
-    session: any,
-    jid: string,
-    enabled = true,
-): Promise<string> {
-    if (!enabled || !isPersonalPhoneJid(jid)) return jid;
-
-    try {
-        const mappedJid = await session?.signalRepository?.lidMapping?.getLIDForPN?.(jid);
-        if (
-            typeof mappedJid === 'string' &&
-            (mappedJid.endsWith('@lid') || mappedJid.endsWith('@hosted.lid'))
-        ) {
-            logger.debug(
-                { sourceAddressing: 'pn', deliveryAddressing: 'lid' },
-                '[MessageSender] Using canonical LID routing for personal message',
-            );
-            return mappedJid;
-        }
-    } catch (error) {
-        logger.warn(
-            { error: error instanceof Error ? error.message : 'LID lookup failed' },
-            '[MessageSender] Canonical LID lookup failed; falling back to PN routing',
-        );
-    }
-
-    return jid;
-}
-
-async function prepareOutboundJid(params: {
-    session: any;
-    deviceId: string;
-    jid: string;
-    resolveToLid: boolean;
-    checkRecipientRestriction: boolean;
-}): Promise<string> {
-    const deliveryJid = await resolveCanonicalOutboundJid(
-        params.session,
-        params.jid,
-        params.resolveToLid,
-    );
-
-    if (params.checkRecipientRestriction && isPersonalUserJid(params.jid)) {
-        const context = await getDeviceContext(params.deviceId);
-        if (!context?.sessionId) throw new Error('Session WhatsApp tidak ditemukan');
-        await assertOutboundRecipientAvailable({
-            devicePkId: context.pkId,
-            sessionId: context.sessionId,
-            jid: params.jid,
-        });
-    }
-
-    return deliveryJid;
 }
 
 /**
@@ -332,14 +239,7 @@ export async function sendTextMessage(
                 if (options?.quoted) sendOptions.quoted = options.quoted;
                 if (options?.messageId) sendOptions.messageId = options.messageId;
 
-                const deliveryJid = await prepareOutboundJid({
-                    session,
-                    deviceId,
-                    jid,
-                    resolveToLid: options?.resolveToLid === true && !options?.quoted,
-                    checkRecipientRestriction: true,
-                });
-                return await session.sendMessage(deliveryJid, { text }, sendOptions);
+                return await session.sendMessage(jid, { text }, sendOptions);
             },
             taskId
         );
@@ -398,14 +298,7 @@ export async function sendImageMessage(
                 if (options?.quoted) sendOptions.quoted = options.quoted;
                 if (options?.messageId) sendOptions.messageId = options.messageId;
 
-                const deliveryJid = await prepareOutboundJid({
-                    session,
-                    deviceId,
-                    jid,
-                    resolveToLid: options?.resolveToLid === true && !options?.quoted,
-                    checkRecipientRestriction: true,
-                });
-                return await session.sendMessage(deliveryJid, message, sendOptions);
+                return await session.sendMessage(jid, message, sendOptions);
             },
             taskId
         );
@@ -475,14 +368,7 @@ export async function sendDocumentMessage(
                 if (options?.quoted) sendOptions.quoted = options.quoted;
                 if (options?.messageId) sendOptions.messageId = options.messageId;
 
-                const deliveryJid = await prepareOutboundJid({
-                    session,
-                    deviceId,
-                    jid,
-                    resolveToLid: options?.resolveToLid === true && !options?.quoted,
-                    checkRecipientRestriction: true,
-                });
-                return await session.sendMessage(deliveryJid, message, sendOptions);
+                return await session.sendMessage(jid, message, sendOptions);
             },
             taskId
         );
@@ -549,14 +435,7 @@ export async function sendVideoMessage(
                 if (options?.quoted) sendOptions.quoted = options.quoted;
                 if (options?.messageId) sendOptions.messageId = options.messageId;
 
-                const deliveryJid = await prepareOutboundJid({
-                    session,
-                    deviceId,
-                    jid,
-                    resolveToLid: options?.resolveToLid === true && !options?.quoted,
-                    checkRecipientRestriction: true,
-                });
-                return await session.sendMessage(deliveryJid, message, sendOptions);
+                return await session.sendMessage(jid, message, sendOptions);
             },
             taskId
         );
@@ -625,14 +504,7 @@ export async function sendAudioMessage(
                 if (options?.quoted) sendOptions.quoted = options.quoted;
                 if (options?.messageId) sendOptions.messageId = options.messageId;
 
-                const deliveryJid = await prepareOutboundJid({
-                    session,
-                    deviceId,
-                    jid,
-                    resolveToLid: options?.resolveToLid === true && !options?.quoted,
-                    checkRecipientRestriction: true,
-                });
-                return await session.sendMessage(deliveryJid, message, sendOptions);
+                return await session.sendMessage(jid, message, sendOptions);
             },
             taskId
         );
@@ -722,18 +594,7 @@ export async function sendGenericMessage(
                 if (options?.quoted) sendOptions.quoted = options.quoted;
                 if (options?.messageId) sendOptions.messageId = options.messageId;
 
-                const isProtocolMessage = isProtocolMessageContent(content);
-                const deliveryJid = await prepareOutboundJid({
-                    session,
-                    deviceId,
-                    jid,
-                    resolveToLid:
-                        options?.resolveToLid === true &&
-                        !options?.quoted &&
-                        !isProtocolMessage,
-                    checkRecipientRestriction: !isProtocolMessage,
-                });
-                return await session.sendMessage(deliveryJid, content, sendOptions);
+                return await session.sendMessage(jid, content, sendOptions);
             },
             taskId
         );
