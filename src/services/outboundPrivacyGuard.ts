@@ -6,6 +6,8 @@ import { recordSignal } from './signalDetector';
 const RECIPIENT_463_PAUSE_MS = Number(
     process.env.RECIPIENT_463_PAUSE_MS || 24 * 60 * 60 * 1000,
 );
+const RECIPIENT_463_BLOCK_ENABLED =
+    String(process.env.RECIPIENT_463_BLOCK_ENABLED || 'false').toLowerCase() === 'true';
 type Restriction = {
     code: number;
     until: number;
@@ -72,6 +74,11 @@ export async function assertRecipientCanSend(params: {
     sessionId: string;
     jid: string;
 }): Promise<void> {
+    // Preserve the original permissive send behavior by default. We still
+    // record confirmed 463 receipts for monitoring, but only enforce a local
+    // cooldown when an operator explicitly enables it.
+    if (!RECIPIENT_463_BLOCK_ENABLED) return;
+
     const key = restrictionKey(params.sessionId, params.jid);
     let restriction = recipientRestrictions.get(key) || null;
 
@@ -101,14 +108,16 @@ export async function recordRecipientRestriction(params: {
 }): Promise<void> {
     if (params.code !== 463) return;
 
-    const key = restrictionKey(params.sessionId, params.jid);
-    const existing = recipientRestrictions.get(key);
-    if (existing && existing.until > Date.now()) return;
+    if (RECIPIENT_463_BLOCK_ENABLED) {
+        const key = restrictionKey(params.sessionId, params.jid);
+        const existing = recipientRestrictions.get(key);
+        if (existing && existing.until > Date.now()) return;
 
-    recipientRestrictions.set(key, {
-        code: params.code,
-        until: Date.now() + RECIPIENT_463_PAUSE_MS,
-    });
+        recipientRestrictions.set(key, {
+            code: params.code,
+            until: Date.now() + RECIPIENT_463_PAUSE_MS,
+        });
+    }
 
     const device = await prisma.device.findUnique({
         where: { pkId: params.devicePkId },
@@ -126,13 +135,17 @@ export async function recordRecipientRestriction(params: {
         confidence: 'high',
         metadata: {
             recipientHash: recipientHash(params.sessionId, params.jid),
-            pauseUntil: new Date(Date.now() + RECIPIENT_463_PAUSE_MS).toISOString(),
+            localBlockEnabled: RECIPIENT_463_BLOCK_ENABLED,
+            pauseUntil: RECIPIENT_463_BLOCK_ENABLED
+                ? new Date(Date.now() + RECIPIENT_463_PAUSE_MS).toISOString()
+                : null,
         },
     });
 }
 
 /**
- * Block only recipients that WhatsApp has actually rejected with receipt 463.
+ * Optionally block recipients that WhatsApp has actually rejected with receipt
+ * 463. Blocking is disabled by default to preserve the legacy direct-send flow.
  *
  * Baileys owns the trusted-contact token lifecycle. It attaches an existing
  * token, issues a new one after a send, and attempts recovery after a 463.
@@ -152,5 +165,6 @@ export async function assertOutboundRecipientAvailable(params: {
 }
 
 export const privacyGuardConfig = {
+    recipientBlockEnabled: RECIPIENT_463_BLOCK_ENABLED,
     recipientPauseMs: RECIPIENT_463_PAUSE_MS,
 };

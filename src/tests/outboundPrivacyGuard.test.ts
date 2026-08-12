@@ -1,9 +1,14 @@
 import { expect } from 'chai';
 import {
     OutboundPrivacyGuardError,
+    privacyGuardConfig,
 } from '../services/outboundPrivacyGuard';
 
 describe('Outbound privacy guard', () => {
+    it('keeps the legacy permissive send behavior by default', () => {
+        expect(privacyGuardConfig.recipientBlockEnabled).to.equal(false);
+    });
+
     it('marks confirmed recipient pauses with HTTP 423 metadata', () => {
         const error = new OutboundPrivacyGuardError(
             'RECIPIENT_463_PAUSED',
