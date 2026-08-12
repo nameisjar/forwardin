@@ -43,15 +43,19 @@ import {
 import {
     recordConnectionError,
     recordReconnection,
-    canDeviceSend,
 } from './services/signalDetector';
+import { recordRecipientRestriction } from './services/outboundPrivacyGuard';
 
 type Instance = WASocket & {
     destroy: () => Promise<void>;
     store: Store;
+    deviceId: number;
 };
 
 const instances = new Map<string, Instance>();
+const deviceSessionOwners = new Map<number, string>();
+const instanceCreations = new Map<string, Promise<void>>();
+const circuitOpenSessions = new Set<string>();
 const retries = new Map<string, number>();
 const reconnectTimers = new Map<string, NodeJS.Timeout>();
 const SSEQRGenerations = new Map<string, number>();
@@ -86,6 +90,9 @@ export function isManualLogout(devicePkId: number): boolean {
 const RECONNECT_INTERVAL = Number(process.env.RECONNECT_INTERVAL || 2000);
 const RECONNECT_MAX_INTERVAL = Number(process.env.RECONNECT_MAX_INTERVAL || 60000);
 const MAX_RECONNECT_RETRIES = Number(process.env.MAX_RECONNECT_RETRIES || 5);
+const MAX_BACKGROUND_RECONNECT_RETRIES = Number(
+    process.env.MAX_BACKGROUND_RECONNECT_RETRIES || 10,
+);
 const SSE_MAX_QR_GENERATION = Number(process.env.SSE_MAX_QR_GENERATION || 5);
 const SESSION_CONFIG_ID = 'session-config';
 
@@ -117,10 +124,30 @@ async function publishDeviceConnectionStatus(
 }
 
 export async function init() {
-    const sessions = await prisma.session.findMany({
-        select: { sessionId: true, deviceId: true, data: true },
+    const storedSessions = await prisma.session.findMany({
+        select: { pkId: true, sessionId: true, deviceId: true, data: true },
         where: { id: { startsWith: SESSION_CONFIG_ID } },
+        orderBy: { pkId: 'desc' },
     });
+
+    const sessions = Array.from(
+        new Map(storedSessions.map(session => [session.deviceId, session])).values(),
+    );
+    const selectedSessionIds = new Set(sessions.map(session => session.sessionId));
+    const supersededSessionIds = Array.from(new Set(
+        storedSessions
+            .filter(session => !selectedSessionIds.has(session.sessionId))
+            .map(session => session.sessionId),
+    ));
+    if (supersededSessionIds.length > 0) {
+        await prisma.session.deleteMany({
+            where: { sessionId: { in: supersededSessionIds } },
+        });
+        logger.warn(
+            { supersededSessionIds },
+            'Removed duplicate WhatsApp sessions before startup restore',
+        );
+    }
 
     const results = await Promise.allSettled(
         sessions.map(({ sessionId, deviceId, data }) => {
@@ -172,10 +199,45 @@ type createInstanceOptions = {
     SSE?: boolean;
     readIncomingMessages?: boolean;
     socketConfig?: SocketConfig;
+    replaceExisting?: boolean;
     sseCleanup?: () => void; // 🆕 Cleanup function untuk force close SSE
 };
 
-export async function createInstance(options: createInstanceOptions) {
+export function createInstance(options: createInstanceOptions): Promise<void> {
+    const existingCreation = instanceCreations.get(options.sessionId);
+    if (existingCreation) return existingCreation;
+
+    const owner = deviceSessionOwners.get(options.deviceId);
+    if (owner && owner !== options.sessionId) {
+        return Promise.reject(
+            new Error(`Device ${options.deviceId} already belongs to session ${owner}`),
+        );
+    }
+    if (instances.has(options.sessionId) && !options.replaceExisting) {
+        return Promise.resolve();
+    }
+
+    deviceSessionOwners.set(options.deviceId, options.sessionId);
+    if (!options.replaceExisting) circuitOpenSessions.delete(options.sessionId);
+
+    const creation = createInstanceInternal(options).catch((error) => {
+        if (!instances.has(options.sessionId)) {
+            const currentOwner = deviceSessionOwners.get(options.deviceId);
+            if (currentOwner === options.sessionId) {
+                deviceSessionOwners.delete(options.deviceId);
+            }
+        }
+        throw error;
+    }).finally(() => {
+        if (instanceCreations.get(options.sessionId) === creation) {
+            instanceCreations.delete(options.sessionId);
+        }
+    });
+    instanceCreations.set(options.sessionId, creation);
+    return creation;
+}
+
+async function createInstanceInternal(options: createInstanceOptions): Promise<void> {
     const {
         sessionId,
         deviceId,
@@ -186,6 +248,20 @@ export async function createInstance(options: createInstanceOptions) {
         sseCleanup,
     } = options;
     const configID = `${SESSION_CONFIG_ID}-${sessionId}`;
+
+    await prisma.session.upsert({
+        create: {
+            id: configID,
+            sessionId,
+            data: JSON.stringify({ readIncomingMessages, ...socketConfig }),
+            deviceId,
+        },
+        update: {
+            data: JSON.stringify({ readIncomingMessages, ...socketConfig }),
+            deviceId,
+        },
+        where: { sessionId_id: { id: configID, sessionId } },
+    });
     
     // 🔧 FIX: Gunakan centralized state management (Issue 3.5)
     // State disimpan di Map global, bukan local variable yang di-capture closure
@@ -330,6 +406,10 @@ export async function createInstance(options: createInstanceOptions) {
             logger.info({ deviceId, sessionId }, '🔧 [RACE CONDITION FIX] SSE connection removed from tracking BEFORE async cleanup');
         }
         instances.delete(sessionId);
+        if (deviceSessionOwners.get(deviceId) === sessionId) {
+            deviceSessionOwners.delete(deviceId);
+        }
+        circuitOpenSessions.delete(sessionId);
         removeSessionState(sessionId); // 🔧 FIX: Cleanup centralized state
         logger.info({ sessionId }, '🔧 [RACE CONDITION FIX] Instance and state removed from maps BEFORE async cleanup');
         
@@ -387,6 +467,13 @@ export async function createInstance(options: createInstanceOptions) {
     };
 
     const handleConnectionClose = async () => {
+        const activeInstance = instances.get(sessionId);
+        if (activeInstance && activeInstance.ws !== sock.ws) {
+            logger.debug({ sessionId, deviceId }, 'Ignoring close from superseded socket');
+            return;
+        }
+        if (circuitOpenSessions.has(sessionId)) return;
+
         // 🔧 FIX: Gunakan centralized state (Issue 3.5)
         const currentState = getState();
         const lastDisconnect = currentState?.connectionState.lastDisconnect;
@@ -428,14 +515,21 @@ export async function createInstance(options: createInstanceOptions) {
         }
 
         // 🆕 Jika logout, langsung destroy tanpa reconnect
-        if (code === DisconnectReason.loggedOut) {
-            logger.info({ sessionId, deviceId }, 'User logged out - destroying session without reconnect');
+        const terminalDisconnectCodes = new Set<number>([
+            DisconnectReason.loggedOut,
+            DisconnectReason.forbidden,
+            DisconnectReason.multideviceMismatch,
+            DisconnectReason.connectionReplaced,
+            DisconnectReason.badSession,
+        ]);
+        if (code && terminalDisconnectCodes.has(code)) {
+            logger.info({ sessionId, deviceId, code }, 'Terminal disconnect - removing invalid session');
             if (res && !res.writableEnded) {
                 if (SSE) {
                     res.write(
                         `data: ${JSON.stringify({
                             connection: 'logged_out',
-                            message: 'WhatsApp telah logout dari perangkat lain',
+                            message: 'Sesi WhatsApp tidak valid atau telah digantikan. Silakan pairing ulang.',
                         })}\n\n`,
                     );
                 } else {
@@ -449,12 +543,18 @@ export async function createInstance(options: createInstanceOptions) {
         }
 
         const attempt = nextReconnectAttempt(sessionId);
+        const reconnectLimit = SSE
+            ? MAX_RECONNECT_RETRIES
+            : MAX_BACKGROUND_RECONNECT_RETRIES;
 
         // Pairing via SSE has a bounded lifetime. Existing authenticated sessions
         // keep retrying with a capped delay so a temporary outage never deletes
         // credentials or forces a new QR pairing.
-        if (SSE && attempt > MAX_RECONNECT_RETRIES) {
-            logger.info({ sessionId, deviceId }, 'Max pairing reconnection attempts reached');
+        if (attempt > reconnectLimit) {
+            logger.warn(
+                { sessionId, deviceId, attempt },
+                'Reconnect circuit opened; credentials retained for manual recovery',
+            );
             if (res && !res.writableEnded) {
                 res.write(
                     `data: ${JSON.stringify({
@@ -464,8 +564,21 @@ export async function createInstance(options: createInstanceOptions) {
                 );
                 res.end();
             }
+            circuitOpenSessions.add(sessionId);
+            const reconnectTimer = reconnectTimers.get(sessionId);
+            if (reconnectTimer) clearTimeout(reconnectTimer);
+            reconnectTimers.delete(sessionId);
+            instances.delete(sessionId);
+            removeSessionState(sessionId);
+            if (deviceSessionOwners.get(deviceId) === sessionId) {
+                deviceSessionOwners.delete(deviceId);
+            }
             await publishDeviceConnectionStatus(deviceId, sessionId, 'close');
-            await destroy(false);
+            try {
+                sock.ws.close();
+            } catch {
+                // Socket may already be fully closed.
+            }
             return;
         }
 
@@ -504,7 +617,7 @@ export async function createInstance(options: createInstanceOptions) {
 
         const timer = setTimeout(() => {
             reconnectTimers.delete(sessionId);
-            void createInstance(options).catch(async (error) => {
+            void createInstance({ ...options, replaceExisting: true }).catch(async (error) => {
                 logger.error(
                     { error, sessionId, deviceId, attempt },
                     'Failed to recreate WhatsApp instance',
@@ -667,7 +780,7 @@ export async function createInstance(options: createInstanceOptions) {
     });
 
     const store = new Store(sessionId, sock.ev, deviceId);
-    instances.set(sessionId, { ...sock, destroy, store });
+    instances.set(sessionId, { ...sock, destroy, store, deviceId });
 
     sock.ev.on('creds.update', saveCreds);
     sock.ev.on('connection.update', async (update) => {
@@ -1216,8 +1329,16 @@ export async function createInstance(options: createInstanceOptions) {
 
                     // Determine new status from update
                     let newStatus: string | null = null;
+                    const failureCode = String(
+                        update.update?.messageStubParameters?.[0] || '',
+                    ).trim();
                     
-                    if (update.update?.status === 2) {
+                    if (update.update?.status === 0) {
+                        // Status 0 = WhatsApp rejected the message after the
+                        // initial server ACK. This used to be ignored, leaving
+                        // the Inbox permanently showing one checkmark.
+                        newStatus = 'error';
+                    } else if (update.update?.status === 2) {
                         // Status 2 = SERVER_ACK (sent - 1 centang)
                         newStatus = 'server_ack';
                     } else if (update.update?.status === 3) {
@@ -1236,7 +1357,7 @@ export async function createInstance(options: createInstanceOptions) {
                         // Define status hierarchy
                         const statusHierarchy: Record<string, number> = {
                             pending: 1,
-                            error: 1,
+                            error: 0,
                             server_ack: 2,
                             delivery_ack: 3,
                             read: 4,
@@ -1245,10 +1366,54 @@ export async function createInstance(options: createInstanceOptions) {
                         
                         const newLevel = statusHierarchy[newStatus] || 0;
                         
-                        // Build list of statuses that are LOWER than new status
-                        const lowerStatuses = Object.keys(statusHierarchy).filter(
-                            s => statusHierarchy[s] < newLevel
-                        );
+                        // A terminal WhatsApp NACK is allowed to replace
+                        // pending/server_ack. It must never downgrade a message
+                        // that was already delivered/read by another device.
+                        const eligibleStatuses = newStatus === 'error'
+                            ? ['pending', 'server_ack']
+                            : Object.keys(statusHierarchy).filter(
+                                  s => statusHierarchy[s] < newLevel,
+                              );
+
+                        if (newStatus === 'error') {
+                            logger.warn(
+                                {
+                                    sessionId,
+                                    messageId,
+                                    failureCode: failureCode || 'unknown',
+                                    addressing: update.key.remoteJid?.includes('@lid')
+                                        ? 'lid'
+                                        : 'pn',
+                                },
+                                '[DeliveryReceipt] WhatsApp rejected outgoing message',
+                            );
+
+                            if (failureCode === '463') {
+                                const rejected = await prisma.outgoingMessage.findFirst({
+                                    where: {
+                                        sessionId,
+                                        OR: [
+                                            { waMessageId: messageId },
+                                            { id: messageId },
+                                        ],
+                                    },
+                                    select: { to: true, deviceId: true },
+                                });
+                                if (rejected?.deviceId && rejected.to) {
+                                    void recordRecipientRestriction({
+                                        devicePkId: rejected.deviceId,
+                                        sessionId,
+                                        jid: rejected.to,
+                                        code: 463,
+                                    }).catch((error) => {
+                                        logger.warn(
+                                            { error: error instanceof Error ? error.message : error },
+                                            '[PrivacyGuard] Failed to persist recipient restriction',
+                                        );
+                                    });
+                                }
+                            }
+                        }
                         
                         // First, try to update by waMessageId (only if status would upgrade)
                         const updateResult = await prisma.outgoingMessage.updateMany({
@@ -1256,7 +1421,7 @@ export async function createInstance(options: createInstanceOptions) {
                                 waMessageId: messageId,
                                 sessionId,
                                 // ✅ CRITICAL: Only update messages with LOWER status
-                                status: lowerStatuses.length > 0 ? { in: lowerStatuses } : undefined,
+                                status: eligibleStatuses.length > 0 ? { in: eligibleStatuses } : undefined,
                             },
                             data: {
                                 status: newStatus,
@@ -1284,6 +1449,7 @@ export async function createInstance(options: createInstanceOptions) {
                                 io.to(`device:${device.id}`).emit(`device:${device.id}:message-status`, {
                                     waMessageId: messageId,
                                     status: newStatus,
+                                    errorCode: newStatus === 'error' ? failureCode || null : null,
                                     to: update.key.remoteJid,
                                     timestamp: new Date().toISOString(),
                                 });
@@ -1296,7 +1462,7 @@ export async function createInstance(options: createInstanceOptions) {
                                     id: messageId,
                                     sessionId,
                                     // ✅ CRITICAL: Only update messages with LOWER status
-                                    status: lowerStatuses.length > 0 ? { in: lowerStatuses } : undefined,
+                                    status: eligibleStatuses.length > 0 ? { in: eligibleStatuses } : undefined,
                                 },
                                 data: {
                                     status: newStatus,
@@ -1325,6 +1491,7 @@ export async function createInstance(options: createInstanceOptions) {
                                     io.to(`device:${device.id}`).emit(`device:${device.id}:message-status`, {
                                         waMessageId: messageId,
                                         status: newStatus,
+                                        errorCode: newStatus === 'error' ? failureCode || null : null,
                                         to: update.key.remoteJid,
                                         timestamp: new Date().toISOString(),
                                     });
@@ -1367,20 +1534,14 @@ export async function createInstance(options: createInstanceOptions) {
     // sock.ev.on('chats.upsert', (data) => dump('chats.upsert', data));
     // sock.ev.on('contacts.update', (data) => dump('contacts.update', data));
 
-    await prisma.session.upsert({
-        create: {
-            id: configID,
-            sessionId,
-            data: JSON.stringify({ readIncomingMessages, ...socketConfig }),
-            deviceId,
-        },
-        update: {},
-        where: { sessionId_id: { id: configID, sessionId } },
-    });
 }
 
 export function verifyInstance(sessionId: string) {
     return instances.has(sessionId);
+}
+
+export function verifyDeviceSessionOwner(deviceId: number): boolean {
+    return deviceSessionOwners.has(deviceId);
 }
 
 export function getInstance(sessionId: string) {
@@ -1404,7 +1565,7 @@ export function getInstanceStatus(session: Instance) {
 }
 
 export async function deleteInstance(sessionId: string) {
-    instances.get(sessionId)?.destroy();
+    await instances.get(sessionId)?.destroy();
 }
 
 // 🆕 Export helper untuk mark SSE as aborted

@@ -1,14 +1,14 @@
 // filepath: d:\Doc\autosender\forwardin\src\services\messageSender.ts
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { proto } from '@whiskeysockets/baileys';
 import { executeWithRateLimit, RateLimitResult } from './rateLimiter';
-import { incrementMessageCount } from './signalDetector';
+import { canDeviceSend, incrementMessageCount } from './signalDetector';
 import prisma from '../utils/db';
 import logger from '../config/logger';
 import { encryptMessage } from '../utils/messageEncryption';
 import { getSocketIO } from '../socket';
 import { createInboxProfileUrl } from '../utils/inboxMedia';
 import { refreshInboxProfileCache } from './inboxProfileCache';
+import { ensureOutboundPrivacyToken } from './outboundPrivacyGuard';
 
 // ============================================
 // 🚀 MESSAGE SENDER SERVICE
@@ -50,6 +50,16 @@ async function getDeviceContext(deviceId: string): Promise<DeviceContext | null>
  */
 async function getDevicePkId(deviceId: string): Promise<number | null> {
     return (await getDeviceContext(deviceId))?.pkId || null;
+}
+
+async function assertDeviceCanSend(deviceId: string): Promise<void> {
+    const devicePkId = await getDevicePkId(deviceId);
+    if (!devicePkId) throw new Error('Device tidak ditemukan');
+
+    const health = await canDeviceSend(devicePkId);
+    if (!health.allowed) {
+        throw new Error(health.reason || 'Pengiriman device sedang dijeda oleh sistem keamanan');
+    }
 }
 
 async function persistOutgoingMessage(params: {
@@ -160,6 +170,14 @@ async function persistOutgoingMessage(params: {
 export interface SendMessageOptions {
     quoted?: any;
     messageId?: string;
+    persist?: boolean;
+    trackHealth?: boolean;
+    /**
+     * Resolve a personal PN JID to its canonical LID before sending.
+     * Protocol actions (reaction/edit/delete) must keep the exact JID of the
+     * original WhatsApp message and therefore disable this automatically.
+     */
+    resolveToLid?: boolean;
 }
 
 export interface SendMediaOptions extends SendMessageOptions {
@@ -173,7 +191,106 @@ export interface SendResult {
     messageId?: string;
     result?: any;
     error?: string;
+    errorCode?: string;
+    statusCode?: number;
     rateLimitInfo?: RateLimitResult;
+}
+
+function createSendFailure(error: any, fallback: string): SendResult {
+    return {
+        success: false,
+        error: error?.message || fallback,
+        errorCode: typeof error?.code === 'string' ? error.code : undefined,
+        statusCode: typeof error?.statusCode === 'number' ? error.statusCode : undefined,
+    };
+}
+
+function isPersonalPhoneJid(jid: string): boolean {
+    return jid.endsWith('@s.whatsapp.net') || jid.endsWith('@hosted');
+}
+
+function isPersonalUserJid(jid: string): boolean {
+    return (
+        isPersonalPhoneJid(jid) ||
+        jid.endsWith('@lid') ||
+        jid.endsWith('@hosted.lid')
+    );
+}
+
+function isProtocolMessageContent(content: any): boolean {
+    return Boolean(
+        content?.react ||
+        content?.delete ||
+        content?.edit ||
+        content?.pin ||
+        content?.keepInChat ||
+        content?.protocolMessage,
+    );
+}
+
+/**
+ * Baileys 7 stores a PN <-> LID mapping for multi-device contacts. Sending to
+ * the canonical LID avoids stale PN device fan-out for contacts that can
+ * otherwise remain at SERVER_ACK even though their mapping already exists.
+ *
+ * The original PN JID remains the Inbox/database conversation key. If the
+ * mapping is unavailable (or lookup fails), sending safely falls back to PN.
+ */
+export async function resolveCanonicalOutboundJid(
+    session: any,
+    jid: string,
+    enabled = true,
+): Promise<string> {
+    if (!enabled || !isPersonalPhoneJid(jid)) return jid;
+
+    try {
+        const mappedJid = await session?.signalRepository?.lidMapping?.getLIDForPN?.(jid);
+        if (
+            typeof mappedJid === 'string' &&
+            (mappedJid.endsWith('@lid') || mappedJid.endsWith('@hosted.lid'))
+        ) {
+            logger.debug(
+                { sourceAddressing: 'pn', deliveryAddressing: 'lid' },
+                '[MessageSender] Using canonical LID routing for personal message',
+            );
+            return mappedJid;
+        }
+    } catch (error) {
+        logger.warn(
+            { error: error instanceof Error ? error.message : 'LID lookup failed' },
+            '[MessageSender] Canonical LID lookup failed; falling back to PN routing',
+        );
+    }
+
+    return jid;
+}
+
+async function prepareOutboundJid(params: {
+    session: any;
+    deviceId: string;
+    jid: string;
+    resolveToLid: boolean;
+    requirePrivacyToken: boolean;
+}): Promise<string> {
+    const deliveryJid = await resolveCanonicalOutboundJid(
+        params.session,
+        params.jid,
+        params.resolveToLid,
+    );
+
+    if (params.requirePrivacyToken && isPersonalUserJid(params.jid)) {
+        const context = await getDeviceContext(params.deviceId);
+        if (!context?.sessionId) throw new Error('Session WhatsApp tidak ditemukan');
+        await ensureOutboundPrivacyToken({
+            session: params.session,
+            devicePkId: context.pkId,
+            sessionId: context.sessionId,
+            sourceJid: params.jid,
+            deliveryJid,
+        });
+    }
+
+    return deliveryJid;
 }
 
 /**
@@ -212,11 +329,19 @@ export async function sendTextMessage(
         const { result, rateLimitInfo } = await executeWithRateLimit(
             deviceId,
             async () => {
+                await assertDeviceCanSend(deviceId);
                 const sendOptions: any = {};
                 if (options?.quoted) sendOptions.quoted = options.quoted;
                 if (options?.messageId) sendOptions.messageId = options.messageId;
-                
-                return await session.sendMessage(jid, { text }, sendOptions);
+
+                const deliveryJid = await prepareOutboundJid({
+                    session,
+                    deviceId,
+                    jid,
+                    resolveToLid: options?.resolveToLid !== false && !options?.quoted,
+                    requirePrivacyToken: true,
+                });
+                return await session.sendMessage(deliveryJid, { text }, sendOptions);
             },
             taskId
         );
@@ -246,10 +371,7 @@ export async function sendTextMessage(
             { error: error.message, deviceId, jid },
             '[MessageSender] Failed to send text message'
         );
-        return {
-            success: false,
-            error: error.message || 'Failed to send message'
-        };
+        return createSendFailure(error, 'Failed to send message');
     }
 }
 
@@ -269,6 +391,7 @@ export async function sendImageMessage(
         const { result, rateLimitInfo } = await executeWithRateLimit(
             deviceId,
             async () => {
+                await assertDeviceCanSend(deviceId);
                 const message: any = { image };
                 if (options?.caption) message.caption = options.caption;
                 if (options?.fileName) message.fileName = options.fileName;
@@ -276,8 +399,15 @@ export async function sendImageMessage(
                 const sendOptions: any = {};
                 if (options?.quoted) sendOptions.quoted = options.quoted;
                 if (options?.messageId) sendOptions.messageId = options.messageId;
-                
-                return await session.sendMessage(jid, message, sendOptions);
+
+                const deliveryJid = await prepareOutboundJid({
+                    session,
+                    deviceId,
+                    jid,
+                    resolveToLid: options?.resolveToLid !== false && !options?.quoted,
+                    requirePrivacyToken: true,
+                });
+                return await session.sendMessage(deliveryJid, message, sendOptions);
             },
             taskId
         );
@@ -315,10 +445,7 @@ export async function sendImageMessage(
             { error: error.message, deviceId, jid },
             '[MessageSender] Failed to send image message'
         );
-        return {
-            success: false,
-            error: error.message || 'Failed to send image'
-        };
+        return createSendFailure(error, 'Failed to send image');
     }
 }
 
@@ -338,6 +465,7 @@ export async function sendDocumentMessage(
         const { result, rateLimitInfo } = await executeWithRateLimit(
             deviceId,
             async () => {
+                await assertDeviceCanSend(deviceId);
                 const message: any = { 
                     document,
                     mimetype: options?.mimetype || 'application/octet-stream'
@@ -348,8 +476,15 @@ export async function sendDocumentMessage(
                 const sendOptions: any = {};
                 if (options?.quoted) sendOptions.quoted = options.quoted;
                 if (options?.messageId) sendOptions.messageId = options.messageId;
-                
-                return await session.sendMessage(jid, message, sendOptions);
+
+                const deliveryJid = await prepareOutboundJid({
+                    session,
+                    deviceId,
+                    jid,
+                    resolveToLid: options?.resolveToLid !== false && !options?.quoted,
+                    requirePrivacyToken: true,
+                });
+                return await session.sendMessage(deliveryJid, message, sendOptions);
             },
             taskId
         );
@@ -387,10 +522,7 @@ export async function sendDocumentMessage(
             { error: error.message, deviceId, jid },
             '[MessageSender] Failed to send document message'
         );
-        return {
-            success: false,
-            error: error.message || 'Failed to send document'
-        };
+        return createSendFailure(error, 'Failed to send document');
     }
 }
 
@@ -410,6 +542,7 @@ export async function sendVideoMessage(
         const { result, rateLimitInfo } = await executeWithRateLimit(
             deviceId,
             async () => {
+                await assertDeviceCanSend(deviceId);
                 const message: any = { video };
                 if (options?.caption) message.caption = options.caption;
                 if (options?.fileName) message.fileName = options.fileName;
@@ -417,8 +550,15 @@ export async function sendVideoMessage(
                 const sendOptions: any = {};
                 if (options?.quoted) sendOptions.quoted = options.quoted;
                 if (options?.messageId) sendOptions.messageId = options.messageId;
-                
-                return await session.sendMessage(jid, message, sendOptions);
+
+                const deliveryJid = await prepareOutboundJid({
+                    session,
+                    deviceId,
+                    jid,
+                    resolveToLid: options?.resolveToLid !== false && !options?.quoted,
+                    requirePrivacyToken: true,
+                });
+                return await session.sendMessage(deliveryJid, message, sendOptions);
             },
             taskId
         );
@@ -456,10 +596,7 @@ export async function sendVideoMessage(
             { error: error.message, deviceId, jid },
             '[MessageSender] Failed to send video message'
         );
-        return {
-            success: false,
-            error: error.message || 'Failed to send video'
-        };
+        return createSendFailure(error, 'Failed to send video');
     }
 }
 
@@ -479,6 +616,7 @@ export async function sendAudioMessage(
         const { result, rateLimitInfo } = await executeWithRateLimit(
             deviceId,
             async () => {
+                await assertDeviceCanSend(deviceId);
                 const message: any = { 
                     audio,
                     mimetype: options?.mimetype || 'audio/mp4'
@@ -488,8 +626,15 @@ export async function sendAudioMessage(
                 const sendOptions: any = {};
                 if (options?.quoted) sendOptions.quoted = options.quoted;
                 if (options?.messageId) sendOptions.messageId = options.messageId;
-                
-                return await session.sendMessage(jid, message, sendOptions);
+
+                const deliveryJid = await prepareOutboundJid({
+                    session,
+                    deviceId,
+                    jid,
+                    resolveToLid: options?.resolveToLid !== false && !options?.quoted,
+                    requirePrivacyToken: true,
+                });
+                return await session.sendMessage(deliveryJid, message, sendOptions);
             },
             taskId
         );
@@ -527,10 +672,7 @@ export async function sendAudioMessage(
             { error: error.message, deviceId, jid },
             '[MessageSender] Failed to send audio message'
         );
-        return {
-            success: false,
-            error: error.message || 'Failed to send audio'
-        };
+        return createSendFailure(error, 'Failed to send audio');
     }
 }
 
@@ -577,11 +719,23 @@ export async function sendGenericMessage(
         const { result, rateLimitInfo } = await executeWithRateLimit(
             deviceId,
             async () => {
+                await assertDeviceCanSend(deviceId);
                 const sendOptions: any = {};
                 if (options?.quoted) sendOptions.quoted = options.quoted;
                 if (options?.messageId) sendOptions.messageId = options.messageId;
-                
-                return await session.sendMessage(jid, content, sendOptions);
+
+                const isProtocolMessage = isProtocolMessageContent(content);
+                const deliveryJid = await prepareOutboundJid({
+                    session,
+                    deviceId,
+                    jid,
+                    resolveToLid:
+                        options?.resolveToLid !== false &&
+                        !options?.quoted &&
+                        !isProtocolMessage,
+                    requirePrivacyToken: !isProtocolMessage,
+                });
+                return await session.sendMessage(deliveryJid, content, sendOptions);
             },
             taskId
         );
@@ -597,20 +751,24 @@ export async function sendGenericMessage(
             content?.video?.url ||
             content?.audio?.url ||
             null;
-        await persistOutgoingMessage({
-            deviceId,
-            jid,
-            messageId,
-            text: genericText,
-            mediaPath: genericMedia,
-            fileName: content?.fileName || null,
-            session,
-        });
+        if (options?.persist !== false) {
+            await persistOutgoingMessage({
+                deviceId,
+                jid,
+                messageId,
+                text: genericText,
+                mediaPath: genericMedia,
+                fileName: content?.fileName || null,
+                session,
+            });
+        }
         
         // 🔥 Increment message count for health tracking
-        const devicePkId = await getDevicePkId(deviceId);
-        if (devicePkId) {
-            await incrementMessageCount(devicePkId);
+        if (options?.trackHealth !== false) {
+            const devicePkId = await getDevicePkId(deviceId);
+            if (devicePkId) {
+                await incrementMessageCount(devicePkId);
+            }
         }
         
         logger.info(
@@ -629,10 +787,7 @@ export async function sendGenericMessage(
             { error: error.message, deviceId, jid },
             '[MessageSender] Failed to send generic message'
         );
-        return {
-            success: false,
-            error: error.message || 'Failed to send message'
-        };
+        return createSendFailure(error, 'Failed to send message');
     }
 }
 

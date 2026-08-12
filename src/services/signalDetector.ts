@@ -139,7 +139,47 @@ const TEMPORARY_ERROR_PATTERNS = [
  * Returns signal type, severity, and confidence level
  */
 export function classifyDisconnectReason(code: number, message: string): SignalClassification {
-    const msgLower = message.toLowerCase();
+    // Only an explicit WhatsApp response may be labelled as a ban. Transport
+    // status codes alone are never sufficient evidence for that conclusion.
+    if (BAN_PATTERNS.some(p => p.test(message))) {
+        return {
+            signalType: 'banned',
+            severity: 'critical',
+            confidence: 'high',
+            reason: `Ban detected from message: "${message.substring(0, 100)}"`,
+        };
+    }
+
+    // Baileys terminal credential/session states. These require pairing again
+    // and must not be treated as ordinary network reconnections.
+    if ([401, 403, 405, 411, 440, 500].includes(code)) {
+        return {
+            signalType: 'forced_logout',
+            severity: 'critical',
+            confidence: 'high',
+            reason: `Code ${code} - WhatsApp session is invalid or has been replaced`,
+        };
+    }
+
+    if (RATE_LIMIT_PATTERNS.some(p => p.test(message))) {
+        return {
+            signalType: 'rate_limit',
+            severity: 'warning',
+            confidence: 'high',
+            reason: 'Rate limit detected from message pattern',
+        };
+    }
+
+    // 428 is connectionClosed in Baileys, not session replacement. 408, 503,
+    // and restart-required statuses are also safe candidates for bounded retry.
+    if ([408, 428, 503, 515, 516].includes(code)) {
+        return {
+            signalType: 'connection_error',
+            severity: 'info',
+            confidence: 'high',
+            reason: `Code ${code} - Temporary connection issue (safe for bounded reconnect)`,
+        };
+    }
 
     // === PRIORITY: Check for temporary/conflict errors FIRST ===
     // These are normal during reconnection and should NOT be classified as forced_logout

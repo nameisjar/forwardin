@@ -1,5 +1,5 @@
 import { RequestHandler } from 'express';
-import { getInstance, verifyJid, sendButtonMessage, sendMediaFile, getJid } from '../whatsapp';
+import { getInstance, verifyJid, sendButtonMessage, getJid } from '../whatsapp';
 import logger from '../config/logger';
 import prisma, { serializePrisma } from '../utils/db';
 import { delay as delayMs } from '../utils/delay';
@@ -19,6 +19,7 @@ import { deleteMessageReactions, saveMessageReaction } from '../services/message
 import { cleanupMediaFilesIfUnreferenced } from '../services/mediaCleanup';
 import axios from 'axios';
 import https from 'https';
+import { sendGenericMessage } from '../services/messageSender';
 
 const PROFILE_PICTURE_CACHE_TTL_MS = 5 * 60 * 1000;
 const PROFILE_PICTURE_MAX_BYTES = 5 * 1024 * 1024;
@@ -31,6 +32,63 @@ const profilePictureCache = new Map<
     string,
     { data: Buffer; contentType: string; expiresAt: number }
 >();
+
+type QueuedMediaType = 'image' | 'document' | 'audio' | 'video';
+
+async function sendQueuedMediaRecipients(params: {
+    session: any;
+    deviceUuid: string;
+    recipients: string[];
+    fileData: {
+        mimetype?: string;
+        buffer?: Buffer;
+        newName?: string;
+        originalName?: string;
+        url?: string;
+    };
+    mediaType: QueuedMediaType;
+    caption?: string;
+    delay?: number;
+}) {
+    const results: { index: number; result?: any }[] = [];
+    const errors: { index: number; error: string }[] = [];
+
+    for (let index = 0; index < params.recipients.length; index++) {
+        try {
+            if (index > 0 && params.delay && params.delay > 0) {
+                await delayMs(params.delay);
+            }
+            const jid = getJid(params.recipients[index]);
+            await verifyJid(params.session, jid, jid.includes('@g.us') ? 'group' : 'number');
+            const media = params.fileData.buffer ?? (
+                params.fileData.url ? { url: params.fileData.url } : undefined
+            );
+            if (!media) throw new Error('Media file tidak tersedia');
+
+            const content: any = {
+                [params.mediaType]: media,
+                mimetype: params.fileData.mimetype,
+                fileName: params.fileData.originalName ?? params.fileData.newName,
+                ...(params.caption && params.mediaType !== 'audio'
+                    ? { caption: params.caption }
+                    : {}),
+                ...(params.mediaType === 'audio' ? { ptt: false } : {}),
+            };
+            const sent = await sendGenericMessage(
+                params.session,
+                params.deviceUuid,
+                jid,
+                content,
+            );
+            if (!sent.success) throw new Error(sent.error || 'Pengiriman media gagal');
+            results.push({ index, result: sent.result });
+        } catch (error) {
+            const message = error instanceof Error ? error.message : 'Pengiriman media gagal';
+            errors.push({ index, error: message });
+        }
+    }
+    return { results, errors };
+}
 
 export const sendMessages: RequestHandler = async (req, res) => {
     try {
@@ -45,7 +103,12 @@ export const sendMessages: RequestHandler = async (req, res) => {
         }
 
         const results: { index: number; result?: any }[] = [];
-        const errors: { index: number; error: string }[] = [];
+        const errors: {
+            index: number;
+            error: string;
+            code?: string;
+            statusCode?: number;
+        }[] = [];
 
         // helper: tunggu ms
         const delayMs = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -146,7 +209,22 @@ export const sendMessages: RequestHandler = async (req, res) => {
                 }
 
                 // kirim pesan. Banyak wrapper Baileys menggunakan sendMessage(jid, payload, options)
-                const result = await session.sendMessage(jid, payload, options ?? undefined);
+                const queuedResult = await sendGenericMessage(
+                    session,
+                    (req.authenticatedDevice as any).deviceUuid,
+                    jid,
+                    payload,
+                    { ...(options ?? {}), persist: false },
+                );
+                if (!queuedResult.success) {
+                    const sendError = new Error(
+                        queuedResult.error || 'Failed to send message',
+                    ) as Error & { code?: string; statusCode?: number };
+                    sendError.code = queuedResult.errorCode;
+                    sendError.statusCode = queuedResult.statusCode;
+                    throw sendError;
+                }
+                const result = queuedResult.result;
                 results.push({ index, result });
                 
                 // 🔥 CRITICAL: Save outgoing message to database BEFORE returning response
@@ -244,11 +322,23 @@ export const sendMessages: RequestHandler = async (req, res) => {
             } catch (e) {
                 const msg = e instanceof Error ? e.message : String(e);
                 logger.error(e, `Failed to send message at index ${index}: ${msg}`);
-                errors.push({ index, error: msg });
+                const typedError = e as { code?: unknown; statusCode?: unknown };
+                errors.push({
+                    index,
+                    error: msg,
+                    code: typeof typedError.code === 'string' ? typedError.code : undefined,
+                    statusCode:
+                        typeof typedError.statusCode === 'number'
+                            ? typedError.statusCode
+                            : undefined,
+                });
             }
         }
 
-        res.status(errors.length > 0 ? 500 : 200).json({
+        const allErrorsAreControlled =
+            errors.length > 0 && errors.every((error) => error.statusCode === 423);
+        res.status(errors.length > 0 ? (allErrorsAreControlled ? 423 : 500) : 200).json({
+            ...(errors.length > 0 ? { message: errors[0].error } : {}),
             results,
             errors,
         });
@@ -292,19 +382,15 @@ export const sendImageMessages: RequestHandler = async (req, res) => {
             const caption = req.body.caption || '';
             const delay = req.body.delay || 5000;
 
-            const startTime = new Date().getTime();
-            if (recipients.length > 0) await delayMs(delay);
-            const endTime = new Date().getTime();
-            const delayElapsed = endTime - startTime;
-            logger.info(`Delay of ${delay} milliseconds elapsed: ${delayElapsed} milliseconds`);
-
-            const { results, errors } = await sendMediaFile(
+            const { results, errors } = await sendQueuedMediaRecipients({
                 session,
+                deviceUuid: (req.authenticatedDevice as any).deviceUuid,
                 recipients,
-                fileData,
-                fileType,
+                fileData: fileData as any,
+                mediaType: fileType,
                 caption,
-            );
+                delay: Number(delay),
+            });
 
             res.status(errors.length > 0 ? 500 : 200).json({
                 results,
@@ -352,19 +438,15 @@ export const sendDocumentMessages: RequestHandler = async (req, res) => {
             const caption = req.body.caption || '';
             const delay = req.body.delay || 5000;
 
-            const startTime = new Date().getTime();
-            if (recipients.length > 0) await delayMs(delay);
-            const endTime = new Date().getTime();
-            const delayElapsed = endTime - startTime;
-            logger.info(`Delay of ${delay} milliseconds elapsed: ${delayElapsed} milliseconds`);
-
-            const { results, errors } = await sendMediaFile(
+            const { results, errors } = await sendQueuedMediaRecipients({
                 session,
+                deviceUuid: (req.authenticatedDevice as any).deviceUuid,
                 recipients,
-                fileData,
-                fileType,
+                fileData: fileData as any,
+                mediaType: fileType,
                 caption,
-            );
+                delay: Number(delay),
+            });
 
             res.status(errors.length > 0 ? 500 : 200).json({
                 results,
@@ -411,19 +493,15 @@ export const sendAudioMessages: RequestHandler = async (req, res) => {
             const caption = req.body.caption || '';
             const delay = req.body.delay || 5000;
 
-            const startTime = new Date().getTime();
-            if (recipients.length > 0) await delayMs(delay);
-            const endTime = new Date().getTime();
-            const delayElapsed = endTime - startTime;
-            logger.info(`Delay of ${delay} milliseconds elapsed: ${delayElapsed} milliseconds`);
-
-            const { results, errors } = await sendMediaFile(
+            const { results, errors } = await sendQueuedMediaRecipients({
                 session,
+                deviceUuid: (req.authenticatedDevice as any).deviceUuid,
                 recipients,
-                fileData,
-                fileType,
+                fileData: fileData as any,
+                mediaType: fileType,
                 caption,
-            );
+                delay: Number(delay),
+            });
 
             res.status(errors.length > 0 ? 500 : 200).json({
                 results,
@@ -470,19 +548,15 @@ export const sendVideoMessages: RequestHandler = async (req, res) => {
             const caption = req.body.caption || '';
             const delay = req.body.delay || 5000;
 
-            const startTime = new Date().getTime();
-            if (recipients.length > 0) await delayMs(delay);
-            const endTime = new Date().getTime();
-            const delayElapsed = endTime - startTime;
-            logger.info(`Delay of ${delay} milliseconds elapsed: ${delayElapsed} milliseconds`);
-
-            const { results, errors } = await sendMediaFile(
+            const { results, errors } = await sendQueuedMediaRecipients({
                 session,
+                deviceUuid: (req.authenticatedDevice as any).deviceUuid,
                 recipients,
-                fileData,
-                fileType,
+                fileData: fileData as any,
+                mediaType: fileType,
                 caption,
-            );
+                delay: Number(delay),
+            });
 
             res.status(errors.length > 0 ? 500 : 200).json({
                 results,
@@ -544,7 +618,22 @@ export const sendInboxMediaMessage: RequestHandler = async (req, res) => {
                 ...(mediaType === 'audio' ? { ptt: false } : {}),
             };
 
-            const result = await session.sendMessage(jid, payload);
+            const queuedResult = await sendGenericMessage(
+                session,
+                (req.authenticatedDevice as any).deviceUuid,
+                jid,
+                payload,
+                { persist: false },
+            );
+            if (!queuedResult.success) {
+                const sendError = new Error(
+                    queuedResult.error || 'Pengiriman media gagal',
+                ) as Error & { code?: string; statusCode?: number };
+                sendError.code = queuedResult.errorCode;
+                sendError.statusCode = queuedResult.statusCode;
+                throw sendError;
+            }
+            const result = queuedResult.result;
             const messageId = result?.key?.id;
             if (!messageId) throw new Error('WhatsApp tidak mengembalikan ID pesan');
 
@@ -609,8 +698,12 @@ export const sendInboxMediaMessage: RequestHandler = async (req, res) => {
                 fs.promises.unlink(uploadedPath).catch(() => {});
             }
             logger.error({ error }, 'Failed to send Inbox media message');
-            return res.status(500).json({
+            const typedError = error as { code?: unknown; statusCode?: unknown };
+            const statusCode =
+                typeof typedError.statusCode === 'number' ? typedError.statusCode : 500;
+            return res.status(statusCode).json({
                 message: error instanceof Error ? error.message : 'Gagal mengirim media',
+                ...(typeof typedError.code === 'string' ? { code: typedError.code } : {}),
             });
         }
     });
@@ -665,6 +758,7 @@ export const sendInboxReaction: RequestHandler = async (req, res) => {
         }
 
         let conversationJid: string;
+        let whatsappMessageJid: string | null = null;
         let whatsappTargetId: string;
         let participant: string | null = null;
 
@@ -684,6 +778,11 @@ export const sendInboxReaction: RequestHandler = async (req, res) => {
             }
             conversationJid = target.to;
             whatsappTargetId = target.waMessageId || target.id;
+            const rawTarget = await prisma.message.findFirst({
+                where: { sessionId, id: whatsappTargetId },
+                select: { remoteJid: true },
+            });
+            whatsappMessageJid = rawTarget?.remoteJid || null;
         } else {
             const target = await prisma.incomingMessage.findFirst({
                 where: { deviceId: devicePkId, id: targetMessageId },
@@ -700,15 +799,24 @@ export const sendInboxReaction: RequestHandler = async (req, res) => {
         const jid = conversationJid.includes('@')
             ? conversationJid
             : getJid(conversationJid);
+        const deliveryJid = whatsappMessageJid || jid;
         const targetKey = {
-            remoteJid: jid,
+            remoteJid: deliveryJid,
             id: whatsappTargetId,
             fromMe: targetFromMe,
-            ...(jid.endsWith('@g.us') && participant ? { participant } : {}),
+            ...(deliveryJid.endsWith('@g.us') && participant ? { participant } : {}),
         };
-        const result = await session.sendMessage(jid, {
-            react: { text: emoji, key: targetKey },
-        });
+        const queuedReaction = await sendGenericMessage(
+            session,
+            (req.authenticatedDevice as any).deviceUuid,
+            deliveryJid,
+            { react: { text: emoji, key: targetKey } },
+            { persist: false, trackHealth: false, resolveToLid: false },
+        );
+        if (!queuedReaction.success) {
+            throw new Error(queuedReaction.error || 'Gagal mengirim reaction');
+        }
+        const result = queuedReaction.result;
 
         const reaction = await saveMessageReaction({
             deviceId: devicePkId,
@@ -731,10 +839,7 @@ export const sendInboxReaction: RequestHandler = async (req, res) => {
             'Failed to send Inbox reaction',
         );
         return res.status(500).json({
-            message:
-                error instanceof Error
-                    ? error.message
-                    : 'Gagal mengirim reaction WhatsApp',
+            message: 'Gagal memproses reaction WhatsApp. Silakan muat ulang dan coba kembali.',
         });
     }
 };
@@ -841,7 +946,16 @@ export const deleteInboxMessage: RequestHandler = async (req, res) => {
 
         let whatsappSynced = true;
         if (scope === 'everyone') {
-            await session!.sendMessage(jid, { delete: key });
+            const queuedDelete = await sendGenericMessage(
+                session,
+                (req.authenticatedDevice as any).deviceUuid,
+                jid,
+                { delete: key },
+                { persist: false, trackHealth: false },
+            );
+            if (!queuedDelete.success) {
+                throw new Error(queuedDelete.error || 'Gagal menghapus pesan untuk semua');
+            }
         } else if (session?.user) {
             try {
                 await session.chatModify(
@@ -1541,7 +1655,17 @@ export const deleteMessagesForEveryone: RequestHandler = async (req, res) => {
 
                 if (deleteMessageKey && deleteMessageKey.id) {
                     const key = { remoteJid: jid, id: deleteMessageKey.id, fromMe: true } as any;
-                    const deleteMessageResult = await session.sendMessage(jid, { delete: key });
+                    const queuedDelete = await sendGenericMessage(
+                        session,
+                        (req.authenticatedDevice as any).deviceUuid,
+                        jid,
+                        { delete: key },
+                        { persist: false, trackHealth: false },
+                    );
+                    if (!queuedDelete.success) {
+                        throw new Error(queuedDelete.error || 'Gagal menghapus pesan');
+                    }
+                    const deleteMessageResult = queuedDelete.result;
                     results.push({ index, result: deleteMessageResult });
                     await prisma.outgoingMessage.deleteMany({
                         where: { sessionId, id: deleteMessageKey.id },
@@ -1627,10 +1751,17 @@ export const updateMessage: RequestHandler = async (req, res) => {
 
                 if (messageId) {
                     const key = { remoteJid: jid, id: messageId, fromMe: true } as any;
-                    const updateMessageResult = await session.sendMessage(jid, {
-                        text: newText,
-                        edit: key,
-                    });
+                    const queuedEdit = await sendGenericMessage(
+                        session,
+                        (req.authenticatedDevice as any).deviceUuid,
+                        jid,
+                        { text: newText, edit: key },
+                        { persist: false, trackHealth: false },
+                    );
+                    if (!queuedEdit.success) {
+                        throw new Error(queuedEdit.error || 'Gagal mengubah pesan');
+                    }
+                    const updateMessageResult = queuedEdit.result;
                     results.push({ index, result: updateMessageResult });
                     await prisma.outgoingMessage.update({
                         where: { sessionId: sessionId, id: messageId } as any,

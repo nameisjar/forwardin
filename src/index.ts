@@ -11,7 +11,6 @@ import { init } from './whatsapp';
 import bodyParser from 'body-parser';
 import { initSocketServer } from './socket';
 import http from 'http';
-import { error } from 'console';
 import { internalServerErrorHandler, notFoundHandler } from './middleware/errorHandler';
 import { warmupBrowser } from './services/pdfGenerator';
 import { shutdownRateLimiter } from './services/rateLimiter';
@@ -135,19 +134,26 @@ const server: http.Server = initSocketServer(app);
 
 const host = process.env.HOST || '0.0.0.0';
 const port = Number(process.env.PORT || 3000);
-const listener = () => logger.info(`Server is listening on http://${host}:${port}`);
 
-prisma
-    .$connect()
-    .then(() => {
-        logger.info('Connected to the database server');
-    })
-    .catch((error) => {
-        logger.error('Failed to connect to the database server:', error);
-        process.exit(1);
+async function listenServer(): Promise<void> {
+    await new Promise<void>((resolve, reject) => {
+        const onError = (error: Error) => {
+            server.off('listening', onListening);
+            reject(error);
+        };
+        const onListening = () => {
+            server.off('error', onError);
+            resolve();
+        };
+
+        server.once('error', onError);
+        server.once('listening', onListening);
+        server.listen(port, host);
     });
+    logger.info(`Server is listening on http://${host}:${port}`);
+}
 
-(async () => {
+export async function startApplication(): Promise<void> {
     // 🔐 Validate encryption setup before initializing WhatsApp sessions
     const encryptionStatus = validateEncryptionSetup();
     if (!encryptionStatus.valid) {
@@ -167,15 +173,28 @@ prisma
         logger.warn('[Security] ⚠️ Set SESSION_ENCRYPTION_KEY to enable encryption');
     }
 
+    await prisma.$connect();
+    logger.info('Connected to the database server');
+
+    // Reserve the HTTP port before opening any WhatsApp connection. If another
+    // backend already owns this port, startup stops without creating duplicate
+    // Baileys sessions for the same device.
+    await listenServer();
+
     await init();
     
     // 🔥 Pre-warm Puppeteer browser for PDF generation
     await warmupBrowser();
 
     startInboxRetentionScheduler();
-    
-    server.listen(port, host, listener);
-})();
+}
+
+if (require.main === module) {
+    void startApplication().catch((error) => {
+        logger.fatal({ err: error }, '[Startup] Failed to initialize application');
+        process.exit(1);
+    });
+}
 
 // Graceful shutdown handler
 const gracefulShutdown = async (signal: string) => {

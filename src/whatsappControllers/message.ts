@@ -36,6 +36,7 @@ import {
     reactionTimestamp,
     saveMessageReaction,
 } from '../services/messageReaction';
+import { recordRecipientRestriction } from '../services/outboundPrivacyGuard';
 
 const whatsappMediaHttpsAgent = new https.Agent({
     family: 4,
@@ -913,14 +914,10 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                         // ✅ CRITICAL FIX: Determine the correct 'to' field for query
                         // For group messages: key.remoteJid is the GROUP JID (ends with @g.us)
                         // For personal messages: key.remoteJid is the RECIPIENT JID
-                        const isGroupMessage = key.remoteJid?.includes('@g.us');
-                        const queryTo = key.remoteJid!;
-                        
                         // ✅ Query dengan filter 'to' yang tepat
                         const outgoingByWaId = await tx.outgoingMessage.findFirst({
                             where: { 
                                 waMessageId: key.id!, 
-                                to: queryTo,  // For group: group@g.us, For personal: recipient JID
                                 sessionId 
                             },
                             select: selectFields,
@@ -932,7 +929,6 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                             : await tx.outgoingMessage.findFirst({
                                   where: { 
                                       id: key.id!, 
-                                      to: queryTo,
                                       sessionId 
                                   },
                                   select: selectFields,
@@ -1039,6 +1035,9 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                                 ] || 0;
                             const newLevel =
                                 statusHierarchy[status as keyof typeof statusHierarchy] || 0;
+                            const shouldApplyError =
+                                status === 'error' &&
+                                ['pending', 'server_ack'].includes(outgoingMessage.status);
 
                             logger.info(
                                 {
@@ -1048,12 +1047,12 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                                     currentLevel,
                                     newStatus: status,
                                     newLevel,
-                                    willUpdate: newLevel > currentLevel,
+                                    willUpdate: shouldApplyError || newLevel > currentLevel,
                                 },
                                 '🔍 Status hierarchy check'
                             );
 
-                            if (newLevel > currentLevel) {
+                            if (shouldApplyError || newLevel > currentLevel) {
                                 logger.info(
                                     {
                                         sessionId,
@@ -1122,6 +1121,41 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                                         status: updatedMessage.status,
                                         timestamp: new Date().toISOString(),
                                     };
+
+                                    if (status === 'error') {
+                                        const failureCode = String(
+                                            update.messageStubParameters?.[0] || '',
+                                        ).trim();
+                                        eventPayload.errorCode = failureCode || null;
+                                        logger.warn(
+                                            {
+                                                sessionId,
+                                                messageId: key.id,
+                                                failureCode: failureCode || 'unknown',
+                                                addressing: key.remoteJid?.includes('@lid')
+                                                    ? 'lid'
+                                                    : 'pn',
+                                            },
+                                            '[DeliveryReceipt] WhatsApp rejected outgoing message',
+                                        );
+                                        if (failureCode === '463') {
+                                            void recordRecipientRestriction({
+                                                devicePkId: deviceId,
+                                                sessionId,
+                                                jid: outgoingMessage.to,
+                                                code: 463,
+                                            }).catch((error) => {
+                                                logger.warn(
+                                                    {
+                                                        error: error instanceof Error
+                                                            ? error.message
+                                                            : error,
+                                                    },
+                                                    '[PrivacyGuard] Failed to persist recipient restriction',
+                                                );
+                                            });
+                                        }
+                                    }
                                     
                                     // ✅ For group messages: include readBy count
                                     if (outgoingMessage.isGroup && Array.isArray(updateData.readBy)) {
@@ -1325,6 +1359,20 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                     let nextStatus = outgoing.status;
                     if (hasRead) nextStatus = 'read';
                     else if (hasDeliver) nextStatus = 'delivery_ack';
+
+                    if (hasRead || hasDeliver) {
+                        logger.debug(
+                            {
+                                sessionId,
+                                messageId: key.id,
+                                receipt: hasRead ? 'read' : 'delivered',
+                                addressing: String((receipt as any)?.userJid || '').includes('@lid')
+                                    ? 'lid'
+                                    : 'pn',
+                            },
+                            '[DeliveryReceipt] Outgoing message receipt received',
+                        );
+                    }
 
                     const currentLevel = statusHierarchy[String(outgoing.status || 'pending')] || 0;
                     const nextLevel = statusHierarchy[String(nextStatus || 'pending')] || 0;

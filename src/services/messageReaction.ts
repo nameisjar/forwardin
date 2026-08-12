@@ -93,11 +93,13 @@ export const saveMessageReaction = async (
     const rows = await prisma.$queryRaw<MessageReactionRow[]>`
         INSERT INTO "message_reaction" (
             "device_id", "session_id", "conversation_jid", "target_message_id",
-            "target_from_me", "reactor_jid", "emoji", "reaction_message_id", "reacted_at"
+            "target_from_me", "reactor_jid", "emoji", "reaction_message_id", "reacted_at",
+            "created_at", "updated_at"
         ) VALUES (
             ${input.deviceId}, ${input.sessionId}, ${input.conversationJid},
             ${input.targetMessageId}, ${input.targetFromMe}, ${input.reactorJid},
-            ${emoji}, ${input.reactionMessageId || null}, ${input.reactedAt}
+            ${emoji}, ${input.reactionMessageId || null}, ${input.reactedAt},
+            CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
         )
         ON CONFLICT ("device_id", "session_id", "target_message_id", "reactor_jid")
         DO UPDATE SET

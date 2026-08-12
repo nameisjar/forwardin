@@ -8,6 +8,7 @@ import {
     verifyInstance,
     markSSEAborted,
     getActiveSSEConnections, // 🆕 Import untuk akses Map
+    verifyDeviceSessionOwner,
     markManualLogout, // 🆕 Import untuk manual logout tracking
 } from '../whatsapp';
 import prisma from '../utils/db';
@@ -15,6 +16,37 @@ import { generateUuid } from '../utils/keyGenerator';
 import logger from '../config/logger';
 import { isUUID } from '../utils/uuidChecker';
 import { accessibleDeviceWhere, ownedDeviceWhere } from '../utils/deviceAccess';
+
+async function prepareDeviceForPairing(devicePkId: number): Promise<{ active: boolean }> {
+    if (verifyDeviceSessionOwner(devicePkId)) {
+        return { active: true };
+    }
+
+    const configs = await prisma.session.findMany({
+        where: {
+            deviceId: devicePkId,
+            id: { startsWith: 'session-config' },
+        },
+        select: { sessionId: true },
+    });
+
+    if (configs.some(config => verifyInstance(config.sessionId))) {
+        return { active: true };
+    }
+
+    // An explicit pairing request is the recovery path for a retained but
+    // inactive session (for example after the reconnect circuit opens).
+    if (configs.length > 0) {
+        await prisma.$transaction([
+            prisma.session.deleteMany({ where: { deviceId: devicePkId } }),
+            prisma.device.update({
+                where: { pkId: devicePkId },
+                data: { status: 'close', updatedAt: new Date() },
+            }),
+        ]);
+    }
+    return { active: false };
+}
 
 // one device, one session
 // one whatsapp number, multiple devices == one whatsapp number, multiple sessions
@@ -34,15 +66,12 @@ export const createSession: RequestHandler = async (req, res) => {
             return res.status(404).json({ message: 'Device not found' });
         }
 
-        const existingSession = await prisma.session.findFirst({
-            where: { deviceId: existingDevice.pkId, device: { status: 'open' } },
-        });
-
-        if (existingSession) {
-            return res.status(404).json({ message: 'This device is already linked.' });
+        const pairingState = await prepareDeviceForPairing(existingDevice.pkId);
+        if (pairingState.active) {
+            return res.status(409).json({ message: 'This device is already linked.' });
         }
 
-        createInstance({ sessionId, deviceId: existingDevice.pkId, res });
+        await createInstance({ sessionId, deviceId: existingDevice.pkId, res });
     } catch (error) {
         logger.error(error);
         res.status(500).json({ message: 'Internal server error' });
@@ -155,15 +184,8 @@ export const createSSE: RequestHandler = async (req, res) => {
             }
         }
 
-        // Check if device already has an active session
-        const existingSession = await prisma.session.findFirst({
-            where: {
-                deviceId: existingDevice.pkId,
-                device: { status: 'open' },
-            },
-        });
-
-        if (existingSession) {
+        const pairingState = await prepareDeviceForPairing(existingDevice.pkId);
+        if (pairingState.active) {
             res.write(
                 `data: ${JSON.stringify({
                     error: 'Device sudah terhubung. Disconnect terlebih dahulu untuk pairing ulang.',
@@ -188,7 +210,7 @@ export const createSSE: RequestHandler = async (req, res) => {
         res.write(`data: ${JSON.stringify({ connection: 'connecting', sessionId })}\n\n`);
 
         // 🆕 Pass cleanup function ke createInstance untuk force close SSE saat connected
-        createInstance({ 
+        await createInstance({
             sessionId, 
             deviceId: existingDevice.pkId, 
             res, 
