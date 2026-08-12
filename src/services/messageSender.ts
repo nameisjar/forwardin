@@ -8,7 +8,7 @@ import { encryptMessage } from '../utils/messageEncryption';
 import { getSocketIO } from '../socket';
 import { createInboxProfileUrl } from '../utils/inboxMedia';
 import { refreshInboxProfileCache } from './inboxProfileCache';
-import { ensureOutboundPrivacyToken } from './outboundPrivacyGuard';
+import { assertOutboundRecipientAvailable } from './outboundPrivacyGuard';
 
 // ============================================
 // 🚀 MESSAGE SENDER SERVICE
@@ -173,9 +173,9 @@ export interface SendMessageOptions {
     persist?: boolean;
     trackHealth?: boolean;
     /**
-     * Resolve a personal PN JID to its canonical LID before sending.
-     * Protocol actions (reaction/edit/delete) must keep the exact JID of the
-     * original WhatsApp message and therefore disable this automatically.
+     * Explicitly resolve a personal PN JID to LID before sending.
+     * Normal sends leave this disabled so Baileys can manage addressing and
+     * its trusted-contact token lifecycle consistently.
      */
     resolveToLid?: boolean;
 }
@@ -270,7 +270,7 @@ async function prepareOutboundJid(params: {
     deviceId: string;
     jid: string;
     resolveToLid: boolean;
-    requirePrivacyToken: boolean;
+    checkRecipientRestriction: boolean;
 }): Promise<string> {
     const deliveryJid = await resolveCanonicalOutboundJid(
         params.session,
@@ -278,15 +278,13 @@ async function prepareOutboundJid(params: {
         params.resolveToLid,
     );
 
-    if (params.requirePrivacyToken && isPersonalUserJid(params.jid)) {
+    if (params.checkRecipientRestriction && isPersonalUserJid(params.jid)) {
         const context = await getDeviceContext(params.deviceId);
         if (!context?.sessionId) throw new Error('Session WhatsApp tidak ditemukan');
-        await ensureOutboundPrivacyToken({
-            session: params.session,
+        await assertOutboundRecipientAvailable({
             devicePkId: context.pkId,
             sessionId: context.sessionId,
-            sourceJid: params.jid,
-            deliveryJid,
+            jid: params.jid,
         });
     }
 
@@ -338,8 +336,8 @@ export async function sendTextMessage(
                     session,
                     deviceId,
                     jid,
-                    resolveToLid: options?.resolveToLid !== false && !options?.quoted,
-                    requirePrivacyToken: true,
+                    resolveToLid: options?.resolveToLid === true && !options?.quoted,
+                    checkRecipientRestriction: true,
                 });
                 return await session.sendMessage(deliveryJid, { text }, sendOptions);
             },
@@ -404,8 +402,8 @@ export async function sendImageMessage(
                     session,
                     deviceId,
                     jid,
-                    resolveToLid: options?.resolveToLid !== false && !options?.quoted,
-                    requirePrivacyToken: true,
+                    resolveToLid: options?.resolveToLid === true && !options?.quoted,
+                    checkRecipientRestriction: true,
                 });
                 return await session.sendMessage(deliveryJid, message, sendOptions);
             },
@@ -481,8 +479,8 @@ export async function sendDocumentMessage(
                     session,
                     deviceId,
                     jid,
-                    resolveToLid: options?.resolveToLid !== false && !options?.quoted,
-                    requirePrivacyToken: true,
+                    resolveToLid: options?.resolveToLid === true && !options?.quoted,
+                    checkRecipientRestriction: true,
                 });
                 return await session.sendMessage(deliveryJid, message, sendOptions);
             },
@@ -555,8 +553,8 @@ export async function sendVideoMessage(
                     session,
                     deviceId,
                     jid,
-                    resolveToLid: options?.resolveToLid !== false && !options?.quoted,
-                    requirePrivacyToken: true,
+                    resolveToLid: options?.resolveToLid === true && !options?.quoted,
+                    checkRecipientRestriction: true,
                 });
                 return await session.sendMessage(deliveryJid, message, sendOptions);
             },
@@ -631,8 +629,8 @@ export async function sendAudioMessage(
                     session,
                     deviceId,
                     jid,
-                    resolveToLid: options?.resolveToLid !== false && !options?.quoted,
-                    requirePrivacyToken: true,
+                    resolveToLid: options?.resolveToLid === true && !options?.quoted,
+                    checkRecipientRestriction: true,
                 });
                 return await session.sendMessage(deliveryJid, message, sendOptions);
             },
@@ -730,10 +728,10 @@ export async function sendGenericMessage(
                     deviceId,
                     jid,
                     resolveToLid:
-                        options?.resolveToLid !== false &&
+                        options?.resolveToLid === true &&
                         !options?.quoted &&
                         !isProtocolMessage,
-                    requirePrivacyToken: !isProtocolMessage,
+                    checkRecipientRestriction: !isProtocolMessage,
                 });
                 return await session.sendMessage(deliveryJid, content, sendOptions);
             },
