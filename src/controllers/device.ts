@@ -49,6 +49,22 @@ import {
     cleanupOldSignals,
 } from '../services/signalDetector';
 
+type RuntimeDevice = {
+    status: string | null;
+    sessions: Array<{ sessionId: string }>;
+};
+
+function getRuntimeDeviceStatus(device: RuntimeDevice) {
+    const sessionId = device.sessions[0]?.sessionId;
+    return deriveDeviceRuntimeStatus({
+        databaseStatus: device.status,
+        hasSession: Boolean(sessionId),
+        hasInstance: Boolean(sessionId && verifyInstance(sessionId)),
+        connection: sessionId ? getConnectionStatus(sessionId) : undefined,
+        reconnecting: sessionId ? isReconnecting(sessionId) : false,
+    });
+}
+
 export const getDevices: RequestHandler = async (req, res) => {
     const pkId = req.authenticatedUser.pkId;
     const privilegeId = req.privilege?.pkId;
@@ -640,7 +656,14 @@ export const getDeviceHealthStatus: RequestHandler = async (req, res) => {
                 id: deviceId,
                 ...accessibleDeviceWhere(req.authenticatedUser.pkId, req.privilege?.pkId),
             },
-            select: { pkId: true },
+            select: {
+                pkId: true,
+                status: true,
+                sessions: {
+                    where: { id: { contains: 'config' } },
+                    select: { sessionId: true },
+                },
+            },
         });
 
         if (!device) {
@@ -653,14 +676,35 @@ export const getDeviceHealthStatus: RequestHandler = async (req, res) => {
             return res.status(404).json({ message: 'Device health info not found' });
         }
 
+        const connectionStatus = getRuntimeDeviceStatus(device);
+        const hasSession = Boolean(device.sessions[0]?.sessionId);
+        const requiresPairing = connectionStatus === 'logged_out'
+            || (connectionStatus === 'close' && !hasSession);
+        const connectionRecommendation = requiresPairing
+            ? 'Sesi WhatsApp tidak aktif. Lakukan pairing ulang sebelum mengirim pesan.'
+            : connectionStatus === 'close'
+                ? 'Koneksi WhatsApp sedang terputus. Tunggu proses reconnect atau periksa jaringan.'
+                : connectionStatus === 'reconnecting' || connectionStatus === 'connecting'
+                    ? 'WhatsApp sedang menghubungkan ulang. Tunggu hingga status Terhubung.'
+                    : null;
+
         // Add convenience fields for frontend
         res.status(200).json({
             ...health,
+            connectionStatus,
+            isConnected: connectionStatus === 'open',
+            requiresPairing,
             isPaused: health.healthStatus === 'paused',
             todayMessages: health.todayMessageCount,
             recentRateLimits: health.stats?.rateLimitCount24h || 0,
+            recentErrors: health.stats?.errorCount24h || 0,
+            // Kept for clients that still use the old response field.
             recentConnectionErrors: health.stats?.errorCount24h || 0,
-            recommendations: health.recommendation ? [health.recommendation] : [],
+            recommendations: connectionRecommendation
+                ? [connectionRecommendation]
+                : health.recommendation
+                    ? [health.recommendation]
+                    : [],
         });
     } catch (error) {
         logger.error(error);
@@ -697,7 +741,15 @@ export const pauseDeviceManually: RequestHandler = async (req, res) => {
                 id: deviceId,
                 ...ownedDeviceWhere(req.authenticatedUser.pkId, req.privilege?.pkId),
             },
-            select: { pkId: true, healthStatus: true },
+            select: {
+                pkId: true,
+                healthStatus: true,
+                status: true,
+                sessions: {
+                    where: { id: { contains: 'config' } },
+                    select: { sessionId: true },
+                },
+            },
         });
 
         if (!device) {
@@ -706,6 +758,12 @@ export const pauseDeviceManually: RequestHandler = async (req, res) => {
 
         if (device.healthStatus === 'banned') {
             return res.status(400).json({ message: 'Device is banned and cannot be paused' });
+        }
+
+        if (getRuntimeDeviceStatus(device) !== 'open') {
+            return res.status(409).json({
+                message: 'Device belum terhubung. Hubungkan atau pairing ulang sebelum menjeda pengiriman.',
+            });
         }
 
         const durationMs = durationMinutes ? Number(durationMinutes) * 60 * 1000 : 0;
@@ -741,7 +799,15 @@ export const resumeDeviceManually: RequestHandler = async (req, res) => {
                 id: deviceId,
                 ...ownedDeviceWhere(req.authenticatedUser.pkId, req.privilege?.pkId),
             },
-            select: { pkId: true, healthStatus: true },
+            select: {
+                pkId: true,
+                healthStatus: true,
+                status: true,
+                sessions: {
+                    where: { id: { contains: 'config' } },
+                    select: { sessionId: true },
+                },
+            },
         });
 
         if (!device) {
@@ -756,6 +822,12 @@ export const resumeDeviceManually: RequestHandler = async (req, res) => {
 
         if (device.healthStatus !== 'paused') {
             return res.status(400).json({ message: 'Device is not paused' });
+        }
+
+        if (getRuntimeDeviceStatus(device) !== 'open') {
+            return res.status(409).json({
+                message: 'Sesi WhatsApp belum terhubung. Lakukan pairing ulang sebelum resume.',
+            });
         }
 
         await resumeDevice(device.pkId);

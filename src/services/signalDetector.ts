@@ -15,6 +15,7 @@
 
 import prisma from '../utils/db';
 import logger from '../config/logger';
+import moment from 'moment-timezone';
 
 // ============================================
 // Types
@@ -69,6 +70,7 @@ export interface DeviceHealthInfo {
         rateLimitCount24h: number;
         errorCount24h: number;
         lastConnected: Date | null;
+        lastActivity: Date | null;
     };
     recommendation: string | null;
 }
@@ -357,6 +359,7 @@ export function classifyRateLimitError(error: any): SignalClassification {
 // Rate limit thresholds
 const RATE_LIMIT_THRESHOLD = 3; // Number of rate limits before auto-pause
 const RATE_LIMIT_WINDOW_MS = 60 * 60 * 1000; // 1 hour window
+const APP_TIMEZONE = process.env.APP_TIMEZONE || 'Asia/Jayapura';
 
 // Auto-pause durations
 const PAUSE_DURATION_RATE_LIMIT = 30 * 60 * 1000; // 30 minutes
@@ -738,76 +741,74 @@ export async function checkAutoResume(): Promise<void> {
  * Update device health status based on recent signals
  * Now considers reconnection as clearing previous issues
  */
-async function updateDeviceHealthStatus(devicePkId: number): Promise<void> {
-    const now = new Date();
-    const oneDayAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+type HealthSignal = {
+    signalType: string;
+    severity: string;
+    createdAt: Date;
+};
 
-    // Get recent signals
+/**
+ * Derive sending health from signals that are still relevant. A successful
+ * reconnect clears connection/session failures, but not rate-limit history.
+ */
+export function calculateHealthStatus(recentSignals: HealthSignal[]): HealthStatus {
+    const lastReconnect = recentSignals.find(signal => signal.signalType === 'reconnected');
+    const lastResume = recentSignals.find(signal => signal.signalType === 'resumed');
+    const connectionSignalTypes = new Set(['forced_logout', 'connection_error', 'banned']);
+    const activeSignals = recentSignals.filter(signal => {
+        if (lastReconnect && connectionSignalTypes.has(signal.signalType)) {
+            return signal.createdAt > lastReconnect.createdAt;
+        }
+        if (lastResume && signal.signalType === 'rate_limit') {
+            return signal.createdAt > lastResume.createdAt;
+        }
+        return true;
+    });
+
+    const criticalCount = activeSignals.filter(signal => signal.severity === 'critical').length;
+    const warningCount = activeSignals.filter(signal => signal.severity === 'warning').length;
+    const rateLimitCount = activeSignals.filter(signal => signal.signalType === 'rate_limit').length;
+
+    if (activeSignals.some(signal => signal.signalType === 'banned')) return 'banned';
+    if (criticalCount > 0 || rateLimitCount >= RATE_LIMIT_THRESHOLD) return 'critical';
+    if (warningCount >= 2 || rateLimitCount >= 1) return 'warning';
+    return 'healthy';
+}
+
+async function updateDeviceHealthStatus(devicePkId: number): Promise<HealthStatus> {
+    const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
     const recentSignals = await prisma.deviceSignal.findMany({
         where: {
             deviceId: devicePkId,
             createdAt: { gte: oneDayAgo },
         },
         orderBy: { createdAt: 'desc' },
-        take: 20,
+        take: 200,
     });
-
-    // 🔥 Check if most recent signal is a successful reconnection
-    // If so, device is healthy regardless of past errors
-    const mostRecent = recentSignals[0];
-    if (mostRecent?.signalType === 'reconnected') {
-        // Reconnection clears previous issues
-        const currentDevice = await prisma.device.findUnique({
-            where: { pkId: devicePkId },
-            select: { healthStatus: true },
-        });
-
-        // Only update if not already healthy
-        if (currentDevice?.healthStatus !== 'healthy') {
-            await prisma.device.update({
-                where: { pkId: devicePkId },
-                data: { healthStatus: 'healthy' },
-            });
-        }
-        return;
-    }
-
-    // Count critical and warning signals (only those AFTER last reconnection)
-    const lastReconnectIndex = recentSignals.findIndex(s => s.signalType === 'reconnected');
-    const signalsAfterReconnect = lastReconnectIndex === -1 
-        ? recentSignals 
-        : recentSignals.slice(0, lastReconnectIndex);
-
-    const criticalCount = signalsAfterReconnect.filter(s => s.severity === 'critical').length;
-    const warningCount = signalsAfterReconnect.filter(s => s.severity === 'warning').length;
-    const rateLimitCount = signalsAfterReconnect.filter(s => s.signalType === 'rate_limit').length;
-
-    // Determine health status
-    let newStatus: HealthStatus = 'healthy';
-
-    if (signalsAfterReconnect.some(s => s.signalType === 'banned')) {
-        newStatus = 'banned';
-    } else if (criticalCount > 0 || rateLimitCount >= RATE_LIMIT_THRESHOLD) {
-        newStatus = 'critical';
-    } else if (warningCount >= 2 || rateLimitCount >= 2) {
-        newStatus = 'warning';
-    }
-
-    // Don't override paused/banned status
+    const newStatus = calculateHealthStatus(recentSignals);
     const currentDevice = await prisma.device.findUnique({
         where: { pkId: devicePkId },
         select: { healthStatus: true },
     });
 
-    if (currentDevice?.healthStatus === 'paused' || currentDevice?.healthStatus === 'banned') {
-        return;
+    // A pause is an explicit operational state and is only cleared by resume
+    // or a successful WhatsApp reconnection.
+    if (currentDevice?.healthStatus === 'paused') return 'paused';
+    if (
+        currentDevice?.healthStatus === 'banned'
+        && !recentSignals.some(signal => signal.signalType === 'reconnected')
+    ) {
+        return 'banned';
     }
 
-    // Update status
-    await prisma.device.update({
-        where: { pkId: devicePkId },
-        data: { healthStatus: newStatus },
-    });
+    if (currentDevice?.healthStatus !== newStatus) {
+        await prisma.device.update({
+            where: { pkId: devicePkId },
+            data: { healthStatus: newStatus },
+        });
+    }
+
+    return newStatus;
 }
 
 /**
@@ -817,6 +818,7 @@ export async function getDeviceHealth(deviceUuid: string): Promise<DeviceHealthI
     const device = await prisma.device.findUnique({
         where: { id: deviceUuid },
         select: {
+            pkId: true,
             id: true,
             name: true,
             phone: true,
@@ -825,6 +827,7 @@ export async function getDeviceHealth(deviceUuid: string): Promise<DeviceHealthI
             pauseReason: true,
             resumeAt: true,
             todayMessageCount: true,
+            todayMessageDate: true,
             deviceSignals: {
                 orderBy: { createdAt: 'desc' },
                 take: 10,
@@ -842,6 +845,10 @@ export async function getDeviceHealth(deviceUuid: string): Promise<DeviceHealthI
 
     if (!device) return null;
 
+    // Refresh on read so a rolling 24-hour warning can expire even if no new
+    // WhatsApp event is received.
+    const currentHealthStatus = await updateDeviceHealthStatus(device.pkId);
+
     const now = new Date();
     const oneDayAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000);
 
@@ -857,7 +864,7 @@ export async function getDeviceHealth(deviceUuid: string): Promise<DeviceHealthI
         prisma.deviceSignal.count({
             where: {
                 device: { id: deviceUuid },
-                severity: { in: ['warning', 'critical'] },
+                signalType: { in: ['forced_logout', 'connection_error', 'delivery_failed', 'banned'] },
                 createdAt: { gte: oneDayAgo },
             },
         }),
@@ -873,34 +880,70 @@ export async function getDeviceHealth(deviceUuid: string): Promise<DeviceHealthI
         select: { createdAt: true },
     });
 
-    // Generate recommendation
+    const latestReconnectAt = device.deviceSignals.find(
+        signal => signal.signalType === 'reconnected',
+    )?.createdAt;
+    const latestResumeAt = device.deviceSignals.find(
+        signal => signal.signalType === 'resumed',
+    )?.createdAt;
+    const connectionProblemTypes = new Set(['forced_logout', 'connection_error', 'banned']);
+    const latestProblem = device.deviceSignals.find(signal => {
+        if (['reconnected', 'resumed'].includes(signal.signalType)) return false;
+        if (latestReconnectAt && connectionProblemTypes.has(signal.signalType)) {
+            return signal.createdAt > latestReconnectAt;
+        }
+        if (latestResumeAt && signal.signalType === 'rate_limit') {
+            return signal.createdAt > latestResumeAt;
+        }
+        return true;
+    });
+
+    // Generate a recommendation from the actual cause, not only the color.
     let recommendation: string | null = null;
-    if (device.healthStatus === 'banned') {
+    if (currentHealthStatus === 'banned' || latestProblem?.signalType === 'banned') {
         recommendation = 'Device terdeteksi banned. Gunakan nomor lain atau tunggu beberapa hari.';
-    } else if (device.healthStatus === 'paused') {
+    } else if (currentHealthStatus === 'paused') {
         recommendation = device.resumeAt 
             ? `Device di-pause. Akan resume otomatis pada ${device.resumeAt.toLocaleString()}`
             : 'Device di-pause. Resume manual diperlukan.';
-    } else if (device.healthStatus === 'critical') {
+    } else if (currentHealthStatus === 'critical' && latestProblem?.signalType === 'forced_logout') {
+        recommendation = 'Sesi WhatsApp terputus. Lakukan pairing ulang sebelum mengirim pesan.';
+    } else if (
+        ['critical', 'warning'].includes(currentHealthStatus)
+        && latestProblem?.signalType === 'rate_limit'
+    ) {
         recommendation = 'Kurangi volume pengiriman segera. Istirahatkan device 1-2 jam.';
-    } else if (device.healthStatus === 'warning') {
+    } else if (
+        ['critical', 'warning'].includes(currentHealthStatus)
+        && latestProblem?.signalType === 'connection_error'
+    ) {
+        recommendation = 'Koneksi WhatsApp mengalami gangguan. Tunggu proses reconnect atau periksa jaringan.';
+    } else if (currentHealthStatus === 'critical') {
+        recommendation = 'Terdapat gangguan kritis. Periksa aktivitas terbaru sebelum melanjutkan pengiriman.';
+    } else if (currentHealthStatus === 'warning') {
         recommendation = 'Perhatikan volume pengiriman. Tambah delay antar pesan.';
     }
+
+    const todayDateKey = moment().tz(APP_TIMEZONE).format('YYYY-MM-DD');
+    const counterDateKey = device.todayMessageDate
+        ? moment.utc(device.todayMessageDate).format('YYYY-MM-DD')
+        : null;
 
     return {
         deviceId: device.id,
         phone: device.phone,
         name: device.name,
-        healthStatus: device.healthStatus as HealthStatus,
+        healthStatus: currentHealthStatus,
         pausedAt: device.pausedAt,
         pauseReason: device.pauseReason,
         resumeAt: device.resumeAt,
-        todayMessageCount: device.todayMessageCount,
+        todayMessageCount: counterDateKey === todayDateKey ? device.todayMessageCount : 0,
         recentSignals: device.deviceSignals,
         stats: {
             rateLimitCount24h,
             errorCount24h,
             lastConnected: lastReconnect?.createdAt || null,
+            lastActivity: device.deviceSignals[0]?.createdAt || null,
         },
         recommendation,
     };
@@ -910,6 +953,8 @@ export async function getDeviceHealth(deviceUuid: string): Promise<DeviceHealthI
  * Check if a device is allowed to send messages
  */
 export async function canDeviceSend(devicePkId: number): Promise<{ allowed: boolean; reason?: string }> {
+    await updateDeviceHealthStatus(devicePkId);
+
     const device = await prisma.device.findUnique({
         where: { pkId: devicePkId },
         select: { 
@@ -944,6 +989,13 @@ export async function canDeviceSend(devicePkId: number): Promise<{ allowed: bool
         };
     }
 
+    if (device.healthStatus === 'critical') {
+        return {
+            allowed: false,
+            reason: 'Kondisi device kritis. Periksa koneksi atau lakukan pairing ulang sebelum mengirim.',
+        };
+    }
+
     return { allowed: true };
 }
 
@@ -953,15 +1005,16 @@ export async function canDeviceSend(devicePkId: number): Promise<{ allowed: bool
  */
 export async function incrementMessageCount(devicePkId: number): Promise<void> {
     try {
+        const todayDateKey = moment().tz(APP_TIMEZONE).format('YYYY-MM-DD');
         // Single atomic query - reset count if different day, otherwise increment
         await prisma.$executeRaw`
-            UPDATE "Device" 
+            UPDATE "Device"
             SET 
-                "todayMessageCount" = CASE 
-                    WHEN DATE("todayMessageDate") = CURRENT_DATE THEN "todayMessageCount" + 1 
+                "today_message_count" = CASE
+                    WHEN "today_message_date" = CAST(${todayDateKey} AS DATE) THEN "today_message_count" + 1
                     ELSE 1 
                 END,
-                "todayMessageDate" = CURRENT_DATE
+                "today_message_date" = CAST(${todayDateKey} AS DATE)
             WHERE "pkId" = ${devicePkId}
         `;
     } catch (error) {
