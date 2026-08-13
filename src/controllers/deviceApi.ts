@@ -11,7 +11,12 @@ import { generateMonthlyFeedbackPDFWithPuppeteer } from '../services/pdfGenerato
 import { setDeviceAsPersonal, setDeviceAsShared } from '../services/rateLimiter';
 import { sendMonthlyFeedbackBatch } from '../services/monthlyFeedbackSender';
 import { redactPhone } from '../utils/logRedaction';
-import { encryptMessage, decryptOutgoingMessage, decryptBroadcasts } from '../utils/messageEncryption';
+import {
+    decryptBroadcasts,
+    decryptIncomingMessage,
+    decryptOutgoingMessage,
+    encryptMessage,
+} from '../utils/messageEncryption';
 import { getSocketIO } from '../socket';
 import { deleteMessageReactions, saveMessageReaction } from '../services/messageReaction';
 import { cleanupMediaFilesIfUnreferenced } from '../services/mediaCleanup';
@@ -315,6 +320,7 @@ export const sendMessages: RequestHandler = async (req, res) => {
                         schedule: new Date(),
                         status: 'pending',
                         contactId: contact?.pkId || null,
+                        broadcastType: 'inbox',
                         isGroup: type === 'group',
                         readBy: [],
                     },
@@ -704,9 +710,10 @@ export const sendInboxMediaMessage: RequestHandler = async (req, res) => {
                 document: req.file.originalname || '[Dokumen]',
             };
             const messageText = caption || placeholders[mediaType];
+            const contactPhone = jid.split('@')[0].replace(/\D/g, '');
             const contact = await prisma.contact.findFirst({
                 where: {
-                    phone: jid.split('@')[0],
+                    phone: { in: [contactPhone, `+${contactPhone}`] },
                     contactDevices: { some: { deviceId: devicePkId } },
                 },
                 select: { pkId: true },
@@ -736,6 +743,7 @@ export const sendInboxMediaMessage: RequestHandler = async (req, res) => {
                     sessionId,
                     deviceId: devicePkId,
                     contactId: contact?.pkId || null,
+                    broadcastType: 'inbox',
                     isGroup,
                     readBy: [],
                 },
@@ -1264,7 +1272,7 @@ export const getIncomingMessages: RequestHandler = async (req, res) => {
                 },
                 orderBy: { updatedAt: 'desc' },
             })
-        ).map((m) => serializePrisma(m));
+        ).map((m) => serializePrisma(decryptIncomingMessage(m)));
 
         const totalMessages = await prisma.incomingMessage.count({
             where: {
@@ -1501,12 +1509,9 @@ export const getConversationMessages: RequestHandler = async (req, res) => {
         const hasMore = currentPage * Number(pageSize) < totalMessages;
 
         // Decrypt messages before returning
-        const decryptedMessages = messages.map((m) => {
-            if ('message' in m && m.message) {
-                return decryptOutgoingMessage(m);
-            }
-            return m;
-        });
+        const decryptedMessages = messages.map((m) =>
+            'from' in m ? decryptIncomingMessage(m) : decryptOutgoingMessage(m),
+        );
 
         res.status(200).json({
             data: decryptedMessages.map((m) => serializePrisma(m)),
@@ -2436,7 +2441,10 @@ export const exportMessagesToZip: RequestHandler = async (req, res) => {
         };
 
         // Combine incoming and outgoing messages into one array
-        const allMessages: Message[] = [...incomingMessages, ...outgoingMessages];
+        const allMessages: Message[] = [
+            ...incomingMessages.map(decryptIncomingMessage),
+            ...outgoingMessages.map(decryptOutgoingMessage),
+        ];
         for (const message of allMessages) {
             if ('from' in message) {
                 message.receivedAt = message.receivedAt;

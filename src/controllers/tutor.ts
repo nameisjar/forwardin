@@ -8,6 +8,7 @@ import { createSSE as createSessionSSE } from './session';
 import { Prisma } from '@prisma/client';
 import fs from 'fs';
 import { accessibleDeviceWhere } from '../utils/deviceAccess';
+import { decryptOutgoingMessage } from '../utils/messageEncryption';
 
 const ADMIN_ID = Number(process.env.ADMIN_ID);
 const SUPER_ADMIN_ID = Number(process.env.SUPER_ADMIN_ID);
@@ -261,356 +262,350 @@ export const listOutgoingMessages: RequestHandler = async (req, res) => {
     }
 };
 
-export const listOutgoingMessagesAll: RequestHandler = async (req, res) => {
-    try {
-        const page = Number(req.query.page || 1);
-        const pageSize = Number(req.query.pageSize || 25);
-        const phoneNumber = (req.query.phoneNumber as string) || undefined;
-        const message = (req.query.message as string) || undefined;
-        const contactName = (req.query.contactName as string) || undefined;
-        const onlyBroadcast = String(req.query.onlyBroadcast || '').toLowerCase();
-        const isOnlyBroadcast =
-            onlyBroadcast === '1' || onlyBroadcast === 'true' || onlyBroadcast === 'yes';
-        const skip = (page - 1) * pageSize;
 
-        // New: sorting support
-        const sortByRaw = String(req.query.sortBy || 'createdAt');
-        const sortDirRaw = String(req.query.sortDir || 'desc').toLowerCase();
-        const allowedSorts = new Set(['createdAt', 'to', 'message', 'status']);
-        const sortBy = allowedSorts.has(sortByRaw) ? sortByRaw : 'createdAt';
-        const sortDir = sortDirRaw === 'asc' ? 'asc' : 'desc';
+type SentHistorySource = 'inbox' | 'broadcast' | 'reminder' | 'feedback' | 'recurrence';
 
-        const where = {
-            id: isOnlyBroadcast ? { startsWith: 'BC_' } : undefined,
-            to: phoneNumber ? { contains: phoneNumber } : undefined,
-            message: message ? { contains: message, mode: 'insensitive' as const } : undefined,
-            contact: contactName
-                ? {
-                      OR: [
-                          { firstName: { contains: contactName, mode: 'insensitive' as const } },
-                          { lastName: { contains: contactName, mode: 'insensitive' as const } },
-                      ],
-                  }
-                : undefined,
-        } as const;
+type SentHistoryFilters = {
+    phoneNumber?: string;
+    message?: string;
+    contactName?: string;
+    tutorName?: string;
+    source?: string;
+    status?: string;
+    onlyBroadcast?: boolean;
+    sortBy?: string;
+    sortDir?: 'asc' | 'desc';
+};
 
-        // Export branch: return CSV when export=csv
-        const exportMode = String(req.query.export || '').toLowerCase() === 'csv';
-        if (exportMode) {
-            // Fetch up to 10000 rows for export to avoid memory issues
-            const take = Math.min(Number(req.query.limit || 10000), 50000);
-            const rows = await prisma.outgoingMessage.findMany({
-                where: where as any,
-                orderBy: { [sortBy]: sortDir } as any,
-                take,
-                include: { contact: { select: { firstName: true, lastName: true } } },
-            });
+export const normalizeHistoryPhone = (value: unknown): string =>
+    String(value || '')
+        .replace(/@(s\.whatsapp\.net|lid|g\.us)$/i, '')
+        .replace(/\D/g, '');
 
-            // Try to enrich tutor and source type minimally (best-effort)
-            const data = [...rows] as any[];
-            try {
-                const sessionIds = Array.from(
-                    new Set(rows.map((r) => r.sessionId).filter(Boolean) as string[]),
-                );
-                if (sessionIds.length) {
-                    const sessions = await prisma.session.findMany({
-                        where: { sessionId: { in: sessionIds } },
+export const isHistoryGroup = (row: any): boolean =>
+    row?.isGroup === true || String(row?.to || '').toLowerCase().endsWith('@g.us');
+
+const historyContactName = (row: any): string =>
+    row?.contact
+        ? [row.contact.firstName, row.contact.lastName].filter(Boolean).join(' ').trim()
+        : '';
+
+const historyTutorName = (row: any): string =>
+    row?.tutor
+        ? [row.tutor.firstName, row.tutor.lastName].filter(Boolean).join(' ').trim()
+        : '';
+
+const normalizeHistorySource = (value: unknown): SentHistorySource | null => {
+    const source = String(value || '').trim().toLowerCase();
+    return ['inbox', 'broadcast', 'reminder', 'feedback', 'recurrence'].includes(source)
+        ? (source as SentHistorySource)
+        : null;
+};
+
+const inferBroadcastHistorySource = (
+    broadcast: any,
+    feedbackCourseNames: Set<string> = new Set(),
+): SentHistorySource => {
+    const explicit = normalizeHistorySource(broadcast?.broadcastType);
+    if (explicit) return explicit;
+
+    const name = String(broadcast?.name || '').toLowerCase();
+    if (/\[(berulang|recurrence|recurring)\]/i.test(name)) return 'recurrence';
+    if (/\[reminder\]|\brecipients\b/i.test(name)) return 'reminder';
+    if (name.includes('[feedback]')) return 'feedback';
+    const courseMatch = name.match(/^.+\s*-\s*(.+)$/);
+    if (courseMatch && feedbackCourseNames.has(courseMatch[1].trim())) return 'feedback';
+    return 'broadcast';
+};
+
+export const inferHistorySource = (row: any): SentHistorySource => {
+    const explicit = normalizeHistorySource(row?.sourceType || row?.broadcastType);
+    if (explicit) return explicit;
+    if (row?.broadcastId != null || String(row?.id || '').startsWith('BC_')) return 'broadcast';
+    return 'inbox';
+};
+
+export const historyStatusCounts = (rows: any[]) => {
+    const result = { total: rows.length, delivered: 0, failed: 0, processing: 0 };
+    rows.forEach((row) => {
+        const status = String(row?.status || '').toLowerCase();
+        if (status.includes('fail') || status.includes('error')) result.failed += 1;
+        else if (['delivery_ack', 'read', 'played'].includes(status)) result.delivered += 1;
+        else result.processing += 1;
+    });
+    return result;
+};
+
+const historyUserFromDevice = (device: any): any =>
+    device?.CustomerService?.user || device?.user || null;
+
+const historyTutorFromUser = (user: any): any =>
+    user
+        ? {
+              firstName: user.firstName || user.email || 'Tutor',
+              lastName: user.lastName || '',
+          }
+        : null;
+
+async function buildSentHistoryRows(filters: SentHistoryFilters): Promise<any[]> {
+    const rows = (await prisma.outgoingMessage.findMany({
+        where: {
+            id: filters.onlyBroadcast ? { startsWith: 'BC_' } : undefined,
+            to: filters.phoneNumber ? { contains: normalizeHistoryPhone(filters.phoneNumber) } : undefined,
+        } as any,
+        include: {
+            contact: { select: { pkId: true, firstName: true, lastName: true, phone: true } },
+            device: {
+                select: {
+                    pkId: true,
+                    id: true,
+                    name: true,
+                    user: { select: { firstName: true, lastName: true, email: true } },
+                    CustomerService: {
                         select: {
-                            sessionId: true,
-                            device: {
-                                select: {
-                                    user: {
-                                        select: { firstName: true, lastName: true, email: true },
-                                    },
-                                    CustomerService: {
-                                        select: {
-                                            user: {
-                                                select: {
-                                                    firstName: true,
-                                                    lastName: true,
-                                                    email: true,
-                                                },
-                                            },
-                                        },
-                                    },
-                                },
+                            user: { select: { firstName: true, lastName: true, email: true } },
+                        },
+                    },
+                },
+            },
+        },
+    })) as any[];
+
+    const data = rows.map((row) => {
+        try {
+            return decryptOutgoingMessage(row);
+        } catch {
+            return { ...row, message: '[Pesan tidak dapat didekripsi]', messageDecryptionFailed: true };
+        }
+    });
+
+    const sessionIds = Array.from(
+        new Set(data.map((row) => row.sessionId).filter(Boolean) as string[]),
+    );
+    const sessionMap = new Map<string, any>();
+    if (sessionIds.length) {
+        const sessions = await prisma.session.findMany({
+            where: { sessionId: { in: sessionIds } },
+            select: {
+                sessionId: true,
+                device: {
+                    select: {
+                        pkId: true,
+                        id: true,
+                        name: true,
+                        user: { select: { firstName: true, lastName: true, email: true } },
+                        CustomerService: {
+                            select: {
+                                user: { select: { firstName: true, lastName: true, email: true } },
                             },
                         },
-                    });
-                    const sidToTutor = new Map<
-                        string,
-                        {
-                            firstName?: string | null;
-                            lastName?: string | null;
-                            email?: string | null;
-                        }
-                    >();
-                    sessions.forEach((s) => {
-                        const csUser = (s.device as any).CustomerService?.user;
-                        const user = csUser || (s.device as any).user;
-                        sidToTutor.set(s.sessionId, {
-                            firstName: user?.firstName,
-                            lastName: user?.lastName,
-                            email: user?.email,
-                        });
-                    });
-                    data.forEach((r) => {
-                        const info = r.sessionId ? sidToTutor.get(r.sessionId) : undefined;
-                        if (info) {
-                            (r as any).tutor = {
-                                firstName: info.firstName || info.email || 'Tutor',
-                                lastName: info.lastName || '',
-                            };
-                        }
-                    });
-                }
-            } catch {}
+                    },
+                },
+            },
+        });
+        sessions.forEach((session) => sessionMap.set(session.sessionId, session.device));
+    }
 
-            // Prepare CSV
-            const escapeCsv = (v: any) => {
-                const s = v == null ? '' : String(v);
-                if (/[",\n]/.test(s)) return '"' + s.replace(/"/g, '""') + '"';
-                return s;
+    data.forEach((row) => {
+        const device = row.device || (row.sessionId ? sessionMap.get(row.sessionId) : null);
+        if (!row.device && device) row.device = device;
+        if (!row.deviceId && device?.pkId) row.deviceId = device.pkId;
+        row.tutor = historyTutorFromUser(historyUserFromDevice(device));
+    });
+
+    const broadcastIds = Array.from(
+        new Set(
+            data
+                .map((row) => {
+                    if (row.broadcastId != null && Number.isFinite(Number(row.broadcastId))) {
+                        return Number(row.broadcastId);
+                    }
+                    const match = String(row.id || '').match(/^BC_(\d+)_/);
+                    return match ? Number(match[1]) : null;
+                })
+                .filter((value): value is number => value != null && Number.isFinite(value)),
+        ),
+    );
+    if (broadcastIds.length) {
+        const broadcasts = await prisma.broadcast.findMany({
+            where: { pkId: { in: broadcastIds } },
+            select: {
+                pkId: true,
+                name: true,
+                broadcastType: true,
+                device: {
+                    select: {
+                        name: true,
+                        user: { select: { firstName: true, lastName: true, email: true } },
+                        CustomerService: {
+                            select: {
+                                user: { select: { firstName: true, lastName: true, email: true } },
+                            },
+                        },
+                    },
+                },
+            },
+        });
+        const feedbackCourseCandidates = broadcasts
+            .map((broadcast) => String(broadcast.name || '').match(/^.+\s*-\s*(.+)$/)?.[1]?.trim())
+            .filter((name): name is string => Boolean(name));
+        const feedbackCourses = feedbackCourseCandidates.length
+            ? await prisma.courseFeedback.findMany({
+                  where: { courseName: { in: feedbackCourseCandidates } },
+                  select: { courseName: true },
+              })
+            : [];
+        const feedbackCourseNames = new Set(feedbackCourses.map((item) => item.courseName));
+        const broadcastMap = new Map(broadcasts.map((broadcast) => [broadcast.pkId, broadcast]));
+        data.forEach((row) => {
+            const match = String(row.id || '').match(/^BC_(\d+)_/);
+            const broadcastId = Number(row.broadcastId || (match ? match[1] : 0));
+            const broadcast = broadcastMap.get(broadcastId);
+            if (!broadcast) return;
+            row.broadcastName = broadcast.name || undefined;
+            row.broadcastType = inferBroadcastHistorySource(broadcast, feedbackCourseNames);
+            if (!row.tutor) {
+                row.tutor = historyTutorFromUser(historyUserFromDevice(broadcast.device));
+            }
+        });
+    }
+
+    const deviceIds = Array.from(
+        new Set(data.map((row) => Number(row.deviceId)).filter((id) => Number.isFinite(id) && id > 0)),
+    );
+    if (deviceIds.length) {
+        const contacts = await prisma.contact.findMany({
+            where: { contactDevices: { some: { deviceId: { in: deviceIds } } } },
+            select: {
+                pkId: true,
+                firstName: true,
+                lastName: true,
+                phone: true,
+                contactDevices: {
+                    where: { deviceId: { in: deviceIds } },
+                    select: { deviceId: true },
+                },
+            },
+        });
+        const contactMap = new Map<string, any>();
+        contacts.forEach((contact) => {
+            contact.contactDevices.forEach((link) => {
+                contactMap.set(`${link.deviceId}:${normalizeHistoryPhone(contact.phone)}`, contact);
+            });
+        });
+        data.forEach((row) => {
+            if (row.contact || isHistoryGroup(row) || !row.deviceId) return;
+            row.contact =
+                contactMap.get(`${row.deviceId}:${normalizeHistoryPhone(row.to)}`) || null;
+        });
+    }
+
+    data.forEach((row) => {
+        row.sourceType = inferHistorySource(row);
+    });
+
+    const messageQuery = String(filters.message || '').trim().toLowerCase();
+    const contactQuery = String(filters.contactName || '').trim().toLowerCase();
+    const tutorQuery = String(filters.tutorName || '').trim().toLowerCase();
+    const sourceQuery = String(filters.source || '').trim().toLowerCase();
+    const statusQuery = String(filters.status || '').trim().toLowerCase();
+    const filtered = data.filter((row) => {
+        if (messageQuery && !String(row.message || '').toLowerCase().includes(messageQuery)) return false;
+        if (contactQuery && !historyContactName(row).toLowerCase().includes(contactQuery)) return false;
+        if (tutorQuery && !historyTutorName(row).toLowerCase().includes(tutorQuery)) return false;
+        if (sourceQuery && row.sourceType !== sourceQuery) return false;
+        if (statusQuery && String(row.status || '').toLowerCase() !== statusQuery) return false;
+        return true;
+    });
+
+    const sortBy = ['createdAt', 'to', 'message', 'status'].includes(String(filters.sortBy))
+        ? String(filters.sortBy)
+        : 'createdAt';
+    const direction = filters.sortDir === 'asc' ? 1 : -1;
+    filtered.sort((left, right) => {
+        if (sortBy === 'createdAt') {
+            return (new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime()) * direction;
+        }
+        return (
+            String(left[sortBy] || '').localeCompare(String(right[sortBy] || ''), 'id', {
+                sensitivity: 'base',
+                numeric: true,
+            }) * direction
+        );
+    });
+    return filtered;
+}
+
+export const listOutgoingMessagesAll: RequestHandler = async (req, res) => {
+    try {
+        const page = Math.max(1, Number(req.query.page || 1));
+        const pageSize = Math.min(100, Math.max(10, Number(req.query.pageSize || 25)));
+        const onlyBroadcast = ['1', 'true', 'yes'].includes(
+            String(req.query.onlyBroadcast || '').toLowerCase(),
+        );
+        const filters: SentHistoryFilters = {
+            phoneNumber: (req.query.phoneNumber as string) || undefined,
+            message: (req.query.message as string) || undefined,
+            contactName: (req.query.contactName as string) || undefined,
+            tutorName: (req.query.tutorName as string) || undefined,
+            source: (req.query.source as string) || undefined,
+            status: (req.query.status as string) || undefined,
+            onlyBroadcast,
+            sortBy: String(req.query.sortBy || 'createdAt'),
+            sortDir: String(req.query.sortDir || '').toLowerCase() === 'asc' ? 'asc' : 'desc',
+        };
+        const allRows = await buildSentHistoryRows(filters);
+
+        if (String(req.query.export || '').toLowerCase() === 'csv') {
+            const take = Math.min(Math.max(1, Number(req.query.limit || 10000)), 50000);
+            const escapeCsv = (value: any) => {
+                const text = value == null ? '' : String(value);
+                return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
             };
             const headers = [
                 'Waktu',
                 'Nomor',
                 'Kontak',
                 'Pesan',
-                // keep status in export for reference, though UI hides it
                 'Status',
+                'Sumber',
                 'Tutor',
+                'Perangkat',
             ];
             const lines = [headers.join(',')];
-            for (const r of data) {
-                const waktu = r.createdAt ? new Date(r.createdAt).toISOString() : '';
-                const nomor = String(r.to || '').replace('@s.whatsapp.net', '');
-                const kontak = r.contact
-                    ? [r.contact.firstName, r.contact.lastName].filter(Boolean).join(' ')
-                    : '';
-                const pesan = r.message || '';
-                const status = r.status || '';
-                const tutor = r.tutor
-                    ? [r.tutor.firstName, r.tutor.lastName].filter(Boolean).join(' ')
-                    : '';
-                lines.push([waktu, nomor, kontak, pesan, status, tutor].map(escapeCsv).join(','));
-            }
-
+            allRows.slice(0, take).forEach((row) => {
+                lines.push(
+                    [
+                        row.createdAt ? new Date(row.createdAt).toISOString() : '',
+                        normalizeHistoryPhone(row.to),
+                        historyContactName(row),
+                        row.message || '',
+                        row.status || '',
+                        row.sourceType || '',
+                        historyTutorName(row),
+                        row.device?.name || '',
+                    ]
+                        .map(escapeCsv)
+                        .join(','),
+                );
+            });
             res.setHeader('Content-Type', 'text/csv; charset=utf-8');
             res.setHeader('Content-Disposition', 'attachment; filename="sent-messages.csv"');
-            res.status(200).send(lines.join('\n'));
+            res.status(200).send('\uFEFF' + lines.join('\n'));
             return;
         }
 
-        const [rows, total] = await Promise.all([
-            prisma.outgoingMessage.findMany({
-                where: where as any,
-                orderBy: { [sortBy]: sortDir } as any,
-                skip,
-                take: pageSize,
-                include: { contact: { select: { firstName: true, lastName: true } } },
-            }),
-            prisma.outgoingMessage.count({ where: where as any }),
-        ]);
-
-        // Enrich with tutor info for broadcast messages via session -> device -> user
-        const data = [...rows] as any[];
-        try {
-            const sessionIds = Array.from(
-                new Set(rows.map((r) => r.sessionId).filter(Boolean) as string[]),
-            );
-            if (sessionIds.length) {
-                const sessions = await prisma.session.findMany({
-                    where: { sessionId: { in: sessionIds } },
-                    select: {
-                        sessionId: true,
-                        device: {
-                            select: {
-                                id: true,
-                                user: { select: { firstName: true, lastName: true, email: true } },
-                                CustomerService: {
-                                    select: {
-                                        user: {
-                                            select: {
-                                                firstName: true,
-                                                lastName: true,
-                                                email: true,
-                                            },
-                                        },
-                                    },
-                                },
-                            },
-                        },
-                    },
-                });
-                const sidToTutor = new Map<
-                    string,
-                    { firstName?: string | null; lastName?: string | null; email?: string | null }
-                >();
-                sessions.forEach((s) => {
-                    const csUser = (s.device as any).CustomerService?.user;
-                    const user = csUser || s.device.user;
-                    sidToTutor.set(s.sessionId, {
-                        firstName: user?.firstName,
-                        lastName: user?.lastName,
-                        email: user?.email,
-                    });
-                });
-                data.forEach((r) => {
-                    const info = r.sessionId ? sidToTutor.get(r.sessionId) : undefined;
-                    if (info) {
-                        (r as any).tutor = {
-                            firstName: info.firstName || info.email || 'Tutor',
-                            lastName: info.lastName || '',
-                        };
-                    }
-                });
-            }
-            // Fallback: map via Broadcast pkId parsed from OutgoingMessage.id (BC_<pkId>_...)
-            const bcIds = Array.from(
-                new Set(
-                    rows
-                        .map((r) =>
-                            typeof r.id === 'string' && r.id.startsWith('BC_')
-                                ? Number(String(r.id).slice(3).split('_')[0])
-                                : null,
-                        )
-                        .filter((v): v is number => !!v && Number.isFinite(v)),
-                ),
-            );
-            if (bcIds.length) {
-                const broadcasts = await prisma.broadcast.findMany({
-                    where: { pkId: { in: bcIds } },
-                    select: {
-                        pkId: true,
-                        name: true,
-                        broadcastType: true, // 🔥 Read from DB field
-                        device: {
-                            select: {
-                                user: { select: { firstName: true, lastName: true, email: true } },
-                                CustomerService: {
-                                    select: {
-                                        user: {
-                                            select: {
-                                                firstName: true,
-                                                lastName: true,
-                                                email: true,
-                                            },
-                                        },
-                                    },
-                                },
-                            },
-                        },
-                    },
-                });
-                // Prepare feedback courseName detection for current broadcast names
-                const names = Array.from(new Set(broadcasts.map((b) => b.name).filter(Boolean)));
-                let feedbackNames = new Set<string>();
-                if (names.length) {
-                    try {
-                        // Extract courseName from broadcast names that have format "feedbackName - courseName"
-                        const courseNames = names
-                            .map((name) => {
-                                const match = name.match(/^.+\s*-\s*(.+)$/);
-                                return match ? match[1].trim() : null;
-                            })
-                            .filter((courseName): courseName is string => courseName !== null);
-
-                        if (courseNames.length > 0) {
-                            const fbs = await prisma.courseFeedback.findMany({
-                                where: { courseName: { in: courseNames } },
-                                select: { courseName: true },
-                            });
-                            feedbackNames = new Set(fbs.map((x) => x.courseName));
-                        }
-                    } catch (_) {
-                        /* ignore */
-                    }
-                }
-
-                const bcMeta = new Map<
-                    number,
-                    {
-                        name?: string | null;
-                        tutor?: {
-                            firstName?: string | null;
-                            lastName?: string | null;
-                            email?: string | null;
-                        } | null;
-                        type?: 'feedback' | 'reminder' | 'recurrence' | 'broadcast';
-                    }
-                >();
-                broadcasts.forEach((b) => {
-                    const csUser = (b.device as any).CustomerService?.user;
-                    const user = csUser || b.device.user;
-                    const name = b.name || '';
-
-                    // 🔥 Prioritize broadcastType from DB, fallback to name detection
-                    let type: 'feedback' | 'reminder' | 'recurrence' | 'broadcast' = 'broadcast';
-                    
-                    if (b.broadcastType) {
-                        // Use database value if available
-                        type = b.broadcastType as any;
-                    } else {
-                        // Fallback to legacy name-based detection
-                        const hasRecurrenceMarker = /\[(recurrence|recurring)\]/i.test(name);
-                        const hasReminderMarker = /\[reminder\]/i.test(name);
-                        const hasFeedbackMarker = /\[feedback\]/i.test(name);
-                        const isReminderLegacy = /\b(Recipients|Reminder)\b/i.test(name);
-
-                        if (hasRecurrenceMarker) {
-                            type = 'recurrence';
-                        } else if (hasReminderMarker || isReminderLegacy) {
-                            type = 'reminder';
-                        } else if (hasFeedbackMarker) {
-                            type = 'feedback';
-                        } else {
-                            // feedback detection via CourseFeedback table (best-effort)
-                            const courseMatch = name.match(/^.+\s*-\s*(.+)$/);
-                            if (courseMatch && feedbackNames.has(courseMatch[1].trim())) {
-                                type = 'feedback';
-                            }
-                        }
-                    }
-
-                    bcMeta.set(b.pkId, {
-                        name,
-                        tutor: {
-                            firstName: user?.firstName,
-                            lastName: user?.lastName,
-                            email: user?.email,
-                        },
-                        type,
-                    });
-                });
-                data.forEach((r) => {
-                    if (typeof r.id === 'string' && r.id.startsWith('BC_')) {
-                        const pk = Number(String(r.id).slice(3).split('_')[0]);
-                        const meta = bcMeta.get(pk);
-                        if (meta) {
-                            if (!(r as any).tutor && meta.tutor) {
-                                (r as any).tutor = {
-                                    firstName: meta.tutor.firstName || meta.tutor.email || 'Tutor',
-                                    lastName: meta.tutor.lastName || '',
-                                };
-                            }
-                            (r as any).broadcastName = meta.name || undefined;
-                            (r as any).broadcastType = meta.type || undefined;
-                        }
-                    }
-                });
-            }
-        } catch (e) {
-            // ignore enrichment errors; return base rows
-        }
-
+        const skip = (page - 1) * pageSize;
+        const data = allRows.slice(skip, skip + pageSize);
+        const total = allRows.length;
         res.status(200).json({
             data,
             metadata: {
                 totalMessages: total,
                 currentPage: page,
-                totalPages: Math.ceil(total / pageSize),
-                hasMore: skip + rows.length < total,
+                totalPages: Math.max(1, Math.ceil(total / pageSize)),
+                hasMore: skip + data.length < total,
+                statusCounts: historyStatusCounts(allRows),
             },
         });
     } catch (e) {
@@ -621,54 +616,38 @@ export const listOutgoingMessagesAll: RequestHandler = async (req, res) => {
 
 export const deleteOutgoingMessagesAll: RequestHandler = async (req, res) => {
     try {
-        const phoneNumber = (req.query.phoneNumber as string) || undefined;
-        const onlyBroadcast = String(req.query.onlyBroadcast || '').toLowerCase();
-        const isOnlyBroadcast =
-            onlyBroadcast === '1' || onlyBroadcast === 'true' || onlyBroadcast === 'yes';
-        const statusesRaw = (req.query.status as string) || '';
-        const olderThanMinutes = Math.max(0, Number(req.query.olderThanMinutes || 10));
-        const threshold = olderThanMinutes
-            ? new Date(Date.now() - olderThanMinutes * 60 * 1000)
-            : undefined;
-
-        // Defaults: delete acked/delivered/read/played. Also delete stale 'pending' older than threshold.
-        const defaultAckStatuses = ['server_ack', 'delivery_ack', 'read', 'played'];
-
-        let where: any = {
-            id: isOnlyBroadcast ? { startsWith: 'BC_' } : undefined,
-            to: phoneNumber ? { contains: phoneNumber } : undefined,
+        const filters: SentHistoryFilters = {
+            phoneNumber: (req.query.phoneNumber as string) || undefined,
+            message: (req.query.message as string) || undefined,
+            contactName: (req.query.contactName as string) || undefined,
+            tutorName: (req.query.tutorName as string) || undefined,
+            source: (req.query.source as string) || undefined,
+            status:
+                String(req.query.status || '').toLowerCase() === 'all'
+                    ? undefined
+                    : (req.query.status as string) || undefined,
+            onlyBroadcast: ['1', 'true', 'yes'].includes(
+                String(req.query.onlyBroadcast || '').toLowerCase(),
+            ),
         };
-
-        if (!statusesRaw) {
-            where.OR = [
-                { status: { in: defaultAckStatuses } },
-                ...(threshold ? [{ status: 'pending', createdAt: { lt: threshold } }] : []),
-            ];
-        } else if (statusesRaw.toLowerCase() === 'all') {
-            // no status filter
-        } else {
-            const list = statusesRaw
-                .split(',')
-                .map((s) => s.trim())
-                .filter(Boolean);
-            if (list.length) where.status = { in: list };
+        const matchedRows = await buildSentHistoryRows(filters);
+        const pkIds = matchedRows.map((row) => Number(row.pkId)).filter(Number.isFinite);
+        if (!pkIds.length) {
+            res.status(200).json({ message: 'No sent messages matched', deletedCount: 0, mediaDeleted: 0 });
+            return;
         }
 
-        // Collect media paths first (avoid losing the info after deletion)
-        const mediaMessages = await prisma.outgoingMessage.findMany({
-            where,
-            select: { mediaPath: true },
-        });
         const mediaPaths = Array.from(
             new Set(
-                mediaMessages
-                    .map((m) => m.mediaPath)
+                matchedRows
+                    .map((row) => row.mediaPath)
                     .filter((p): p is string => !!p && typeof p === 'string'),
             ),
         );
 
-        // Delete DB rows
-        const result = await prisma.outgoingMessage.deleteMany({ where });
+        const result = await prisma.outgoingMessage.deleteMany({
+            where: { pkId: { in: pkIds } },
+        });
 
         // Attempt to unlink files (ignore errors, continue)
         for (const p of mediaPaths) {

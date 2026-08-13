@@ -23,7 +23,11 @@ import path from 'path';
 import { getSocketIO } from '../socket';
 import { Server } from 'socket.io';
 import { safeMessageContext, redactPhone, redactMessageObject } from '../utils/logRedaction';
-import { encryptMessage, decryptOutgoingMessage } from '../utils/messageEncryption';
+import {
+    decryptIncomingMessage,
+    encryptMessage,
+    decryptOutgoingMessage,
+} from '../utils/messageEncryption';
 import { getInstance } from '../whatsapp';
 import sharp from 'sharp';
 import axios from 'axios';
@@ -743,6 +747,7 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                                     
                                     // ✅ PERFORMANCE FIX: Simpan pesan DULU tanpa profile picture (instant)
                                     // Profile picture akan di-fetch di background dan di-update kemudian
+                                    const encryptedIncomingText = encryptMessage(messageText);
                                     const incomingMessage = await prisma.incomingMessage.upsert({
                                         where: { id: message.key.id! },
                                         create: {
@@ -753,7 +758,7 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                                             groupName,
                                             groupPicUrl: null, // Will be fetched in background
                                             profilePicUrl: null, // Will be fetched in background
-                                            message: messageText,
+                                            message: encryptedIncomingText,
                                             mediaPath: incomingMediaPath,
                                             fileName: incomingFileName,
                                             receivedAt: new Date(Number(data.messageTimestamp) * 1000),
@@ -765,7 +770,7 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                                             // Update metadata if changed
                                             groupName,
                                             pushName,
-                                            message: messageText,
+                                            message: encryptedIncomingText,
                                             ...(incomingMediaPath ? { mediaPath: incomingMediaPath } : {}),
                                             ...(incomingFileName ? { fileName: incomingFileName } : {}),
                                         },
@@ -848,7 +853,7 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                                                 io.to(`session:${sessionId}`).emit(
                                                     `incoming:${sessionId}:profile-updated`,
                                                     {
-                                                        ...updatedMessage,
+                                                        ...decryptIncomingMessage(updatedMessage),
                                                         profilePicUrl: jid.includes('@g.us') ? null : profileUrl,
                                                         groupPicUrl: jid.includes('@g.us') ? profileUrl : null,
                                                         profilePictureStatus: result.status,
@@ -868,7 +873,7 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                                     const emitEventName = `incoming:${sessionId}`;
                                     const publicDeviceUuid = await getDeviceUuid();
                                     const emitPayload = {
-                                        ...incomingMessage,
+                                        ...decryptIncomingMessage(incomingMessage),
                                         mediaPath: publicDeviceUuid
                                             ? serializeInboxMediaPath(
                                                   incomingMessage.mediaPath,

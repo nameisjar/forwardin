@@ -380,7 +380,7 @@ model OutgoingMessage {
   isGroup       Boolean?  @default(false) // Track if message is for group
   /// For group messages: list of participant JIDs who have read the message (best-effort).
   readBy        Json?     @map("read_by")
-  contact       Contact?  @relation(fields: [contactId], references: [pkId], onDelete: Cascade)
+  contact       Contact?  @relation(fields: [contactId], references: [pkId], onDelete: SetNull)
   device        Device?   @relation(fields: [deviceId], references: [pkId], onDelete: SetNull)
 
   @@unique([sessionId, to, id], map: "unique_outgoing_message_key_per_session_id")

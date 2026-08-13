@@ -24,7 +24,12 @@ import {
     sendVideoMessage,
     sendGenericMessage 
 } from '../services/messageSender';
-import { encryptMessage, decryptOutgoingMessage, decryptOutgoingMessages } from '../utils/messageEncryption';
+import {
+    decryptIncomingMessage,
+    encryptMessage,
+    decryptOutgoingMessage,
+    decryptOutgoingMessages,
+} from '../utils/messageEncryption';
 
 // 🔥 Helper untuk mendapatkan deviceId dari sessionId
 async function getDeviceIdFromSession(sessionId: string): Promise<string | null> {
@@ -473,7 +478,7 @@ export const getIncomingMessages: RequestHandler = async (req, res) => {
                 },
                 orderBy: { updatedAt: 'desc' },
             })
-        ).map((m) => serializePrisma(m));
+        ).map((m) => serializePrisma(decryptIncomingMessage(m)));
 
         const totalMessages = await prisma.incomingMessage.count({
             where: {
@@ -710,12 +715,9 @@ export const getConversationMessages: RequestHandler = async (req, res) => {
         const hasMore = currentPage * Number(pageSize) < totalMessages;
 
         // Decrypt messages before returning
-        const decryptedMessages = messages.map((m) => {
-            if ('message' in m && m.message) {
-                return decryptOutgoingMessage(m);
-            }
-            return m;
-        });
+        const decryptedMessages = messages.map((m) =>
+            'from' in m ? decryptIncomingMessage(m) : decryptOutgoingMessage(m),
+        );
 
         res.status(200).json({
             data: decryptedMessages.map((m) => serializePrisma(m)),
@@ -816,7 +818,10 @@ export const exportMessagesToZip: RequestHandler = async (req, res) => {
             mediaPath?: string | null;
         };
 
-        const allMessages: Message[] = [...incomingMessages, ...outgoingMessages];
+        const allMessages: Message[] = [
+            ...incomingMessages.map(decryptIncomingMessage),
+            ...outgoingMessages.map(decryptOutgoingMessage),
+        ];
         for (const message of allMessages) {
             if ('from' in message) {
                 message.receivedAt = message.receivedAt;

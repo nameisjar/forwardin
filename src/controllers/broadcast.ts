@@ -8,7 +8,14 @@ import { delay as delayMs } from '../utils/delay';
 import { getRecipients } from '../utils/recipients';
 import { replaceVariables } from '../utils/variableHelper';
 import { diskUpload } from '../config/multer';
-import { encryptMessage, decryptMessage, decryptBroadcast, decryptBroadcasts, decryptOutgoingMessage } from '../utils/messageEncryption';
+import {
+    decryptBroadcast,
+    decryptBroadcasts,
+    decryptIncomingMessage,
+    decryptMessage,
+    decryptOutgoingMessage,
+    encryptMessage,
+} from '../utils/messageEncryption';
 import { useBroadcast } from '../utils/quota';
 import { isUUID } from '../utils/uuidChecker';
 import fs from 'fs';
@@ -1054,7 +1061,7 @@ export const getBrodcastReplies: RequestHandler = async (req, res) => {
                 },
             });
             if (incomingMessages) {
-                broadcastReplies.push(incomingMessages);
+                broadcastReplies.push(decryptIncomingMessage(incomingMessages));
             }
         }
         res.status(200).json({ broadcastReplies });

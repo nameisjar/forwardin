@@ -15,6 +15,10 @@ import { internalServerErrorHandler, notFoundHandler } from './middleware/errorH
 import { warmupBrowser } from './services/pdfGenerator';
 import { shutdownRateLimiter } from './services/rateLimiter';
 import { validateEncryptionSetup, isEncryptionEnabled } from './utils/encryption';
+import {
+    isMessageEncryptionEnabled,
+    validateMessageEncryptionSetup,
+} from './utils/messageEncryption';
 import { shutdownScheduledJobs } from './controllers/device';
 import {
     startInboxRetentionScheduler,
@@ -171,6 +175,21 @@ export async function startApplication(): Promise<void> {
         logger.warn('[Security] ⚠️ SESSION ENCRYPTION IS DISABLED IN PRODUCTION!');
         logger.warn('[Security] ⚠️ WhatsApp credentials are stored in PLAINTEXT');
         logger.warn('[Security] ⚠️ Set SESSION_ENCRYPTION_KEY to enable encryption');
+    }
+
+    const messageEncryptionStatus = validateMessageEncryptionSetup();
+    if (!messageEncryptionStatus.valid) {
+        logger.error(`[Security] ${messageEncryptionStatus.message}`);
+        logger.error('[Security] Set a dedicated MESSAGE_ENCRYPTION_KEY before starting production');
+        if (process.env.NODE_ENV === 'production') {
+            throw new Error(messageEncryptionStatus.message);
+        }
+    } else {
+        logger.info(`[Security] ${messageEncryptionStatus.message}`);
+    }
+
+    if (process.env.NODE_ENV === 'production' && !isMessageEncryptionEnabled()) {
+        throw new Error('Message encryption cannot be disabled in production');
     }
 
     await prisma.$connect();

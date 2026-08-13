@@ -13,7 +13,7 @@
  * 
  * PENTING:
  * - Backup database sebelum menjalankan script ini
- * - Pastikan SESSION_ENCRYPTION_KEY sudah diset
+ * - Pastikan MESSAGE_ENCRYPTION_KEY sudah diset
  * - Script ini aman untuk dijalankan berulang kali (idempotent)
  * 
  * Usage:
@@ -30,7 +30,13 @@
  */
 
 import { PrismaClient } from '@prisma/client';
-import { encrypt, isEncrypted, isEncryptionEnabled, validateEncryptionSetup } from '../src/utils/encryption';
+import {
+    decryptMessage,
+    encryptMessage,
+    isCurrentMessageEncrypted,
+    isMessageEncryptionEnabled,
+    validateMessageEncryptionSetup,
+} from '../src/utils/messageEncryption';
 
 const prisma = new PrismaClient();
 
@@ -73,12 +79,12 @@ async function migrateOutgoingMessages(): Promise<MigrationStats> {
 
         for (const msg of messages) {
             try {
-                if (!msg.message || isEncrypted(msg.message)) {
+                if (!msg.message || isCurrentMessageEncrypted(msg.message)) {
                     stats.skipped++;
                     continue;
                 }
 
-                const encryptedMessage = encrypt(msg.message);
+                const encryptedMessage = encryptMessage(decryptMessage(msg.message));
 
                 if (!isDryRun) {
                     await prisma.outgoingMessage.update({
@@ -124,12 +130,12 @@ async function migrateIncomingMessages(): Promise<MigrationStats> {
 
         for (const msg of messages) {
             try {
-                if (!msg.message || isEncrypted(msg.message)) {
+                if (!msg.message || isCurrentMessageEncrypted(msg.message)) {
                     stats.skipped++;
                     continue;
                 }
 
-                const encryptedMessage = encrypt(msg.message);
+                const encryptedMessage = encryptMessage(decryptMessage(msg.message));
 
                 if (!isDryRun) {
                     await prisma.incomingMessage.update({
@@ -175,12 +181,12 @@ async function migrateBroadcasts(): Promise<MigrationStats> {
 
         for (const bc of broadcasts) {
             try {
-                if (!bc.message || isEncrypted(bc.message)) {
+                if (!bc.message || isCurrentMessageEncrypted(bc.message)) {
                     stats.skipped++;
                     continue;
                 }
 
-                const encryptedMessage = encrypt(bc.message);
+                const encryptedMessage = encryptMessage(decryptMessage(bc.message));
 
                 if (!isDryRun) {
                     await prisma.broadcast.update({
@@ -212,18 +218,18 @@ async function main() {
     }
 
     // Validate encryption setup
-    const encryptionStatus = validateEncryptionSetup();
+    const encryptionStatus = validateMessageEncryptionSetup();
     if (!encryptionStatus.valid) {
         console.error('\n❌ Encryption not properly configured:');
         console.error(`   ${encryptionStatus.message}`);
         console.error('\n📝 To generate a key, run:');
         console.error('   node -e "console.log(require(\'crypto\').randomBytes(32).toString(\'hex\'))"');
-        console.error('\n   Then set SESSION_ENCRYPTION_KEY in your .env file');
+        console.error('\n   Then set MESSAGE_ENCRYPTION_KEY in your .env file');
         process.exit(1);
     }
 
-    if (!isEncryptionEnabled()) {
-        console.error('\n❌ Encryption is disabled. Set SESSION_ENCRYPTION_ENABLED=true');
+    if (!isMessageEncryptionEnabled()) {
+        console.error('\n❌ Encryption is disabled. Set MESSAGE_ENCRYPTION_ENABLED=true');
         process.exit(1);
     }
 

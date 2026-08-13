@@ -16,6 +16,7 @@ import {
     sendMediaMessage, 
     detectMediaType 
 } from '../services/messageSender';
+import { decryptIncomingMessage } from '../utils/messageEncryption';
 
 // back here: add deviceId param checker
 export const createCampaign: RequestHandler = async (req, res) => {
@@ -596,7 +597,7 @@ export const getCampaignReplies: RequestHandler = async (req, res) => {
                 },
             });
             if (incomingMessages) {
-                campaignReplies.push(incomingMessages);
+                campaignReplies.push(decryptIncomingMessage(incomingMessages));
             }
         }
         res.status(200).json({ campaignReplies });
@@ -739,7 +740,7 @@ export const getCampaignMessageReplies: RequestHandler = async (req, res) => {
                 },
             });
             if (incomingMessages) {
-                campaignMessageReplies.push(incomingMessages);
+                campaignMessageReplies.push(decryptIncomingMessage(incomingMessages));
             }
         }
         res.status(200).json({ campaignMessageReplies });

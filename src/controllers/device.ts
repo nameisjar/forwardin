@@ -34,6 +34,7 @@ import {
     getInboxProfileCacheSummaries,
     refreshInboxProfileCache,
 } from '../services/inboxProfileCache';
+import { decryptIncomingMessage } from '../utils/messageEncryption';
 import {
     deleteAllDeviceReactions,
     deleteConversationReactions,
@@ -1880,7 +1881,7 @@ export const getDeviceInbox: RequestHandler = async (req, res) => {
             inboxGroups.map((group) => [group.groupId, group.groupName]),
         );
         const serialized = normalizedMessages.map((message) => {
-            const item = serializePrisma(message);
+            const item = serializePrisma(decryptIncomingMessage(message));
             if (message.from.endsWith('@g.us') && !item.groupName) {
                 item.groupName = inboxGroupNameByJid.get(message.from) || null;
             }
