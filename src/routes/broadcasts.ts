@@ -13,6 +13,7 @@ router.get('/:broadcastId/replies', controller.getBrodcastReplies);
 
 // UPDATE operations
 router.put('/:id', controller.updateBroadcast);
+router.patch('/:id/message', controller.updateBroadcastMessage);
 router.patch('/:id/status', controller.updateBroadcastStatus);
 
 // DELETE operations

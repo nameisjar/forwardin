@@ -1141,6 +1141,89 @@ export const updateBroadcast: RequestHandler = async (req, res) => {
     }
 };
 
+/**
+ * Update only the message of a future, unsent broadcast.
+ * Keeping this separate from updateBroadcast prevents the schedule, recipients,
+ * device, media, and delivery status from being changed accidentally.
+ */
+export const updateBroadcastMessage: RequestHandler = async (req, res) => {
+    try {
+        const id = req.params.id;
+        const message = req.body?.message;
+
+        if (!isUUID(id)) {
+            return res.status(400).json({ message: 'Invalid broadcastId' });
+        }
+
+        if (typeof message !== 'string' || message.trim().length === 0) {
+            return res.status(400).json({ message: 'Pesan wajib diisi' });
+        }
+
+        if (message.length > 65535) {
+            return res.status(400).json({
+                message: 'Pesan terlalu panjang (maksimal 65.535 karakter)',
+            });
+        }
+
+        const broadcast = await prisma.broadcast.findFirst({
+            where: {
+                id,
+                device: accessibleDeviceWhere(
+                    req.authenticatedUser.pkId,
+                    req.privilege?.pkId,
+                ),
+            },
+            select: {
+                pkId: true,
+                isSent: true,
+                schedule: true,
+            },
+        });
+
+        if (!broadcast) {
+            return res.status(404).json({ message: 'Jadwal tidak ditemukan' });
+        }
+
+        if (broadcast.isSent) {
+            return res.status(409).json({
+                message: 'Pesan yang sudah terkirim tidak dapat diedit',
+            });
+        }
+
+        const now = new Date();
+        if (broadcast.schedule.getTime() <= now.getTime()) {
+            return res.status(409).json({
+                message: 'Jadwal sudah memasuki waktu pengiriman dan tidak dapat diedit',
+            });
+        }
+
+        // Recheck the delivery boundary atomically so an edit cannot race with
+        // the minute-based scheduler after the initial authorization lookup.
+        const updated = await prisma.broadcast.updateMany({
+            where: {
+                pkId: broadcast.pkId,
+                isSent: false,
+                schedule: { gt: now },
+            },
+            data: {
+                message: encryptMessage(message),
+                updatedAt: now,
+            },
+        });
+
+        if (updated.count === 0) {
+            return res.status(409).json({
+                message: 'Jadwal sudah mulai diproses. Muat ulang untuk melihat status terbaru',
+            });
+        }
+
+        return res.status(200).json({ message: 'Pesan jadwal berhasil diperbarui' });
+    } catch (error) {
+        logger.error(error);
+        return res.status(500).json({ message: 'Internal server error' });
+    }
+};
+
 export const updateBroadcastStatus: RequestHandler = async (req, res) => {
     try {
         const id = req.params.id;
