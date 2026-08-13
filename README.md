@@ -1,98 +1,433 @@
-# Editing this README
+# Autosender Backend
 
-When you're ready to make this README your own, just edit this file and use the handy template below (or feel free to structure it however you want - this is just a starting point!). Thank you to [makeareadme.com](https://www.makeareadme.com/) for this template.
+Backend API untuk Autosender, dibangun menggunakan Express, TypeScript, Prisma,
+PostgreSQL, Socket.IO, dan Baileys. Service ini menangani autentikasi, perangkat
+WhatsApp, kontak dan grup, Inbox, broadcast, reminder, feedback, riwayat pesan,
+serta pembuatan PDF.
 
-## Suggestions for a good README
+README ini ditujukan sebagai panduan instalasi ulang untuk development maupun
+production. Jangan menaruh password, token, atau encryption key asli di README
+dan repository.
 
-Every project is different, so consider which of these sections apply to yours. The sections used in the template are suggestions for most open source projects. Also keep in mind that while a README can be too long and detailed, too long is better than too short. If you think your README is too long, consider utilizing another form of documentation rather than cutting out information.
+## Daftar isi
 
-## Name
+- [Persyaratan](#persyaratan)
+- [Instalasi development](#instalasi-development)
+- [Konfigurasi environment](#konfigurasi-environment)
+- [Menyiapkan PostgreSQL](#menyiapkan-postgresql)
+- [Prisma dan database](#prisma-dan-database)
+- [Menjalankan backend](#menjalankan-backend)
+- [Enkripsi session dan pesan](#enkripsi-session-dan-pesan)
+- [Migrasi pesan lama](#migrasi-pesan-lama)
+- [Testing dan pemeriksaan kode](#testing-dan-pemeriksaan-kode)
+- [Deployment production](#deployment-production)
+- [Data yang harus dipersistenkan](#data-yang-harus-dipersistenkan)
+- [Troubleshooting](#troubleshooting)
 
-Choose a self-explaining name for your project.
+## Persyaratan
 
-## Description
+- Node.js 22 LTS. Proyek saat ini diuji menggunakan Node.js 22.
+- npm dan `package-lock.json`.
+- PostgreSQL, atau Docker + Docker Compose untuk menjalankan PostgreSQL lokal.
+- Git.
+- Dependency sistem Chromium/Puppeteer jika fitur PDF dijalankan pada Linux.
 
-Let people know what your project can do specifically. Provide context and add a link to any reference visitors might be unfamiliar with. A list of Features or a Background subsection can also be added here. If there are alternatives to your project, this is a good place to list differentiating factors.
-
-## Badges
-
-On some READMEs, you may see small images that convey metadata, such as whether or not all the tests are passing for the project. You can use Shields to add some to your README. Many services also have instructions for adding a badge.
-
-## Visuals
-
-Depending on what you are making, it can be a good idea to include screenshots or even a video (you'll frequently see GIFs rather than actual videos). Tools like ttygif can help, but check out Asciinema for a more sophisticated method.
-
-## Installation
-
-Within a particular ecosystem, there may be a common way of installing things, such as using Yarn, NuGet, or Homebrew. However, consider the possibility that whoever is reading your README is a novice and would like more guidance. Listing specific steps helps remove ambiguity and gets people to using your project as quickly as possible. If it only runs in a specific context like a particular programming language version or operating system or has dependencies that have to be installed manually, also add a Requirements subsection.
+Periksa versi:
 
 ```bash
-# Clone the repository
-git clone https://gitlab.com/mohammad.arda/forwardin-backend
+node --version
+npm --version
+docker --version
+```
 
-# Navigate to the project directory
-cd forwardin-backend
+## Instalasi development
 
-# Install dependencies
-yarn
+Jalankan dari folder backend ini, yaitu folder yang memiliki `package.json`,
+`prisma`, `scripts`, dan `src`.
 
-# Build the project
-yarn build
+### Linux/macOS
 
-# Copy the .env.example file and rename it to .env
+```bash
+git clone <URL_REPOSITORY>
+cd <FOLDER_REPOSITORY>/forwardin
+npm ci
 cp .env.example .env
-
-# Configure environment variables on the .env file
-
-# Start PostgreSQL using Docker Compose:
-docker-compose up -d
-
-# Run the database migration
-npx prisma migrate dev
-
-# or Push the database schema
-npx prisma db push
-
-# Install git (pre-commit) hooks
-npx husky install
 ```
 
-## Usage
+### Windows PowerShell
 
-Use examples liberally, and show the expected output if you can. It's helpful to have inline the smallest example of usage that you can demonstrate, while providing links to more sophisticated examples if they are too long to reasonably include in the README.
+```powershell
+git clone <URL_REPOSITORY>
+Set-Location <FOLDER_REPOSITORY>\forwardin
+npm.cmd ci
+Copy-Item .env.example .env
+```
+
+Setelah itu, isi `.env`, hidupkan PostgreSQL, jalankan migration Prisma, lalu
+build backend sebagaimana dijelaskan di bagian berikutnya.
+
+## Konfigurasi environment
+
+Gunakan `.env.example` sebagai sumber nama variabel. File `.env*` selain
+`.env.example` sudah diabaikan Git. Jangan commit `.env`.
+
+Contoh minimum untuk development lokal:
+
+```env
+HOST=localhost
+PORT=3000
+BASE_URL=http://localhost:3000
+NODE_ENV=development
+
+POSTGRES_DB=autosender
+POSTGRES_USER=autosender
+POSTGRES_PASSWORD=<PASSWORD_DATABASE_LOKAL>
+DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@localhost:5432/${POSTGRES_DB}
+
+JWT_SECRET_KEY=<RANDOM_SECRET>
+
+SESSION_ENCRYPTION_KEY=<RANDOM_64_HEX>
+SESSION_ENCRYPTION_ENABLED=true
+
+MESSAGE_ENCRYPTION_KEY=<RANDOM_64_HEX_YANG_BERBEDA>
+MESSAGE_ENCRYPTION_KEY_ID=primary
+MESSAGE_ENCRYPTION_ENABLED=true
+MESSAGE_ENCRYPTION_PREVIOUS_KEYS_JSON=
+
+SUPER_ADMIN_ID=1
+ADMIN_ID=2
+CS_ID=3
+
+CLIENT_URL1=http://localhost:5173
+CLIENT_URL2=
+URL_PROD=http://localhost:5173
+```
+
+`SESSION_ENCRYPTION_KEY` dan `MESSAGE_ENCRYPTION_KEY` harus berbeda. Buat key
+32-byte dalam format 64 karakter hexadecimal:
 
 ```bash
-# Run the project in development mode
-yarn dev
-
-# Start the production server
-yarn start
+node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 ```
 
-## Support
+Jalankan perintah tersebut secara terpisah untuk setiap key. Buat juga
+`JWT_SECRET_KEY` acak dan kuat.
 
-Tell people where they can go to for help. It can be any combination of an issue tracker, a chat room, an email address, etc.
+### Variabel utama
 
-## Roadmap
+| Variabel | Keterangan |
+| --- | --- |
+| `HOST`, `PORT` | Host dan port HTTP backend. Default aplikasi adalah `0.0.0.0:3000` jika tidak diisi. |
+| `BASE_URL` | URL publik backend. Gunakan HTTPS di production. |
+| `DATABASE_URL` | Connection string PostgreSQL yang digunakan Prisma. |
+| `JWT_SECRET_KEY` | Secret untuk token autentikasi. |
+| `CLIENT_URL1`, `CLIENT_URL2` | Origin frontend yang diizinkan oleh CORS, tanpa trailing slash. |
+| `SESSION_ENCRYPTION_KEY` | Key AES untuk credential session WhatsApp. |
+| `MESSAGE_ENCRYPTION_KEY` | Key AES terpisah untuk isi pesan. Wajib di production. |
+| `MESSAGE_ENCRYPTION_KEY_ID` | Identitas key aktif, awalnya `primary`. |
+| `MESSAGE_ENCRYPTION_PREVIOUS_KEYS_JSON` | Daftar key lama saat rotasi agar ciphertext lama tetap dapat dibaca. |
+| `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | Opsional, diperlukan untuk integrasi Google. |
+| `NODEMAILER_EMAIL`, `NODEMAILER_PASSWORD` | Opsional, diperlukan untuk pengiriman email. Gunakan app password. |
+| `MIDTRANS_KEY` | Opsional, diperlukan jika integrasi pembayaran dipakai. |
 
-If you have ideas for releases in the future, it is a good idea to list them in the README.
+Variabel delay broadcast dan rate limit sudah memiliki contoh di `.env.example`.
+Pertahankan nilai awal terlebih dahulu dan ubah hanya setelah memahami efeknya.
 
-## Contributing
+> Semua variabel `VITE_*` adalah milik frontend dan tidak boleh dipakai untuk
+> menyimpan secret backend.
 
-State if you are open to contributions and what your requirements are for accepting them.
+## Menyiapkan PostgreSQL
 
-For people who want to make changes to your project, it's helpful to have some documentation on how to get started. Perhaps there is a script that they should run or some environment variables that they need to set. Make these steps explicit. These instructions could also be useful to your future self.
+### Opsi A — Docker Compose
 
-You can also document commands to lint the code or run tests. These steps help to ensure high code quality and reduce the likelihood that the changes inadvertently break something. Having instructions for running tests is especially helpful if it requires external setup, such as starting a Selenium server for testing in a browser.
+`docker-compose.yml` di proyek ini hanya menjalankan PostgreSQL. Backend tetap
+dijalankan dari host/VPS.
 
-## Authors and acknowledgment
+```bash
+docker compose up -d postgres
+docker compose ps
+```
 
-Show your appreciation to those who have contributed to the project.
+Windows PowerShell menggunakan perintah yang sama jika Docker Desktop sudah
+aktif:
 
-## License
+```powershell
+docker compose up -d postgres
+docker compose ps
+```
 
-For open source projects, say how it is licensed.
+Data PostgreSQL disimpan dalam volume `postgres-data`. Jangan menghapus volume
+tersebut tanpa backup.
 
-## Project status
+Untuk menghentikan container tanpa menghapus data:
 
-If you have run out of energy or time for your project, put a note at the top of the README saying that development has slowed down or stopped completely. Someone may choose to fork your project or volunteer to step in as a maintainer or owner, allowing your project to keep going. You can also make an explicit request for maintainers.
+```bash
+docker compose stop postgres
+```
+
+### Opsi B — PostgreSQL eksternal
+
+Buat database dan user PostgreSQL, lalu isi `DATABASE_URL` dengan credential
+tersebut. Pastikan server backend dapat mengakses host dan port database.
+Gunakan koneksi TLS jika database berada di jaringan lain.
+
+## Prisma dan database
+
+Generate Prisma Client:
+
+```bash
+npx prisma generate
+```
+
+Untuk database development:
+
+```bash
+npx prisma migrate dev
+```
+
+Untuk database production atau database baru yang harus mengikuti seluruh
+migration yang sudah tersimpan:
+
+```bash
+npx prisma migrate deploy
+```
+
+Periksa status migration:
+
+```bash
+npx prisma migrate status
+```
+
+Windows dapat menggunakan `npx.cmd` apabila PowerShell memblokir `npx.ps1`:
+
+```powershell
+npx.cmd prisma generate
+npx.cmd prisma migrate deploy
+```
+
+### Seeder
+
+Seeder utama saat ini menghapus data subscription plan, privilege, dan user,
+kemudian membuat akun contoh dengan password yang diketahui. Oleh karena itu:
+
+> Jangan menjalankan `npx prisma db seed` pada production atau database yang
+> sudah berisi data.
+
+Seeder hanya boleh digunakan untuk database development kosong:
+
+```bash
+npx prisma db seed
+```
+
+Setelah seed lokal, segera ganti password akun contoh jika database tersebut
+akan digunakan lebih lama.
+
+## Menjalankan backend
+
+### Development
+
+Script `dev` menjalankan entry point dari `dist`. Karena itu build TypeScript
+terlebih dahulu:
+
+```bash
+npm run build
+npm run dev
+```
+
+Setelah mengubah source TypeScript, jalankan `npm run build` kembali. Untuk
+menjalankan hasil build tanpa Nodemon:
+
+```bash
+npm start
+```
+
+Windows PowerShell:
+
+```powershell
+npm.cmd run build
+npm.cmd run dev
+```
+
+Backend normalnya tersedia di `http://localhost:3000`. Periksa health endpoint:
+
+```bash
+curl http://localhost:3000/health
+```
+
+Respons sehat memiliki `status: "ok"`.
+
+## Enkripsi session dan pesan
+
+### Aturan penting
+
+- Jangan pernah mengganti atau kehilangan `SESSION_ENCRYPTION_KEY` pada instalasi lama.
+- Jangan pernah mengganti `MESSAGE_ENCRYPTION_KEY` tanpa prosedur rotasi.
+- Simpan backup kedua key di secret manager atau password manager terpisah dari database.
+- Kehilangan key berarti data yang memakai key tersebut tidak dapat didekripsi.
+- Production akan menolak menyala jika enkripsi pesan tidak dikonfigurasi dengan benar.
+
+Pesan baru menggunakan format berversi dan key ID. Saat melakukan rotasi key
+pesan, gunakan ID baru dan simpan key sebelumnya:
+
+```env
+MESSAGE_ENCRYPTION_KEY=<KEY_BARU>
+MESSAGE_ENCRYPTION_KEY_ID=v2
+MESSAGE_ENCRYPTION_PREVIOUS_KEYS_JSON={"primary":"<KEY_LAMA>"}
+```
+
+Setelah semua data berhasil dienkripsi ulang dengan key baru dan backup lama
+tidak lagi membutuhkan key sebelumnya, barulah key lama dapat dipensiunkan.
+
+## Migrasi pesan lama
+
+Migration ini mengubah isi pesan plaintext atau ciphertext legacy `enc:v1`
+menjadi format pesan terbaru. Lakukan setelah membuat backup database.
+
+Urutan yang disarankan:
+
+1. Pastikan `SESSION_ENCRYPTION_KEY` lama masih benar.
+2. Isi `MESSAGE_ENCRYPTION_KEY`, `MESSAGE_ENCRYPTION_KEY_ID`, dan
+   `MESSAGE_ENCRYPTION_ENABLED=true`.
+3. Hentikan sementara backend dan worker agar tidak ada pesan baru selama migrasi.
+4. Jalankan dry-run.
+5. Jalankan migrasi sebenarnya jika dry-run tidak memiliki error.
+6. Nyalakan kembali backend dan periksa `/health` serta Inbox.
+
+Linux/macOS:
+
+```bash
+./node_modules/.bin/ts-node scripts/migrate-encrypt-messages.ts --dry-run --batch=250
+./node_modules/.bin/ts-node scripts/migrate-encrypt-messages.ts --batch=250
+```
+
+Windows PowerShell:
+
+```powershell
+node_modules\.bin\ts-node.cmd scripts\migrate-encrypt-messages.ts --dry-run --batch=250
+node_modules\.bin\ts-node.cmd scripts\migrate-encrypt-messages.ts --batch=250
+```
+
+Jangan menjalankan perintah kedua apabila dry-run menampilkan error dekripsi.
+Jangan membuat key baru untuk mengatasi error tersebut; periksa kembali key lama
+dan backup database.
+
+## Testing dan pemeriksaan kode
+
+Build TypeScript:
+
+```bash
+npm run build
+```
+
+Tes dijalankan terhadap file JavaScript hasil build, sehingga build harus sukses
+lebih dahulu:
+
+```bash
+npm run build
+npm test
+```
+
+Perintah kualitas kode:
+
+```bash
+npm run lint:check
+npm run format:check
+```
+
+Beberapa integration test membutuhkan database test yang bersih dan konfigurasi
+environment yang lengkap. Jangan arahkan test ke database production.
+
+## Deployment production
+
+Urutan umum pada VPS/server:
+
+```bash
+cd /lokasi/aplikasi/forwardin
+npm ci
+npx prisma generate
+npx prisma migrate deploy
+npm run build
+npm start
+```
+
+Gunakan process manager seperti systemd atau PM2 agar service otomatis hidup
+kembali. Jalankan hanya satu instance scheduler kecuali arsitektur job sudah
+diubah untuk mendukung beberapa replica.
+
+Checklist production:
+
+- `NODE_ENV=production`.
+- `BASE_URL` menggunakan HTTPS dan domain backend yang benar.
+- `CLIENT_URL1`/`CLIENT_URL2` berisi origin frontend yang tepat.
+- `DATABASE_URL` mengarah ke database production dan menggunakan TLS bila diperlukan.
+- `JWT_SECRET_KEY`, session key, dan message key merupakan secret acak yang berbeda.
+- Database dan encryption key sudah dibackup.
+- `npx prisma migrate deploy` berhasil.
+- `npm run build` berhasil.
+- Reverse proxy meneruskan HTTP dan WebSocket/Socket.IO.
+- Firewall hanya membuka port yang diperlukan.
+- Endpoint `/health` memberikan respons sehat.
+- Isi `.env`, token, dan key tidak tercatat dalam log atau repository.
+
+Jika production memakai reverse proxy, backend dapat tetap mendengarkan pada
+port internal 3000. Terminasi TLS dilakukan oleh Nginx, Caddy, Cloudflare, atau
+load balancer, dan trafik ke backend tetap harus dibatasi.
+
+## Data yang harus dipersistenkan
+
+Pastikan backup dan deployment mempertahankan:
+
+- Database PostgreSQL.
+- Encryption key dan secret production.
+- Folder media yang dipakai untuk lampiran Inbox/broadcast.
+- Asset/template yang diperlukan saat build dan pembuatan PDF.
+
+Folder `dist` dapat dibuat ulang menggunakan `npm run build`, sedangkan
+`node_modules` dapat dibuat ulang menggunakan `npm ci`.
+
+## Troubleshooting
+
+### Backend tidak bisa terhubung ke PostgreSQL
+
+- Periksa `DATABASE_URL`, host, port, user, password, dan nama database.
+- Jalankan `docker compose ps` jika memakai Docker.
+- Jalankan `npx prisma migrate status` untuk menguji akses Prisma.
+
+### PowerShell menolak `npm.ps1` atau `npx.ps1`
+
+Gunakan executable `.cmd`:
+
+```powershell
+npm.cmd run build
+npx.cmd prisma migrate deploy
+```
+
+### Frontend terkena CORS
+
+- Pastikan `CLIENT_URL1` sama persis dengan origin frontend.
+- Jangan menambahkan trailing slash.
+- Restart backend setelah mengubah `.env`.
+
+### Pesan atau session gagal didekripsi
+
+- Jangan mengganti key lagi.
+- Pastikan key production lama tersedia dan tidak memiliki spasi tambahan.
+- Periksa `MESSAGE_ENCRYPTION_KEY_ID` dan
+  `MESSAGE_ENCRYPTION_PREVIOUS_KEYS_JSON` saat rotasi.
+- Pulihkan backup jika key yang benar tidak dapat ditemukan.
+
+### Device WhatsApp meminta pairing ulang
+
+- Pastikan database session dan `SESSION_ENCRYPTION_KEY` masih sama.
+- Periksa status device serta log disconnect.
+- Lakukan pairing ulang dari menu Device jika session memang sudah logout.
+
+### PDF/Puppeteer gagal di Linux
+
+Pastikan dependency sistem Chromium tersedia, memory server mencukupi, dan
+filesystem tempat temporary file dapat ditulis oleh user service.
+
+### Port 3000 sudah digunakan
+
+Ubah `PORT` atau hentikan proses lama. Pastikan tidak ada dua backend yang
+mengelola session WhatsApp yang sama secara bersamaan.

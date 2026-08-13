@@ -29,6 +29,8 @@
  * ============================================
  */
 
+import '../src/config/env';
+
 import { PrismaClient } from '@prisma/client';
 import {
     decryptMessage,
