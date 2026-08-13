@@ -36,6 +36,8 @@ import {
 import { redactPhone } from '../utils/logRedaction';
 import { canDeviceSend, incrementMessageCount, recordRateLimitWithError } from '../services/signalDetector';
 import { accessibleDeviceWhere } from '../utils/deviceAccess';
+import { cleanupMediaFilesIfUnreferenced } from '../services/mediaCleanup';
+import { resolveMediaFileName, sanitizeMediaFileName } from '../utils/mediaFileName';
 
 // Constants untuk retry mechanism
 const MAX_ATTEMPTS = 5;
@@ -114,6 +116,7 @@ async function sendMessageWithRetry(
     jid: string,
     textPayload: string,
     mediaPath: string | null,
+    mediaFileName: string | null,
     maxRetries = 3
 ): Promise<{ success: boolean; messageId?: string; error?: any; isRateLimit?: boolean }> {
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
@@ -131,7 +134,7 @@ async function sendMessageWithRetry(
                     mediaType,
                     {
                         caption: textPayload,
-                        fileName: mediaPath.split('/').pop(),
+                        fileName: resolveMediaFileName(mediaFileName, mediaPath),
                     }
                 );
             } else {
@@ -264,6 +267,9 @@ export const createBroadcast: RequestHandler = async (req, res) => {
                             set: recipients,
                         },
                         mediaPath: req.file?.path,
+                        mediaFileName: req.file
+                            ? sanitizeMediaFileName(req.file.originalname)
+                            : null,
                     },
                 });
 
@@ -440,6 +446,9 @@ export const createBroadcastReminder: RequestHandler = async (req, res) => {
                             delay,
                             recipients: { set: recipients },
                             mediaPath: req.file?.path,
+                            mediaFileName: req.file
+                                ? sanitizeMediaFileName(req.file.originalname)
+                                : null,
                             broadcastType: 'reminder', // ✅ Tambahkan broadcastType
                         },
                     });
@@ -543,6 +552,9 @@ export const createBroadcastScheduled: RequestHandler = async (req, res) => {
                     delay,
                     recipients: { set: recipients },
                     mediaPath: req.file?.path,
+                    mediaFileName: req.file
+                        ? sanitizeMediaFileName(req.file.originalname)
+                        : null,
                     broadcastType: 'recurrence', // ✅ Tambahkan broadcastType
                 });
 
@@ -709,6 +721,7 @@ export const getAllBroadcasts: RequestHandler = async (req, res) => {
             schedule: true,
             message: true,
             mediaPath: true,
+            mediaFileName: true,
             delay: true,
             sentCount: true,
             failedCount: true,
@@ -868,6 +881,7 @@ export const getBroadcastNameGroups: RequestHandler = async (req, res) => {
                         schedule: true,
                         message: true,
                         mediaPath: true,
+                        mediaFileName: true,
                         isSent: true,
                         sentCount: true,
                         failedCount: true,
@@ -895,6 +909,7 @@ export const getBroadcastNameGroups: RequestHandler = async (req, res) => {
                 sampleSchedule: sample?.schedule || g._min.schedule,
                 sampleMessage: decryptMessage(sample?.message || null),
                 sampleMediaPath: sample?.mediaPath || null,
+                sampleMediaFileName: sample?.mediaFileName || null,
                 sampleIsSent: sample?.isSent || false,
                 sampleSentCount: sample?.sentCount || 0,
                 sampleFailedCount: sample?.failedCount || 0,
@@ -937,6 +952,7 @@ export const getBroadcast: RequestHandler = async (req, res) => {
                 device: { select: { name: true } },
                 schedule: true,
                 mediaPath: true,
+                mediaFileName: true,
                 message: true,
                 sentCount: true,
                 failedCount: true,
@@ -1123,7 +1139,12 @@ export const updateBroadcast: RequestHandler = async (req, res) => {
                         set: recipients,
                     },
                     isSent: new Date(schedule).getTime() < new Date().getTime() ? true : false,
-                    mediaPath: req.file?.path,
+                    ...(req.file
+                        ? {
+                              mediaPath: req.file.path,
+                              mediaFileName: sanitizeMediaFileName(req.file.originalname),
+                          }
+                        : {}),
                     updatedAt: new Date(),
                     // Reset retry fields saat update
                     attemptCount: 0,
@@ -1218,6 +1239,182 @@ export const updateBroadcastMessage: RequestHandler = async (req, res) => {
         }
 
         return res.status(200).json({ message: 'Pesan jadwal berhasil diperbarui' });
+    } catch (error) {
+        logger.error(error);
+        return res.status(500).json({ message: 'Internal server error' });
+    }
+};
+
+const getEditableBroadcastMediaTarget = async (req: Express.Request, id: string) => {
+    return prisma.broadcast.findFirst({
+        where: {
+            id,
+            device: accessibleDeviceWhere(
+                req.authenticatedUser.pkId,
+                req.privilege?.pkId,
+            ),
+        },
+        select: {
+            pkId: true,
+            isSent: true,
+            schedule: true,
+            mediaPath: true,
+            mediaFileName: true,
+            device: { select: { id: true } },
+        },
+    });
+};
+
+const validateEditableBroadcastMediaTarget = (
+    broadcast: Awaited<ReturnType<typeof getEditableBroadcastMediaTarget>>,
+): { status: number; message: string } | null => {
+    if (!broadcast) return { status: 404, message: 'Jadwal tidak ditemukan' };
+    if (broadcast.isSent) {
+        return { status: 409, message: 'Media pesan yang sudah terkirim tidak dapat diedit' };
+    }
+    if (broadcast.schedule.getTime() <= Date.now()) {
+        return {
+            status: 409,
+            message: 'Jadwal sudah memasuki waktu pengiriman dan tidak dapat diedit',
+        };
+    }
+    return null;
+};
+
+export const updateBroadcastMedia: RequestHandler = async (req, res) => {
+    const id = req.params.id;
+    if (!isUUID(id)) {
+        return res.status(400).json({ message: 'Invalid broadcastId' });
+    }
+
+    try {
+        const broadcast = await getEditableBroadcastMediaTarget(req, id);
+        const invalidTarget = validateEditableBroadcastMediaTarget(broadcast);
+        if (invalidTarget) {
+            return res.status(invalidTarget.status).json({ message: invalidTarget.message });
+        }
+
+        // Pin Multer's destination to the authorized device. Do not trust a
+        // multipart deviceId or x-device-id value for filesystem paths.
+        (req as Express.Request & { authorizedMediaDeviceId?: string })
+            .authorizedMediaDeviceId = broadcast!.device.id;
+
+        diskUpload.single('media')(req, res, async (uploadError: any) => {
+            if (uploadError) {
+                return res.status(400).json({
+                    message: uploadError?.message || 'File media tidak valid',
+                });
+            }
+
+            const uploadedPath = req.file?.path;
+            if (!uploadedPath) {
+                return res.status(400).json({ message: 'File media wajib dipilih' });
+            }
+
+            try {
+                const now = new Date();
+                const updated = await prisma.broadcast.updateMany({
+                    where: {
+                        pkId: broadcast!.pkId,
+                        isSent: false,
+                        schedule: { gt: now },
+                    },
+                    data: {
+                        mediaPath: uploadedPath,
+                        mediaFileName: sanitizeMediaFileName(req.file!.originalname),
+                        updatedAt: now,
+                    },
+                });
+
+                if (updated.count === 0) {
+                    await cleanupMediaFilesIfUnreferenced(
+                        [uploadedPath],
+                        'rejected-scheduled-media-update',
+                    );
+                    return res.status(409).json({
+                        message:
+                            'Jadwal sudah mulai diproses. Muat ulang untuk melihat status terbaru',
+                    });
+                }
+
+                await cleanupMediaFilesIfUnreferenced(
+                    [broadcast!.mediaPath],
+                    'replaced-scheduled-media',
+                );
+
+                return res.status(200).json({
+                    message: broadcast!.mediaPath
+                        ? 'Media jadwal berhasil diganti'
+                        : 'Media berhasil ditambahkan ke jadwal',
+                    mediaPath: uploadedPath,
+                    mediaFileName: sanitizeMediaFileName(req.file!.originalname),
+                });
+            } catch (error) {
+                await cleanupMediaFilesIfUnreferenced(
+                    [uploadedPath],
+                    'failed-scheduled-media-update',
+                );
+                logger.error(error);
+                return res.status(500).json({ message: 'Internal server error' });
+            }
+        });
+    } catch (error) {
+        logger.error(error);
+        return res.status(500).json({ message: 'Internal server error' });
+    }
+};
+
+export const removeBroadcastMedia: RequestHandler = async (req, res) => {
+    const id = req.params.id;
+    if (!isUUID(id)) {
+        return res.status(400).json({ message: 'Invalid broadcastId' });
+    }
+
+    try {
+        const broadcast = await getEditableBroadcastMediaTarget(req, id);
+        const invalidTarget = validateEditableBroadcastMediaTarget(broadcast);
+        if (invalidTarget) {
+            return res.status(invalidTarget.status).json({ message: invalidTarget.message });
+        }
+
+        if (!broadcast!.mediaPath) {
+            return res.status(200).json({
+                message: 'Jadwal ini tidak memiliki media',
+                mediaPath: null,
+                mediaFileName: null,
+            });
+        }
+
+        const now = new Date();
+        const updated = await prisma.broadcast.updateMany({
+            where: {
+                pkId: broadcast!.pkId,
+                isSent: false,
+                schedule: { gt: now },
+            },
+            data: {
+                mediaPath: null,
+                mediaFileName: null,
+                updatedAt: now,
+            },
+        });
+
+        if (updated.count === 0) {
+            return res.status(409).json({
+                message: 'Jadwal sudah mulai diproses. Muat ulang untuk melihat status terbaru',
+            });
+        }
+
+        await cleanupMediaFilesIfUnreferenced(
+            [broadcast!.mediaPath],
+            'removed-scheduled-media',
+        );
+
+        return res.status(200).json({
+            message: 'Media berhasil dihapus dari jadwal',
+            mediaPath: null,
+            mediaFileName: null,
+        });
     } catch (error) {
         logger.error(error);
         return res.status(500).json({ message: 'Internal server error' });
@@ -1710,6 +1907,7 @@ schedule.scheduleJob('* * * * *', async () => {
                     jid,
                     textPayload,
                     broadcast.mediaPath,
+                    broadcast.mediaFileName,
                     3 // max retries per message
                 );
 
@@ -1817,6 +2015,10 @@ schedule.scheduleJob('* * * * *', async () => {
                             deviceId: broadcast.device.pkId,
                             contactId: contact?.pkId ?? null,
                             mediaPath: broadcast.mediaPath || null,
+                            fileName: resolveMediaFileName(
+                                broadcast.mediaFileName,
+                                broadcast.mediaPath,
+                            ) || null,
                             broadcastId: broadcast.pkId,
                             broadcastType: broadcast.broadcastType || null,
                             isGroup: jid.includes('@g.us'),
@@ -1836,6 +2038,10 @@ schedule.scheduleJob('* * * * *', async () => {
                             deviceId: broadcast.device.pkId,
                             contactId: contact?.pkId ?? null,
                             mediaPath: broadcast.mediaPath || null,
+                            fileName: resolveMediaFileName(
+                                broadcast.mediaFileName,
+                                broadcast.mediaPath,
+                            ) || null,
                             broadcastId: broadcast.pkId,
                             broadcastType: broadcast.broadcastType || null,
                             isGroup: jid.includes('@g.us'),

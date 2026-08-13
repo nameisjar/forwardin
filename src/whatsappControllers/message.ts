@@ -52,6 +52,38 @@ const whatsappMediaHttpsAgent = new https.Agent({
     maxSockets: 20,
 });
 
+// Baileys can replay the same messages.upsert item during reconnects or emit it
+// through more than one upsert batch. Persistence is already idempotent, but a
+// repeated socket emission would still create duplicate browser notifications.
+const INCOMING_EVENT_DEDUP_TTL_MS = 10 * 60 * 1000;
+const MAX_RECENT_INCOMING_EVENTS = 10_000;
+const recentIncomingSocketEvents = new Map<string, number>();
+
+const shouldEmitIncomingSocketEvent = (
+    sessionId: string,
+    messageId: string,
+    now = Date.now(),
+) => {
+    const key = `${sessionId}:${messageId}`;
+    const expiresAt = recentIncomingSocketEvents.get(key);
+    if (expiresAt && expiresAt > now) return false;
+
+    recentIncomingSocketEvents.set(key, now + INCOMING_EVENT_DEDUP_TTL_MS);
+
+    if (recentIncomingSocketEvents.size > MAX_RECENT_INCOMING_EVENTS) {
+        for (const [recentKey, recentExpiresAt] of recentIncomingSocketEvents) {
+            if (recentExpiresAt <= now) recentIncomingSocketEvents.delete(recentKey);
+        }
+        while (recentIncomingSocketEvents.size > MAX_RECENT_INCOMING_EVENTS) {
+            const oldestKey = recentIncomingSocketEvents.keys().next().value;
+            if (!oldestKey) break;
+            recentIncomingSocketEvents.delete(oldestKey);
+        }
+    }
+
+    return true;
+};
+
 // Baileys and the application currently resolve different generations of the
 // Node Buffer declarations. Copy binary values at API boundaries so Node's
 // newer crypto/fs types always receive a plain ArrayBuffer-backed view.
@@ -748,6 +780,10 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                                     // ✅ PERFORMANCE FIX: Simpan pesan DULU tanpa profile picture (instant)
                                     // Profile picture akan di-fetch di background dan di-update kemudian
                                     const encryptedIncomingText = encryptMessage(messageText);
+                                    const existingIncomingMessage = await prisma.incomingMessage.findUnique({
+                                        where: { id: message.key.id! },
+                                        select: { id: true },
+                                    });
                                     const incomingMessage = await prisma.incomingMessage.upsert({
                                         where: { id: message.key.id! },
                                         create: {
@@ -887,21 +923,35 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                                         isGroup: jid.includes('@g.us'),
                                     };
                                     
-                                    io.to(`session:${sessionId}`).emit(emitEventName, emitPayload);
-                                    
-                                    logger.info(
-                                        { 
-                                            sessionId, 
-                                            from: redactPhone(jid),
-                                            participant: redactPhone(participant || ''),
-                                            pushName, 
-                                            groupName, 
-                                            messageId: message.key.id,
-                                            socketEventEmitted: emitEventName,
-                                            connectedClients: io.sockets.sockets.size
-                                        },
-                                        'Incoming message saved and socket event emitted'
-                                    );
+                                    if (
+                                        !existingIncomingMessage &&
+                                        shouldEmitIncomingSocketEvent(sessionId, incomingMessage.id)
+                                    ) {
+                                        io.to(`session:${sessionId}`).emit(emitEventName, emitPayload);
+
+                                        logger.info(
+                                            {
+                                                sessionId,
+                                                from: redactPhone(jid),
+                                                participant: redactPhone(participant || ''),
+                                                pushName,
+                                                groupName,
+                                                messageId: message.key.id,
+                                                socketEventEmitted: emitEventName,
+                                                connectedClients: io.sockets.sockets.size,
+                                            },
+                                            'Incoming message saved and socket event emitted',
+                                        );
+                                    } else {
+                                        logger.debug(
+                                            {
+                                                sessionId,
+                                                messageId: incomingMessage.id,
+                                                alreadyPersisted: Boolean(existingIncomingMessage),
+                                            },
+                                            'Skipped duplicate incoming socket event',
+                                        );
+                                    }
                                 } catch (saveError: any) {
                                     // Handle duplicate key error (message already exists)
                                     if (saveError?.code === 'P2002') {

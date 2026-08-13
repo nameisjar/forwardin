@@ -1371,6 +1371,7 @@ export const getDeviceOutboxConversations: RequestHandler = async (req, res) => 
                 to: true,
                 message: true,
                 mediaPath: true,
+                fileName: true,
                 status: true,
                 createdAt: true,
                 isGroup: true,

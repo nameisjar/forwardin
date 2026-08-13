@@ -14,11 +14,13 @@ router.get('/:broadcastId/replies', controller.getBrodcastReplies);
 // UPDATE operations
 router.put('/:id', controller.updateBroadcast);
 router.patch('/:id/message', controller.updateBroadcastMessage);
+router.patch('/:id/media', controller.updateBroadcastMedia);
 router.patch('/:id/status', controller.updateBroadcastStatus);
 
 // DELETE operations
 router.delete('/bulk', controller.bulkDeleteBroadcasts);
 router.delete('/by-name', controller.deleteBroadcastsByName);
+router.delete('/:id/media', controller.removeBroadcastMedia);
 router.delete('/', controller.deleteBroadcasts);
 
 // NOTE: CREATE operations (POST) are handled by deviceApi routes:

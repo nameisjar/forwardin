@@ -509,6 +509,7 @@ model Broadcast {
   delay         Int
   isSent        Boolean  @default(false)
   mediaPath     String?
+  mediaFileName String?  @map("media_file_name") @db.VarChar(255)
   broadcastType String?  @map("broadcast_type") @db.VarChar(20) // 'broadcast' | 'reminder' | 'feedback' | 'recurrence'
   deviceId      Int
   device        Device   @relation(fields: [deviceId], references: [pkId], onDelete: Cascade)

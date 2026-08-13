@@ -1,7 +1,6 @@
 import multer from 'multer';
 import path from 'path';
 import fs from 'fs';
-import prisma from '../utils/db'; // lightweight import (already pooled)
 
 // 🔒 Allowed MIME types for file upload security
 const ALLOWED_MIME_TYPES = [
@@ -78,9 +77,22 @@ const memoryStorage = multer.memoryStorage();
 // Resolve device identifier (UUID) best-effort synchronously/with cache.
 // We cannot perform async DB calls here, so if we only have a numeric pkId we keep it.
 // Prefer the explicit device UUID passed via body / header.
-function resolveDeviceSlug(req: any): string {
+type AuthorizedMediaRequest = {
+    authorizedMediaDeviceId?: string;
+    body?: Record<string, string | number | undefined>;
+    headers?: Record<string, string | string[] | undefined>;
+    authenticatedDevice?: { deviceId?: string | number };
+};
+
+function resolveDeviceSlug(req: AuthorizedMediaRequest): string {
+    // Controllers that authorize a resource before upload can pin the target
+    // device here so a multipart field/header cannot choose the destination.
+    if (req.authorizedMediaDeviceId) {
+        return String(req.authorizedMediaDeviceId).trim();
+    }
+
     // Explicit from multipart body
-    let raw = req.body?.deviceId || req.headers['x-device-id'];
+    let raw = req.body?.deviceId || req.headers?.['x-device-id'];
     if (!raw && req.authenticatedDevice?.deviceId) {
         // numeric pkId; keep as-is (will differ from UUID but avoids undefined)
         raw = req.authenticatedDevice.deviceId;

@@ -24,6 +24,7 @@ import axios from 'axios';
 import https from 'https';
 import { sendGenericMessage } from '../services/messageSender';
 import { createTrackedMessageId } from '../utils/outgoingMessageId';
+import { sanitizeMediaFileName } from '../utils/mediaFileName';
 
 const PROFILE_PICTURE_CACHE_TTL_MS = 5 * 60 * 1000;
 const PROFILE_PICTURE_MAX_BYTES = 5 * 1024 * 1024;
@@ -2161,6 +2162,9 @@ export const createBroadcast: RequestHandler = async (req, res) => {
                         broadcastType: 'broadcast', // 🔥 Set type for AdminSentHistory
                         recipients: { set: recipients },
                         mediaPath: req.file?.path,
+                        mediaFileName: req.file
+                            ? sanitizeMediaFileName(req.file.originalname)
+                            : null,
                     },
                 });
                 res.status(201).json({ message: 'Broadcast created successfully' });
@@ -2954,6 +2958,9 @@ export const createBroadcastFeedback: RequestHandler = async (req, res) => {
                                 set: recipientArray,
                             },
                             mediaPath: req.file?.path,
+                            mediaFileName: req.file
+                                ? sanitizeMediaFileName(req.file.originalname)
+                                : null,
                         },
                     });
                 }
@@ -3132,6 +3139,9 @@ export const createBroadcastReminder: RequestHandler = async (req, res) => {
                                 set: recipients,
                             },
                             mediaPath: req.file?.path,
+                            mediaFileName: req.file
+                                ? sanitizeMediaFileName(req.file.originalname)
+                                : null,
                         },
                     });
                 }
@@ -3226,6 +3236,9 @@ export const createBroadcastScheduled: RequestHandler = async (req, res) => {
                     broadcastType: 'recurrence', // 🔥 Set type for AdminSentHistory
                     recipients: { set: recipients },
                     mediaPath: req.file?.path,
+                    mediaFileName: req.file
+                        ? sanitizeMediaFileName(req.file.originalname)
+                        : null,
                 });
 
                 switch (recurrence) {
@@ -3428,6 +3441,9 @@ export const createBroadcastReminderAlgo: RequestHandler = async (req, res) => {
                                 set: recipientArray,
                             },
                             mediaPath: req.file?.path,
+                            mediaFileName: req.file
+                                ? sanitizeMediaFileName(req.file.originalname)
+                                : null,
                         },
                     });
                 }
