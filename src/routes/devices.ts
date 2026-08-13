@@ -16,6 +16,7 @@ router.get('/:deviceId', controller.getDevice);
 router.get('/api-key/:deviceId', controller.generateApiKeyDevice);
 router.put('/:deviceId', controller.updateDevice);
 router.delete('/', controller.deleteDevices);
+router.post('/:deviceId/logout', controller.logoutDevice);
 router.post('/:deviceId/access-token', controller.issueDeviceAccessToken);
 
 // Inbox - incoming messages (persists across session reconnects)

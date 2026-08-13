@@ -7,6 +7,7 @@ import makeWASocket, {
     makeCacheableSignalKeyStore,
     proto,
     fetchLatestBaileysVersion,
+    S_WHATSAPP_NET,
 } from '@whiskeysockets/baileys';
 import prisma from './utils/db';
 import { toDataURL, toString as qrToString } from 'qrcode';
@@ -60,8 +61,14 @@ import {
     type SendMessageOptions,
 } from './services/messageSender';
 
+export type SessionDestroyResult = {
+    logoutAttempted: boolean;
+    logoutSucceeded: boolean;
+    failures: string[];
+};
+
 type Instance = WASocket & {
-    destroy: (logout?: boolean, purgeAuth?: boolean) => Promise<void>;
+    destroy: (logout?: boolean, purgeAuth?: boolean) => Promise<SessionDestroyResult>;
     store: Store;
     deviceId: number;
     generation: number;
@@ -82,6 +89,10 @@ const reachoutTimelockFetchTimestamps = new Map<string, number>();
 const RECIPIENT_463_COOLDOWN_MS = Math.max(
     5_000,
     Number(process.env.WHATSAPP_463_RECIPIENT_COOLDOWN_MS || 60_000),
+);
+const REMOTE_LOGOUT_TIMEOUT_MS = Math.max(
+    5_000,
+    Number(process.env.WHATSAPP_LOGOUT_TIMEOUT_MS || 20_000),
 );
 const REACHOUT_TIMELOCK_REFRESH_MS = Math.max(
     5_000,
@@ -493,17 +504,48 @@ async function createInstanceInternal(
             closeSocketTransport(sock);
             return { success: true };
         }
-        
+
         try {
-            detachSocketListeners(sock);
-            await sock.logout();
+            const companionJid = sock.user?.id;
+            if (!companionJid) {
+                return { success: false, error: 'Session belum terautentikasi' };
+            }
+            if (!sock.ws.isOpen) {
+                return { success: false, error: 'Koneksi WhatsApp tidak terbuka' };
+            }
+
+            // Baileys' sock.logout() only writes the removal stanza to the
+            // websocket. Using query() waits for WhatsApp's IQ response, so a
+            // successful result means the companion-device removal was
+            // acknowledged by the server before local credentials are purged.
+            await sock.query(
+                {
+                    tag: 'iq',
+                    attrs: {
+                        to: S_WHATSAPP_NET,
+                        type: 'set',
+                        id: sock.generateMessageTag(),
+                        xmlns: 'md',
+                    },
+                    content: [
+                        {
+                            tag: 'remove-companion-device',
+                            attrs: {
+                                jid: companionJid,
+                                reason: 'user_initiated',
+                            },
+                        },
+                    ],
+                },
+                REMOTE_LOGOUT_TIMEOUT_MS,
+            );
+
+            // The server has acknowledged removal. Retire the local transport
+            // without firing the normal reconnect handler.
+            closeSocketTransport(sock);
             return { success: true };
         } catch (err: any) {
-            // Ignore "Connection Closed" error karena memang expected saat destroy
-            if (err?.message === 'Connection Closed') {
-                return { success: true }; // Expected, not an error
-            }
-            logger.error({ error: err, sessionId }, 'Error during logout');
+            logger.error({ error: err, sessionId }, 'Remote WhatsApp logout was not acknowledged');
             return { success: false, error: err?.message || 'Unknown error' };
         }
     };
@@ -516,7 +558,29 @@ async function createInstanceInternal(
                 { sessionId, deviceId },
                 'Ignoring cleanup from a superseded WhatsApp instance',
             );
-            return;
+            return {
+                logoutAttempted: false,
+                logoutSucceeded: false,
+                failures: ['Instance superseded'],
+            };
+        }
+
+        // A remote logout must finish before the instance, auth rows, or socket
+        // state are removed. Otherwise a closed websocket can be mistaken for
+        // a successful unlink while the device remains listed in WhatsApp.
+        const logoutResult = await cleanupWhatsAppSession(logout);
+        if (!logoutResult.success) {
+            clearManualLogout(deviceId);
+            const failure = `Logout: ${logoutResult.error || 'Tidak dikonfirmasi WhatsApp'}`;
+            logger.warn(
+                { sessionId, deviceId, failure },
+                'Keeping local credentials because remote WhatsApp logout failed',
+            );
+            return {
+                logoutAttempted: logout,
+                logoutSucceeded: false,
+                failures: [failure],
+            };
         }
 
         const reconnectTimer = reconnectTimers.get(sessionId);
@@ -557,7 +621,6 @@ async function createInstanceInternal(
         
         // 🔧 REFACTORED: Run all cleanup operations in parallel with individual error handling
         const cleanupResults = await Promise.allSettled([
-            cleanupWhatsAppSession(logout),
             purgeAuth
                 ? cleanupWhatsAppGroups()
                 : Promise.resolve({ success: true } as { success: boolean; error?: string }),
@@ -570,15 +633,9 @@ async function createInstanceInternal(
         ]);
         
         // 🔧 Log summary of cleanup results
-        const [logoutResult, groupsResult, dbResult, mediaResult] = cleanupResults;
+        const [groupsResult, dbResult, mediaResult] = cleanupResults;
         
         const failures: string[] = [];
-        
-        if (logoutResult.status === 'fulfilled' && !logoutResult.value.success) {
-            failures.push(`Logout: ${logoutResult.value.error}`);
-        } else if (logoutResult.status === 'rejected') {
-            failures.push(`Logout: ${logoutResult.reason?.message || 'Unknown error'}`);
-        }
         
         if (groupsResult.status === 'fulfilled' && !groupsResult.value.success) {
             failures.push(`WhatsApp Groups: ${groupsResult.value.error}`);
@@ -608,6 +665,12 @@ async function createInstanceInternal(
                     : '✅ Session transport retired; credentials and persisted data retained',
             );
         }
+
+        return {
+            logoutAttempted: logout,
+            logoutSucceeded: true,
+            failures,
+        };
     };
 
     const handleConnectionClose = async () => {
@@ -1791,11 +1854,109 @@ export async function sendTrackedSessionMessage(
     return queued.result;
 }
 
-export async function deleteInstance(sessionId: string) {
-    await instances.get(sessionId)?.destroy();
+export async function deleteInstance(sessionId: string): Promise<{
+    instanceFound: boolean;
+    logoutAttempted: boolean;
+    logoutSucceeded: boolean;
+    failures: string[];
+}> {
+    const instance = instances.get(sessionId);
+    if (!instance) {
+        return {
+            instanceFound: false,
+            logoutAttempted: false,
+            logoutSucceeded: false,
+            failures: ['Instance WhatsApp tidak aktif'],
+        };
+    }
+
+    const result = await instance.destroy();
+    return { instanceFound: true, ...result };
 }
 
 // 🆕 Export helper untuk mark SSE as aborted
+/**
+ * Logout a linked device with server acknowledgement. If the process no longer
+ * has an active socket, restore it from persisted credentials and wait briefly
+ * for an authenticated connection before sending the removal query.
+ */
+export async function logoutDeviceSession(
+    sessionId: string,
+    deviceId: number,
+): Promise<{
+    instanceFound: boolean;
+    logoutAttempted: boolean;
+    logoutSucceeded: boolean;
+    failures: string[];
+}> {
+    if (!instances.has(sessionId)) {
+        try {
+            const config = await prisma.session.findFirst({
+                where: {
+                    sessionId,
+                    id: { startsWith: SESSION_CONFIG_ID },
+                    deviceId,
+                },
+                select: { data: true },
+            });
+            if (!config) {
+                return {
+                    instanceFound: false,
+                    logoutAttempted: false,
+                    logoutSucceeded: false,
+                    failures: ['Kredensial session WhatsApp tidak ditemukan'],
+                };
+            }
+
+            const parsedConfig = JSON.parse(config.data || '{}');
+            const { readIncomingMessages, ...socketConfig } = parsedConfig;
+            await createInstance({
+                sessionId,
+                deviceId,
+                readIncomingMessages,
+                socketConfig,
+            });
+        } catch (error: any) {
+            return {
+                instanceFound: false,
+                logoutAttempted: false,
+                logoutSucceeded: false,
+                failures: [`Gagal memulihkan koneksi WhatsApp: ${error?.message || 'Unknown error'}`],
+            };
+        }
+    }
+
+    const deadline = Date.now() + REMOTE_LOGOUT_TIMEOUT_MS;
+    while (Date.now() < deadline) {
+        const instance = instances.get(sessionId);
+        if (instance?.ws.isOpen) {
+            const result = await deleteInstance(sessionId);
+            const remainingInstance = instances.get(sessionId);
+            if (!result.logoutSucceeded && remainingInstance && !remainingInstance.ws.isOpen) {
+                // A failed logout may coincide with a transport close. Retire
+                // that dead socket without purging auth so a retry can restore it.
+                await remainingInstance.destroy(false, false);
+            }
+            return result;
+        }
+        await delay(250);
+    }
+
+    const inactiveInstance = instances.get(sessionId);
+    if (inactiveInstance) {
+        // Stop the inactive connection attempt, but retain credentials so the
+        // next logout request can restore it cleanly.
+        await inactiveInstance.destroy(false, false);
+    }
+
+    return {
+        instanceFound: Boolean(inactiveInstance),
+        logoutAttempted: false,
+        logoutSucceeded: false,
+        failures: ['Koneksi WhatsApp tidak siap untuk mengirim permintaan logout'],
+    };
+}
+
 export { markSSEAborted };
 
 export async function verifyJid(session: Instance, jid: string, type: string = 'number') {

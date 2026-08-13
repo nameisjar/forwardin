@@ -9,7 +9,13 @@ import path from 'path';
 import schedule from 'node-schedule';
 import { isUUID } from '../utils/uuidChecker';
 import { generateDeviceAccessToken } from '../utils/jwtGenerator';
-import { getInstance, verifyInstance } from '../whatsapp';
+import {
+    clearManualLogout,
+    getInstance,
+    logoutDeviceSession,
+    markManualLogout,
+    verifyInstance,
+} from '../whatsapp';
 import { getConnectionStatus, isReconnecting } from '../utils/sessionState';
 import { deriveDeviceRuntimeStatus } from '../utils/connectionPolicy';
 import { hashApiKey } from '../utils/apiKeyHash';
@@ -352,6 +358,99 @@ export const updateDevice: RequestHandler = async (req, res) => {
     }
 };
 
+export const logoutDevice: RequestHandler = async (req, res) => {
+    try {
+        const deviceId = req.params.deviceId;
+        if (!isUUID(deviceId)) {
+            return res.status(400).json({ message: 'Invalid deviceId' });
+        }
+
+        const device = await prisma.device.findFirst({
+            where: {
+                id: deviceId,
+                ...ownedDeviceWhere(req.authenticatedUser.pkId, req.privilege?.pkId),
+            },
+            include: {
+                sessions: {
+                    select: { sessionId: true },
+                },
+            },
+        });
+
+        if (!device) {
+            return res.status(404).json({ message: 'Device not found' });
+        }
+
+        const sessionIds = [
+            ...new Set(
+                device.sessions
+                    .map((session) => String(session.sessionId || '').trim())
+                    .filter(Boolean),
+            ),
+        ];
+        if (sessionIds.length > 0) {
+            markManualLogout(device.pkId);
+        }
+
+        const logoutResults = await Promise.all(
+            sessionIds.map((sessionId) => logoutDeviceSession(sessionId, device.pkId)),
+        );
+        const remoteLogoutConfirmed =
+            sessionIds.length > 0 && logoutResults.every((result) => result.logoutSucceeded);
+
+        const failures = logoutResults.flatMap((result) => result.failures || []);
+        if (sessionIds.length > 0 && !remoteLogoutConfirmed) {
+            clearManualLogout(device.pkId);
+            logger.warn(
+                { deviceId, devicePkId: device.pkId, sessionIds, failures },
+                'Remote WhatsApp logout failed; retaining local credentials',
+            );
+            return res.status(502).json({
+                message:
+                    'WhatsApp belum mengonfirmasi logout. Session lokal tetap disimpan agar dapat dicoba kembali.',
+                remoteLogoutConfirmed: false,
+                localSessionCleared: false,
+                retryable: true,
+                failures,
+            });
+        }
+
+        // Credentials are only removed after WhatsApp acknowledges the remote
+        // unlink. The device and application data remain available for pairing.
+        await prisma.$transaction([
+            prisma.session.deleteMany({ where: { deviceId: device.pkId } }),
+            prisma.device.update({
+                where: { pkId: device.pkId },
+                data: { status: 'close', updatedAt: new Date() },
+            }),
+        ]);
+
+        logger.info(
+            {
+                deviceId,
+                devicePkId: device.pkId,
+                sessionIds,
+                remoteLogoutConfirmed,
+                failures,
+            },
+            'Device WhatsApp logout completed',
+        );
+
+        return res.status(200).json({
+            message: remoteLogoutConfirmed
+                ? 'WhatsApp berhasil logout. Device dan data aplikasi tetap disimpan.'
+                : sessionIds.length === 0
+                  ? 'Device sudah tidak memiliki session WhatsApp aktif.'
+                  : 'Session lokal berhasil dibersihkan, tetapi logout pada WhatsApp tidak dapat dikonfirmasi.',
+            remoteLogoutConfirmed,
+            localSessionCleared: true,
+        });
+    } catch (error) {
+        logger.error({ error, deviceId: req.params.deviceId }, 'Failed to logout WhatsApp device');
+        return res.status(500).json({ message: 'Gagal logout WhatsApp' });
+    }
+};
+
 export const deleteDevices: RequestHandler = async (req, res) => {
     try {
         const deviceIds = req.body.deviceIds;
@@ -362,9 +461,6 @@ export const deleteDevices: RequestHandler = async (req, res) => {
             return res.status(400).json({ message: 'Invalid deviceIds' });
         }
 
-        // Import WhatsApp functions for cleanup
-        const { deleteInstance, verifyInstance } = require('../whatsapp');
-
         const devicePromises = deviceIds.map(async (deviceId: string) => {
             // Verify ownership before deletion
             const device = await prisma.device.findFirst({
@@ -372,21 +468,40 @@ export const deleteDevices: RequestHandler = async (req, res) => {
                     id: deviceId,
                     ...ownedDeviceWhere(userId, privilegeId),
                 },
+                include: {
+                    sessions: {
+                        select: { sessionId: true },
+                    },
+                },
             });
 
             if (!device) {
-                return { success: false, deviceId };
+                return { success: false, deviceId, reason: 'not_found' as const };
             }
 
-            try {
-                // Clean up WhatsApp instance if exists
-                if (verifyInstance(deviceId)) {
-                    // console.log(`Cleaning up WhatsApp instance for device: ${deviceId}`);
-                    await deleteInstance(deviceId);
+            // Unlink the companion device before deleting its credentials. If
+            // WhatsApp cannot acknowledge the request, retain the device so the
+            // user can retry instead of leaving a ghost linked device behind.
+            const sessionIds = [
+                ...new Set(
+                    device.sessions
+                        .map((session) => String(session.sessionId || '').trim())
+                        .filter(Boolean),
+                ),
+            ];
+            if (sessionIds.length > 0) {
+                markManualLogout(device.pkId);
+                const logoutResults = await Promise.all(
+                    sessionIds.map((sessionId) => logoutDeviceSession(sessionId, device.pkId)),
+                );
+                if (logoutResults.some((result) => !result.logoutSucceeded)) {
+                    clearManualLogout(device.pkId);
+                    return {
+                        success: false,
+                        deviceId,
+                        reason: 'logout_failed' as const,
+                    };
                 }
-            } catch (error) {
-                // console.warn(`Warning: Could not cleanup WhatsApp instance for device ${deviceId}:`, error);
-                // Continue with deletion even if instance cleanup fails
             }
 
             // Delete device (cascade delete will handle WhatsApp groups automatically)
@@ -435,10 +550,21 @@ export const deleteDevices: RequestHandler = async (req, res) => {
             });
 
             // console.log(`Successfully deleted device: ${deviceId}`);
-            return { success: true };
+            return { success: true, deviceId, reason: null };
         });
 
         const deviceResults = await Promise.all(devicePromises);
+        const logoutFailedDeviceIds = deviceResults
+            .filter((result) => !result.success && result.reason === 'logout_failed')
+            .map((result) => result.deviceId);
+        if (logoutFailedDeviceIds.length > 0) {
+            return res.status(502).json({
+                message:
+                    'Device belum dihapus karena WhatsApp belum mengonfirmasi logout. Silakan coba kembali.',
+                deviceIds: logoutFailedDeviceIds,
+            });
+        }
+
         const hasFailures = deviceResults.some((result) => !result.success);
         
         if (hasFailures) {
