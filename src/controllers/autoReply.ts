@@ -1,7 +1,12 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { RequestHandler } from 'express';
 import prisma from '../utils/db';
-import { getInstance, getJid, sendMediaFile } from '../whatsapp';
+import {
+    getInstance,
+    getJid,
+    sendMediaFile,
+    sendTrackedSessionMessage,
+} from '../whatsapp';
 import logger from '../config/logger';
 import { replaceVariables } from '../utils/variableHelper';
 import { generateSlug } from '../utils/slug';
@@ -401,7 +406,8 @@ export async function sendAutoReply(sessionId: any, data: any) {
                     data,
                 );
             } else {
-                session.sendMessage(
+                await sendTrackedSessionMessage(
+                    session,
                     jid,
                     { text: replaceVariables(replyText, variables) },
                     { quoted: data },

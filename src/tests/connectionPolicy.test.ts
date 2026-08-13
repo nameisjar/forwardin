@@ -2,6 +2,7 @@ import { expect } from 'chai';
 import {
     deriveDeviceRuntimeStatus,
     getReconnectDelay,
+    isRecoverableConnectionConflict,
     normalizeConnectionUpdate,
 } from '../utils/connectionPolicy';
 
@@ -47,5 +48,13 @@ describe('WhatsApp connection policy', () => {
         expect(getReconnectDelay(1, 2000, 60000)).to.equal(2000);
         expect(getReconnectDelay(2, 2000, 60000)).to.equal(4000);
         expect(getReconnectDelay(10, 2000, 60000)).to.equal(60000);
+    });
+
+    it('allows only one controlled recovery for an explicit 401 stream conflict', () => {
+        expect(isRecoverableConnectionConflict(401, 'Stream Errored (conflict)', 0)).to.equal(true);
+        expect(isRecoverableConnectionConflict(401, 'Stream Errored (conflict)', 1)).to.equal(false);
+        expect(isRecoverableConnectionConflict(401, 'Logged Out', 0)).to.equal(false);
+        expect(isRecoverableConnectionConflict(401, 'Generic conflict', 0)).to.equal(false);
+        expect(isRecoverableConnectionConflict(440, 'Stream Errored (conflict)', 0)).to.equal(false);
     });
 });

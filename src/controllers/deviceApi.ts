@@ -3,23 +3,22 @@ import { getInstance, verifyJid, sendButtonMessage, getJid } from '../whatsapp';
 import logger from '../config/logger';
 import prisma, { serializePrisma } from '../utils/db';
 import { delay as delayMs } from '../utils/delay';
-import { proto } from '@whiskeysockets/baileys';
 import { diskUpload, memoryUpload } from '../config/multer';
 import { isUUID } from '../utils/uuidChecker';
 import fs from 'fs';
 import path from 'path';
-import { addWeeks, format } from 'date-fns'; // Anda bisa menggunakan date-fns atau moment.js untuk manipulasi tanggal
 import { generateMonthlyFeedbackPDFWithPuppeteer } from '../services/pdfGenerator';
 import { setDeviceAsPersonal, setDeviceAsShared } from '../services/rateLimiter';
 import { sendMonthlyFeedbackBatch } from '../services/monthlyFeedbackSender';
 import { redactPhone } from '../utils/logRedaction';
-import { encryptMessage, decryptOutgoingMessage, decryptOutgoingMessages, decryptBroadcast, decryptBroadcasts } from '../utils/messageEncryption';
+import { encryptMessage, decryptOutgoingMessage, decryptBroadcasts } from '../utils/messageEncryption';
 import { getSocketIO } from '../socket';
 import { deleteMessageReactions, saveMessageReaction } from '../services/messageReaction';
 import { cleanupMediaFilesIfUnreferenced } from '../services/mediaCleanup';
 import axios from 'axios';
 import https from 'https';
 import { sendGenericMessage } from '../services/messageSender';
+import { createTrackedMessageId } from '../utils/outgoingMessageId';
 
 const PROFILE_PICTURE_CACHE_TTL_MS = 5 * 60 * 1000;
 const PROFILE_PICTURE_MAX_BYTES = 5 * 1024 * 1024;
@@ -34,6 +33,75 @@ const profilePictureCache = new Map<
 >();
 
 type QueuedMediaType = 'image' | 'document' | 'audio' | 'video';
+
+async function markPendingMessageAsFailed(
+    messageId: string,
+    clearMedia = false,
+): Promise<void> {
+    await prisma.outgoingMessage.updateMany({
+        where: { id: messageId, status: { in: ['pending', 'error'] } },
+        data: {
+            status: 'error',
+            ...(clearMedia ? { mediaPath: null } : {}),
+            updatedAt: new Date(),
+        },
+    });
+}
+
+function createMessageIdConflictError(): Error & { code: string; statusCode: number } {
+    const error = new Error(
+        'ID pesan sudah digunakan untuk permintaan pengiriman yang berbeda.',
+    ) as Error & { code: string; statusCode: number };
+    error.code = 'MESSAGE_ID_CONFLICT';
+    error.statusCode = 409;
+    return error;
+}
+
+async function reserveInboxOutgoingMessage(params: {
+    data: any;
+    messageId: string;
+    sessionId: string;
+    deviceId: number;
+    jid: string;
+    messageText: string;
+    fileName?: string | null;
+}): Promise<{ created: boolean; message: any }> {
+    try {
+        const message = await prisma.outgoingMessage.create({
+            data: params.data,
+            include: { contact: true },
+        });
+        return { created: true, message };
+    } catch (error) {
+        if ((error as { code?: unknown })?.code !== 'P2002') throw error;
+
+        // A client keeps the same WhatsApp-compatible ID across an HTTP retry.
+        // The unique row is therefore also the idempotency boundary: a second
+        // request observes the first result and must never send another stanza.
+        const existing = await prisma.outgoingMessage.findUnique({
+            where: { id: params.messageId },
+            include: { contact: true },
+        });
+        if (!existing) throw error;
+
+        let existingText = '';
+        try {
+            existingText = String(decryptOutgoingMessage(existing).message || '');
+        } catch {
+            throw createMessageIdConflictError();
+        }
+
+        const sameRequest =
+            existing.sessionId === params.sessionId &&
+            existing.deviceId === params.deviceId &&
+            existing.to === params.jid &&
+            existingText === params.messageText &&
+            (params.fileName === undefined || existing.fileName === params.fileName);
+        if (!sameRequest) throw createMessageIdConflictError();
+
+        return { created: false, message: existing };
+    }
+}
 
 async function sendQueuedMediaRecipients(params: {
     session: any;
@@ -102,7 +170,7 @@ export const sendMessages: RequestHandler = async (req, res) => {
             return res.status(400).json({ message: 'Session not found' });
         }
 
-        const results: { index: number; result?: any }[] = [];
+        const results: { index: number; result?: any; message?: any }[] = [];
         const errors: {
             index: number;
             error: string;
@@ -208,38 +276,17 @@ export const sendMessages: RequestHandler = async (req, res) => {
                     throw new Error('Empty message payload');
                 }
 
-                // kirim pesan. Banyak wrapper Baileys menggunakan sendMessage(jid, payload, options)
-                const queuedResult = await sendGenericMessage(
-                    session,
-                    (req.authenticatedDevice as any).deviceUuid,
-                    jid,
-                    payload,
-                    { ...(options ?? {}), persist: false },
+                // Reserve the WhatsApp ID before sending. ACK/NACK events may
+                // arrive before sendMessage resolves, so the receipt handler
+                // needs a pending row to update first.
+                const messageText =
+                    typeof payload === 'string'
+                        ? payload
+                        : payload?.text || JSON.stringify(payload);
+                const messageId = createTrackedMessageId(
+                    options?.messageId,
+                    session?.user?.id,
                 );
-                if (!queuedResult.success) {
-                    const sendError = new Error(
-                        queuedResult.error || 'Failed to send message',
-                    ) as Error & { code?: string; statusCode?: number };
-                    sendError.code = queuedResult.errorCode;
-                    sendError.statusCode = queuedResult.statusCode;
-                    throw sendError;
-                }
-                const result = queuedResult.result;
-                results.push({ index, result });
-                
-                // 🔥 CRITICAL: Save outgoing message to database BEFORE returning response
-                // This ensures message is available when frontend reloads
-                const messageText = typeof payload === 'string' ? payload : payload?.text || JSON.stringify(payload);
-                const waMessageId = result?.key?.id;
-                
-                if (!waMessageId) {
-                    logger.warn({ sessionId, jid }, '⚠️ No waMessageId in sendMessage result, message may not be tracked properly');
-                }
-                
-                logger.info({ sessionId, jid, waMessageId, messageText: messageText?.substring(0, 50) }, '💾 Attempting to save outgoing message to database...');
-                
-                // ✅ CRITICAL: Encrypt message before saving
-                const { encryptMessage } = await import('../utils/messageEncryption');
                 const encryptedMessage = encryptMessage(messageText);
                 const contactPhone = jid.split('@')[0].replace(/\D/g, '');
                 const contact = await prisma.contact.findFirst({
@@ -251,74 +298,95 @@ export const sendMessages: RequestHandler = async (req, res) => {
                     },
                     select: { pkId: true },
                 });
-                
-                try {
-                    const savedMessageId = waMessageId || `msg-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-                    const savedMessage = await prisma.outgoingMessage.upsert({
-                        where: { id: savedMessageId },
-                        update: {
-                            waMessageId,
-                            sessionId,
-                            deviceId: req.authenticatedDevice.deviceId,
-                            to: jid,
-                            message: encryptedMessage,
-                            status: 'server_ack',
-                            contactId: contact?.pkId || null,
-                            isGroup: type === 'group',
-                            updatedAt: new Date(),
-                        },
-                        create: {
-                            id: savedMessageId,
-                            waMessageId,
-                            sessionId,
-                            deviceId: req.authenticatedDevice.deviceId,
-                            to: jid,
-                            message: encryptedMessage,
-                            schedule: new Date(),
-                            status: 'server_ack', // Default status: terkirim ke server (1 centang)
-                            contactId: contact?.pkId || null,
-                            isGroup: type === 'group',
-                            readBy: [], // Initialize empty readBy array
-                        },
-                    });
 
-                    getSocketIO().to(`session:${sessionId}`).emit(`outgoing:${sessionId}`, {
-                        ...savedMessage,
+                const reservation = await reserveInboxOutgoingMessage({
+                    messageId,
+                    sessionId,
+                    deviceId: req.authenticatedDevice.deviceId,
+                    jid,
+                    messageText,
+                    data: {
+                        id: messageId,
+                        waMessageId: messageId,
+                        sessionId,
+                        deviceId: req.authenticatedDevice.deviceId,
+                        to: jid,
+                        message: encryptedMessage,
+                        schedule: new Date(),
+                        status: 'pending',
+                        contactId: contact?.pkId || null,
+                        isGroup: type === 'group',
+                        readBy: [],
+                    },
+                });
+
+                if (!reservation.created) {
+                    const responseMessage = {
+                        ...reservation.message,
                         message: messageText,
                         isOutgoing: true,
+                        idempotent: true,
+                    };
+                    results.push({
+                        index,
+                        result: {
+                            key: {
+                                id: reservation.message.waMessageId || reservation.message.id,
+                                remoteJid: jid,
+                                fromMe: true,
+                            },
+                            idempotent: true,
+                        },
+                        message: responseMessage,
                     });
-                    
-                    logger.info({ 
-                        sessionId, 
-                        jid, 
-                        waMessageId,
-                        savedId: savedMessage.id,
-                        isGroup: savedMessage.isGroup,
-                        pkId: savedMessage.pkId,
-                        toField: savedMessage.to, // ✅ DEBUG: Log 'to' field yang tersimpan
-                    }, '✅ Outgoing message SUCCESSFULLY saved to database');
-                } catch (dbError) {
-                    // ⚠️ Log detailed error for debugging
-                    logger.error({ 
-                        error: dbError, 
-                        errorMessage: dbError instanceof Error ? dbError.message : String(dbError),
-                        errorStack: dbError instanceof Error ? dbError.stack : undefined,
-                        sessionId, 
-                        jid, 
-                        waMessageId,
-                        messageData: {
-                            id: waMessageId || `msg-${Date.now()}`,
-                            waMessageId,
-                            sessionId,
-                            to: jid,
-                            messageLength: messageText?.length,
-                            isGroup: type === 'group'
-                        }
-                    }, '❌ FAILED to save outgoing message to database');
-                    
-                    // Don't fail the request - message was sent successfully
-                    // Frontend will use cache until message appears in DB
+                    continue;
                 }
+
+                const queuedResult = await sendGenericMessage(
+                    session,
+                    (req.authenticatedDevice as any).deviceUuid,
+                    jid,
+                    payload,
+                    { ...(options ?? {}), messageId, persist: false },
+                );
+                if (!queuedResult.success) {
+                    await markPendingMessageAsFailed(messageId);
+                    const sendError = new Error(
+                        queuedResult.error || 'Failed to send message',
+                    ) as Error & { code?: string; statusCode?: number };
+                    sendError.code = queuedResult.errorCode;
+                    sendError.statusCode = queuedResult.statusCode;
+                    throw sendError;
+                }
+
+                const result = queuedResult.result;
+                const returnedMessageId = result?.key?.id;
+                if (returnedMessageId && returnedMessageId !== messageId) {
+                    logger.warn(
+                        { sessionId, expectedMessageId: messageId, returnedMessageId },
+                        'WhatsApp returned a different message ID than the reserved ID',
+                    );
+                }
+
+                // A fast NACK may already have changed pending to error. Re-read
+                // and return that truth; never promote based on the HTTP result.
+                const savedMessage = await prisma.outgoingMessage.findUnique({
+                    where: { id: messageId },
+                    include: { contact: true },
+                });
+                if (!savedMessage) {
+                    throw new Error('Pesan keluar tidak ditemukan setelah dikirim');
+                }
+
+                const responseMessage = {
+                    ...savedMessage,
+                    message: messageText,
+                    isOutgoing: true,
+                };
+                getSocketIO()
+                    .to(`session:${sessionId}`)
+                    .emit(`outgoing:${sessionId}`, responseMessage);
+                results.push({ index, result, message: responseMessage });
             } catch (e) {
                 const msg = e instanceof Error ? e.message : String(e);
                 logger.error(e, `Failed to send message at index ${index}: ${msg}`);
@@ -335,9 +403,17 @@ export const sendMessages: RequestHandler = async (req, res) => {
             }
         }
 
-        const allErrorsAreControlled =
-            errors.length > 0 && errors.every((error) => error.statusCode === 423);
-        res.status(errors.length > 0 ? (allErrorsAreControlled ? 423 : 500) : 200).json({
+        const controlledStatus = errors[0]?.statusCode;
+        const allErrorsShareControlledStatus =
+            errors.length > 0 &&
+            typeof controlledStatus === 'number' &&
+            [409, 423, 503].includes(controlledStatus) &&
+            errors.every(error => error.statusCode === controlledStatus);
+        res.status(
+            errors.length > 0
+                ? (allErrorsShareControlledStatus ? controlledStatus : 500)
+                : 200,
+        ).json({
             ...(errors.length > 0 ? { message: errors[0].error } : {}),
             results,
             errors,
@@ -583,6 +659,9 @@ export const sendInboxMediaMessage: RequestHandler = async (req, res) => {
         }
 
         const uploadedPath = req.file?.path;
+        let trackedMessageId: string | undefined;
+        let reservationOwned = false;
+        let sendAccepted = false;
         try {
             const sessionId = req.authenticatedDevice.sessionId;
             const devicePkId = req.authenticatedDevice.deviceId;
@@ -618,25 +697,6 @@ export const sendInboxMediaMessage: RequestHandler = async (req, res) => {
                 ...(mediaType === 'audio' ? { ptt: false } : {}),
             };
 
-            const queuedResult = await sendGenericMessage(
-                session,
-                (req.authenticatedDevice as any).deviceUuid,
-                jid,
-                payload,
-                { persist: false },
-            );
-            if (!queuedResult.success) {
-                const sendError = new Error(
-                    queuedResult.error || 'Pengiriman media gagal',
-                ) as Error & { code?: string; statusCode?: number };
-                sendError.code = queuedResult.errorCode;
-                sendError.statusCode = queuedResult.statusCode;
-                throw sendError;
-            }
-            const result = queuedResult.result;
-            const messageId = result?.key?.id;
-            if (!messageId) throw new Error('WhatsApp tidak mengembalikan ID pesan');
-
             const placeholders: Record<string, string> = {
                 image: '[Gambar]',
                 video: '[Video]',
@@ -652,22 +712,19 @@ export const sendInboxMediaMessage: RequestHandler = async (req, res) => {
                 select: { pkId: true },
             });
             const mediaPath = req.file.path.replace(/\\/g, '/');
-            const savedMessage = await prisma.outgoingMessage.upsert({
-                where: { id: messageId },
-                update: {
-                    waMessageId: messageId,
-                    to: jid,
-                    message: encryptMessage(messageText),
-                    mediaPath,
-                    fileName: req.file.originalname,
-                    status: 'server_ack',
-                    sessionId,
-                    deviceId: devicePkId,
-                    contactId: contact?.pkId || null,
-                    isGroup,
-                    updatedAt: new Date(),
-                },
-                create: {
+            const messageId = createTrackedMessageId(
+                req.body.messageId,
+                session?.user?.id,
+            );
+            trackedMessageId = messageId;
+            const reservation = await reserveInboxOutgoingMessage({
+                messageId,
+                sessionId,
+                deviceId: devicePkId,
+                jid,
+                messageText,
+                fileName: req.file.originalname,
+                data: {
                     id: messageId,
                     waMessageId: messageId,
                     to: jid,
@@ -675,15 +732,77 @@ export const sendInboxMediaMessage: RequestHandler = async (req, res) => {
                     mediaPath,
                     fileName: req.file.originalname,
                     schedule: new Date(),
-                    status: 'server_ack',
+                    status: 'pending',
                     sessionId,
                     deviceId: devicePkId,
                     contactId: contact?.pkId || null,
                     isGroup,
                     readBy: [],
                 },
+            });
+
+            if (!reservation.created) {
+                // Multer has already materialized the retried upload. The first
+                // request owns its original media path, so remove only this
+                // redundant retry file.
+                if (mediaPath !== reservation.message.mediaPath) {
+                    await fs.promises.unlink(req.file.path).catch(() => undefined);
+                }
+                sendAccepted = true;
+                const responseMessage = {
+                    ...reservation.message,
+                    message: messageText,
+                    mediaType,
+                    isOutgoing: true,
+                    idempotent: true,
+                };
+                return res.status(200).json({
+                    result: {
+                        key: {
+                            id: reservation.message.waMessageId || reservation.message.id,
+                            remoteJid: jid,
+                            fromMe: true,
+                        },
+                        idempotent: true,
+                    },
+                    message: responseMessage,
+                });
+            }
+            reservationOwned = true;
+
+            const queuedResult = await sendGenericMessage(
+                session,
+                (req.authenticatedDevice as any).deviceUuid,
+                jid,
+                payload,
+                { messageId, persist: false },
+            );
+            if (!queuedResult.success) {
+                await markPendingMessageAsFailed(messageId, true);
+                const sendError = new Error(
+                    queuedResult.error || 'Pengiriman media gagal',
+                ) as Error & { code?: string; statusCode?: number };
+                sendError.code = queuedResult.errorCode;
+                sendError.statusCode = queuedResult.statusCode;
+                throw sendError;
+            }
+            sendAccepted = true;
+            const result = queuedResult.result;
+            const returnedMessageId = result?.key?.id;
+            if (returnedMessageId && returnedMessageId !== messageId) {
+                logger.warn(
+                    { sessionId, expectedMessageId: messageId, returnedMessageId },
+                    'WhatsApp returned a different media message ID than the reserved ID',
+                );
+            }
+
+            const savedMessage = await prisma.outgoingMessage.findUnique({
+                where: { id: messageId },
                 include: { contact: true },
             });
+            if (!savedMessage) {
+                throw new Error('Pesan media keluar tidak ditemukan setelah dikirim');
+            }
 
             const responseMessage = {
                 ...savedMessage,
@@ -694,7 +813,15 @@ export const sendInboxMediaMessage: RequestHandler = async (req, res) => {
             getSocketIO().to(`session:${sessionId}`).emit(`outgoing:${sessionId}`, responseMessage);
             return res.status(200).json({ result, message: responseMessage });
         } catch (error) {
-            if (uploadedPath) {
+            if (trackedMessageId && reservationOwned && !sendAccepted) {
+                await markPendingMessageAsFailed(trackedMessageId, true).catch(markError => {
+                    logger.error(
+                        { error: markError, messageId: trackedMessageId },
+                        'Failed to mark media message as error',
+                    );
+                });
+            }
+            if (uploadedPath && !sendAccepted) {
                 fs.promises.unlink(uploadedPath).catch(() => {});
             }
             logger.error({ error }, 'Failed to send Inbox media message');

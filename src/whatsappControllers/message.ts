@@ -36,6 +36,11 @@ import {
     reactionTimestamp,
     saveMessageReaction,
 } from '../services/messageReaction';
+import {
+    canApplyOutgoingMessageStatus,
+    eligibleOutgoingMessageStatuses,
+    outgoingMessageStatusLevel,
+} from '../utils/outgoingMessageStatus';
 
 const whatsappMediaHttpsAgent = new https.Agent({
     family: 4,
@@ -333,49 +338,65 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                                     },
                                 });
 
-                                // Define status hierarchy for comparison
-                                const statusHierarchy = {
-                                    pending: 1,
-                                    error: 1,
-                                    server_ack: 2,
-                                    delivery_ack: 3,
-                                    read: 4,
-                                    played: 5,
-                                };
-
-                                // Only update if new status is higher than current status
-                                const currentLevel =
-                                    statusHierarchy[
-                                        currentMessage?.status as keyof typeof statusHierarchy
-                                    ] || 0;
-                                const newLevel =
-                                    statusHierarchy[status as keyof typeof statusHierarchy] || 0;
+                                const shouldUpdateStatus = currentMessage
+                                    ? canApplyOutgoingMessageStatus(currentMessage.status, status)
+                                    : true;
 
                                 const shouldUpdate =
                                     !currentMessage ||
-                                    newLevel > currentLevel ||
+                                    shouldUpdateStatus ||
                                     !currentMessage.deviceId;
 
                                 if (shouldUpdate) {
                                     if (currentMessage?.pkId) {
-                                        const outgoingMessage = await prisma.outgoingMessage.update({
-                                            where: { pkId: currentMessage.pkId },
-                                            data: {
-                                                status:
-                                                    newLevel > currentLevel
-                                                        ? status
-                                                        : currentMessage.status,
-                                                deviceId: messageDevicePkId,
-                                                waMessageId: currentMessage.waMessageId || message.key.id!,
-                                                updatedAt: new Date(),
-                                            },
-                                            include: { contact: true },
-                                        });
-                                        io.to(`session:${sessionId}`).emit(`message:${sessionId}`, outgoingMessage);
-                                        io.to(`session:${sessionId}`).emit(
-                                            `outgoing:${sessionId}`,
-                                            decryptOutgoingMessage(outgoingMessage),
-                                        );
+                                        const statusUpdate = shouldUpdateStatus
+                                            ? await prisma.outgoingMessage.updateMany({
+                                                  where: {
+                                                      pkId: currentMessage.pkId,
+                                                      status: {
+                                                          in: eligibleOutgoingMessageStatuses(status),
+                                                      },
+                                                  },
+                                                  data: {
+                                                      status,
+                                                      deviceId: messageDevicePkId,
+                                                      waMessageId:
+                                                          currentMessage.waMessageId || message.key.id!,
+                                                      updatedAt: new Date(),
+                                                  },
+                                              })
+                                            : { count: 0 };
+
+                                        const shouldUpdateMetadata = !currentMessage.deviceId;
+                                        if (statusUpdate.count === 0 && shouldUpdateMetadata) {
+                                            await prisma.outgoingMessage.update({
+                                                where: { pkId: currentMessage.pkId },
+                                                data: {
+                                                    deviceId: messageDevicePkId,
+                                                    waMessageId:
+                                                        currentMessage.waMessageId || message.key.id!,
+                                                    updatedAt: new Date(),
+                                                },
+                                            });
+                                        }
+
+                                        if (statusUpdate.count > 0 || shouldUpdateMetadata) {
+                                            const outgoingMessage =
+                                                await prisma.outgoingMessage.findUnique({
+                                                    where: { pkId: currentMessage.pkId },
+                                                    include: { contact: true },
+                                                });
+                                            if (outgoingMessage) {
+                                                io.to(`session:${sessionId}`).emit(
+                                                    `message:${sessionId}`,
+                                                    outgoingMessage,
+                                                );
+                                                io.to(`session:${sessionId}`).emit(
+                                                    `outgoing:${sessionId}`,
+                                                    decryptOutgoingMessage(outgoingMessage),
+                                                );
+                                            }
+                                        }
                                     } else {
                                         // ⚠️ CRITICAL FIX: Check existing message before upsert to prevent downgrade
                                         const existingMessage = await prisma.outgoingMessage.findFirst({
@@ -385,12 +406,15 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                                         
                                         // If message exists, check status hierarchy before update
                                         if (existingMessage) {
-                                            const existingLevel = statusHierarchy[existingMessage.status as keyof typeof statusHierarchy] || 0;
-                                            
                                             // Only update if new status is higher
-                                            if (newLevel > existingLevel) {
-                                                await prisma.outgoingMessage.update({
-                                                    where: { pkId: existingMessage.pkId },
+                                            if (canApplyOutgoingMessageStatus(existingMessage.status, status)) {
+                                                const statusUpdate = await prisma.outgoingMessage.updateMany({
+                                                    where: {
+                                                        pkId: existingMessage.pkId,
+                                                        status: {
+                                                            in: eligibleOutgoingMessageStatuses(status),
+                                                        },
+                                                    },
                                                     data: {
                                                         status,
                                                         deviceId: messageDevicePkId,
@@ -399,10 +423,12 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                                                     },
                                                 });
                                                 
-                                                const updatedMessage = await prisma.outgoingMessage.findUnique({
-                                                    where: { pkId: existingMessage.pkId },
-                                                    include: { contact: true },
-                                                });
+                                                const updatedMessage = statusUpdate.count > 0
+                                                    ? await prisma.outgoingMessage.findUnique({
+                                                          where: { pkId: existingMessage.pkId },
+                                                          include: { contact: true },
+                                                      })
+                                                    : null;
                                                 
                                                 if (updatedMessage) {
                                                     io.to(`session:${sessionId}`).emit(`message:${sessionId}`, updatedMessage);
@@ -895,6 +921,9 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
         }
     };
 
+    // Retained for reference while ACK/NACK processing is consolidated in the
+    // generation-aware socket listener. It is intentionally not registered.
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     const update: BaileysEventHandler<'messages.update'> = async (updates) => {
         for (const { update, key } of updates) {
             try {
@@ -1017,26 +1046,14 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                                 '📤 Processing status update for OUTGOING message'
                             );
                             
-                            // Define status hierarchy for comparison
-                            const statusHierarchy = {
-                                pending: 1,
-                                error: 1,
-                                server_ack: 2,
-                                delivery_ack: 3,
-                                read: 4,
-                                played: 5,
-                            };
-
-                            // Only update if new status is higher than current status
-                            const currentLevel =
-                                statusHierarchy[
-                                    outgoingMessage.status as keyof typeof statusHierarchy
-                                ] || 0;
-                            const newLevel =
-                                statusHierarchy[status as keyof typeof statusHierarchy] || 0;
-                            const shouldApplyError =
-                                status === 'error' &&
-                                ['pending', 'server_ack'].includes(outgoingMessage.status);
+                            const currentLevel = outgoingMessageStatusLevel(
+                                outgoingMessage.status,
+                            );
+                            const newLevel = outgoingMessageStatusLevel(status);
+                            const shouldApplyStatus = canApplyOutgoingMessageStatus(
+                                outgoingMessage.status,
+                                status,
+                            );
 
                             logger.info(
                                 {
@@ -1046,12 +1063,12 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                                     currentLevel,
                                     newStatus: status,
                                     newLevel,
-                                    willUpdate: shouldApplyError || newLevel > currentLevel,
+                                    willUpdate: shouldApplyStatus,
                                 },
                                 '🔍 Status hierarchy check'
                             );
 
-                            if (shouldApplyError || newLevel > currentLevel) {
+                            if (shouldApplyStatus) {
                                 logger.info(
                                     {
                                         sessionId,
@@ -1107,10 +1124,32 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                                 }
 
                                 // Always update by pkId to avoid ambiguity
-                                const updatedMessage = await tx.outgoingMessage.update({
-                                    where: { pkId: outgoingMessage.pkId },
+                                const statusUpdate = await tx.outgoingMessage.updateMany({
+                                    where: {
+                                        pkId: outgoingMessage.pkId,
+                                        status: {
+                                            in: eligibleOutgoingMessageStatuses(status),
+                                        },
+                                    },
                                     data: updateData,
                                 });
+
+                                if (statusUpdate.count === 0) {
+                                    logger.debug(
+                                        {
+                                            sessionId,
+                                            messageId: key.id,
+                                            attemptedStatus: status,
+                                        },
+                                        'Skipping raced status update because current status is terminal or newer',
+                                    );
+                                    return;
+                                }
+
+                                const updatedMessage = await tx.outgoingMessage.findUnique({
+                                    where: { pkId: outgoingMessage.pkId },
+                                });
+                                if (!updatedMessage) return;
                                 
                                 // ✅ EMIT socket event for real-time status update (ONLY on upgrade)
                                 if (deviceId) {
@@ -1329,15 +1368,6 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                         }
                     }
 
-                    const statusHierarchy: Record<string, number> = {
-                        pending: 1,
-                        error: 1,
-                        server_ack: 2,
-                        delivery_ack: 3,
-                        read: 4,
-                        played: 5,
-                    };
-
                     let nextStatus = outgoing.status;
                     if (hasRead) nextStatus = 'read';
                     else if (hasDeliver) nextStatus = 'delivery_ack';
@@ -1356,19 +1386,40 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                         );
                     }
 
-                    const currentLevel = statusHierarchy[String(outgoing.status || 'pending')] || 0;
-                    const nextLevel = statusHierarchy[String(nextStatus || 'pending')] || 0;
-
                     const updateData: any = {
                         waMessageId: outgoing.waMessageId || key.id,
                         updatedAt: new Date(),
                     };
 
                     if (hasRead && set.size) updateData.readBy = Array.from(set);
-                    if (nextLevel > currentLevel) updateData.status = nextStatus;
+                    const shouldUpdateStatus = canApplyOutgoingMessageStatus(
+                        outgoing.status,
+                        nextStatus,
+                    );
+                    if (shouldUpdateStatus) {
+                        updateData.status = nextStatus;
+                    }
 
                     // If this receipt only contains unknown fields, skip DB write
                     if (Object.keys(updateData).length <= 2) return;
+
+                    if (shouldUpdateStatus) {
+                        const statusUpdate = await tx.outgoingMessage.updateMany({
+                            where: {
+                                pkId: outgoing.pkId,
+                                status: {
+                                    in: eligibleOutgoingMessageStatuses(nextStatus),
+                                },
+                            },
+                            data: updateData,
+                        });
+                        if (statusUpdate.count > 0) return;
+
+                        // The status changed after our read. Preserve receipt
+                        // metadata, but never write the stale status decision.
+                        delete updateData.status;
+                        if (Object.keys(updateData).length <= 2) return;
+                    }
 
                     await tx.outgoingMessage.update({
                         where: { pkId: outgoing.pkId },
@@ -1459,7 +1510,10 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
         // activity recorded while this system is in use, not WhatsApp's old
         // account history. Live incoming/outgoing events use messages.upsert.
         event.on('messages.upsert', upsert);
-        event.on('messages.update', update);
+        // Outgoing message ACK/NACK is handled once by the generation-aware
+        // socket listener in whatsapp.ts. Registering this second handler made
+        // both listeners race and could suppress the UUID status event used by
+        // Inbox. Participant receipts remain handled below.
         event.on('messages.delete', del);
         event.on('message-receipt.update', updateReceipt);
         event.on('messages.reaction', updateReaction);
@@ -1471,7 +1525,6 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
         if (!listening) return;
 
         event.off('messages.upsert', upsert);
-        event.off('messages.update', update);
         event.off('messages.delete', del);
         event.off('message-receipt.update', updateReceipt);
         event.off('messages.reaction', updateReaction);

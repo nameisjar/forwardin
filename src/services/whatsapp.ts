@@ -2,6 +2,7 @@ import prisma from '../utils/db';
 import logger from '../config/logger';
 import { getInstance } from '../whatsapp';
 import { redactPhone } from '../utils/logRedaction';
+import { sendDocumentMessage, sendTextMessage } from './messageSender';
 
 /**
  * Send document via WhatsApp
@@ -81,13 +82,19 @@ export const sendDocument = async (
 
         logger.debug('Sending document', { recipient: redactPhone(formattedRecipient) });
 
-        // Send document
-        const result = await session.sendMessage(formattedRecipient, {
-            document: documentBuffer,
-            fileName: fileName,
-            mimetype: 'application/pdf',
-            caption: caption || ''
-        });
+        const queued = await sendDocumentMessage(
+            session,
+            deviceId,
+            formattedRecipient,
+            documentBuffer,
+            {
+                fileName,
+                mimetype: 'application/pdf',
+                caption: caption || '',
+            },
+        );
+        if (!queued.success) throw new Error(queued.error || 'Document send failed');
+        const result = queued.result;
 
         logger.info(`Document sent successfully`, {
             recipient: redactPhone(recipient),
@@ -112,19 +119,30 @@ export const sendMessage = async (
     message: string
 ): Promise<void> => {
     try {
-        const session = getInstance(deviceId);
-        
-        if (!session || !session.user) {
-            throw new Error('WhatsApp session not found or not connected');
-        }
+        const device = await prisma.device.findUnique({
+            where: { id: deviceId },
+            include: {
+                sessions: {
+                    where: { id: { contains: 'config' } },
+                    take: 1,
+                },
+            },
+        });
+        const sessionId = device?.sessions[0]?.sessionId;
+        if (!sessionId) throw new Error('No active WhatsApp session found for this device');
+        const session = getInstance(sessionId);
 
         const formattedRecipient = recipient.includes('@') 
             ? recipient 
             : `${recipient}@s.whatsapp.net`;
 
-        await session.sendMessage(formattedRecipient, {
-            text: message
-        });
+        const queued = await sendTextMessage(
+            session,
+            deviceId,
+            formattedRecipient,
+            message,
+        );
+        if (!queued.success) throw new Error(queued.error || 'Failed to send message');
 
         logger.info('Message sent successfully', { recipient: redactPhone(recipient) });
     } catch (error) {

@@ -1,6 +1,6 @@
 import { RequestHandler } from 'express';
 import prisma from '../utils/db';
-import { getInstance, getJid } from '../whatsapp';
+import { getInstance, getJid, sendTrackedSessionMessage } from '../whatsapp';
 import logger from '../config/logger';
 import { replaceVariables } from '../utils/variableHelper';
 import { sendAutoReply } from './autoReply';
@@ -332,7 +332,8 @@ export async function sendOutsideBusinessHourMessage(sessionId: any, data: any) 
 
                 // ?back here: send non-text message
                 // session.readMessages([data.key]);
-                session.sendMessage(
+                await sendTrackedSessionMessage(
+                    session,
                     jid,
                     { text: replaceVariables(replyText, variables) },
                     { quoted: data, messageId: `BH_${businessHourRecord!.pkId}_${Date.now()}` },

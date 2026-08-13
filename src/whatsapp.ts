@@ -38,17 +38,34 @@ import {
 import {
     DeviceConnectionStatus,
     getReconnectDelay,
+    isRecoverableConnectionConflict,
     normalizeConnectionUpdate,
 } from './utils/connectionPolicy';
+import { SessionGenerationRegistry } from './utils/sessionGeneration';
 import {
     recordConnectionError,
     recordReconnection,
 } from './services/signalDetector';
+import { shouldProcessHistorySync } from './utils/historySyncPolicy';
+import {
+    eligibleOutgoingMessageStatuses,
+    outgoingMessageStatusLevel,
+} from './utils/outgoingMessageStatus';
+import {
+    evaluateOutboundSendReadiness,
+    OutboundSendReadiness,
+} from './utils/outboundReadiness';
+import {
+    sendGenericMessage,
+    type SendMessageOptions,
+} from './services/messageSender';
 
 type Instance = WASocket & {
-    destroy: () => Promise<void>;
+    destroy: (logout?: boolean, purgeAuth?: boolean) => Promise<void>;
     store: Store;
     deviceId: number;
+    generation: number;
+    getSendReadiness: (jid?: string) => OutboundSendReadiness;
 };
 
 const instances = new Map<string, Instance>();
@@ -57,11 +74,75 @@ const instanceCreations = new Map<string, Promise<void>>();
 const circuitOpenSessions = new Set<string>();
 const retries = new Map<string, number>();
 const reconnectTimers = new Map<string, NodeJS.Timeout>();
+const socketGenerations = new SessionGenerationRegistry();
+const conflictRecoveryAttempts = new Map<string, number>();
 const SSEQRGenerations = new Map<string, number>();
+const recipient463Cooldowns = new Map<string, Map<string, number>>();
+const reachoutTimelockFetchTimestamps = new Map<string, number>();
+const RECIPIENT_463_COOLDOWN_MS = Math.max(
+    5_000,
+    Number(process.env.WHATSAPP_463_RECIPIENT_COOLDOWN_MS || 60_000),
+);
+const REACHOUT_TIMELOCK_REFRESH_MS = Math.max(
+    5_000,
+    Number(process.env.WHATSAPP_REACHOUT_REFRESH_MS || 30_000),
+);
 // 🆕 Track active SSE connections to prevent conflicts
 const activeSSEConnections = new Map<number, { sessionId: string; aborted: boolean }>();
 // 🆕 Track manual logout to prevent false positive signal recording
 const manualLogoutInProgress = new Set<number>();
+
+function normalizeRecipientCooldownKey(jid: string | null | undefined): string | null {
+    const normalized = String(jid || '').trim().toLowerCase();
+    return normalized || null;
+}
+
+function setRecipient463Cooldown(
+    sessionId: string,
+    jid: string | null | undefined,
+): void {
+    const key = normalizeRecipientCooldownKey(jid);
+    if (!key) return;
+
+    let cooldowns = recipient463Cooldowns.get(sessionId);
+    if (!cooldowns) {
+        cooldowns = new Map<string, number>();
+        recipient463Cooldowns.set(sessionId, cooldowns);
+    }
+    cooldowns.set(key, Date.now() + RECIPIENT_463_COOLDOWN_MS);
+}
+
+function getRecipient463RetryAt(sessionId: string, jid: string | undefined): number | null {
+    const key = normalizeRecipientCooldownKey(jid);
+    if (!key) return null;
+
+    const cooldowns = recipient463Cooldowns.get(sessionId);
+    const retryAt = cooldowns?.get(key);
+    if (!retryAt) return null;
+    if (retryAt <= Date.now()) {
+        cooldowns?.delete(key);
+        if (cooldowns?.size === 0) recipient463Cooldowns.delete(sessionId);
+        return null;
+    }
+    return retryAt;
+}
+
+function detachSocketListeners(socket: WASocket): void {
+    try {
+        (socket.ev as any).removeAllListeners?.();
+    } catch (error) {
+        logger.warn({ error }, 'Failed to detach listeners from retired WhatsApp socket');
+    }
+}
+
+function closeSocketTransport(socket: WASocket): void {
+    detachSocketListeners(socket);
+    try {
+        socket.ws.close();
+    } catch {
+        // The transport may already be fully closed.
+    }
+}
 
 /**
  * Mark a device as undergoing manual logout (user-initiated)
@@ -183,8 +264,15 @@ function isSSEAborted(deviceId: number): boolean {
 }
 
 // 🆕 Helper untuk mark SSE sebagai aborted
-function markSSEAborted(deviceId: number): void {
+function markSSEAborted(deviceId: number, sessionId: string): void {
     const connection = activeSSEConnections.get(deviceId);
+    if (connection?.sessionId !== sessionId) {
+        logger.debug(
+            { deviceId, sessionId, activeSessionId: connection?.sessionId },
+            'Ignoring close event from a superseded SSE pairing request',
+        );
+        return;
+    }
     if (connection) {
         connection.aborted = true;
         logger.info({ deviceId, sessionId: connection.sessionId }, 'SSE marked as aborted');
@@ -216,16 +304,37 @@ export function createInstance(options: createInstanceOptions): Promise<void> {
         return Promise.resolve();
     }
 
+    const generation = socketGenerations.begin(options.sessionId);
     deviceSessionOwners.set(options.deviceId, options.sessionId);
     if (!options.replaceExisting) circuitOpenSessions.delete(options.sessionId);
 
-    const creation = createInstanceInternal(options).catch((error) => {
+    const creation = (async () => {
+        if (options.replaceExisting) {
+            const previousInstance = instances.get(options.sessionId);
+            if (previousInstance) {
+                instances.delete(options.sessionId);
+                closeSocketTransport(previousInstance);
+                logger.info(
+                    {
+                        sessionId: options.sessionId,
+                        deviceId: options.deviceId,
+                        previousGeneration: previousInstance.generation,
+                        generation,
+                    },
+                    'Retired previous WhatsApp transport before creating replacement',
+                );
+            }
+        }
+
+        await createInstanceInternal(options, generation);
+    })().catch((error) => {
         if (!instances.has(options.sessionId)) {
             const currentOwner = deviceSessionOwners.get(options.deviceId);
             if (currentOwner === options.sessionId) {
                 deviceSessionOwners.delete(options.deviceId);
             }
         }
+        socketGenerations.clear(options.sessionId, generation);
         throw error;
     }).finally(() => {
         if (instanceCreations.get(options.sessionId) === creation) {
@@ -236,7 +345,10 @@ export function createInstance(options: createInstanceOptions): Promise<void> {
     return creation;
 }
 
-async function createInstanceInternal(options: createInstanceOptions): Promise<void> {
+async function createInstanceInternal(
+    options: createInstanceOptions,
+    generation: number,
+): Promise<void> {
     const {
         sessionId,
         deviceId,
@@ -271,6 +383,17 @@ async function createInstanceInternal(options: createInstanceOptions): Promise<v
     
     // Helper untuk akses state terkini (selalu ambil dari Map, bukan closure)
     const getState = () => getSessionState(sessionId);
+    const isActiveGeneration = () => socketGenerations.isCurrent(sessionId, generation);
+    const getSendReadiness = (jid?: string): OutboundSendReadiness => {
+        return evaluateOutboundSendReadiness({
+            generationCurrent: isActiveGeneration(),
+            sessionConnected: isSessionConnected(sessionId),
+            authenticated: Boolean(sock?.user),
+            socketOpen: Boolean(sock.ws.isOpen),
+            reachoutLock: getState()?.connectionState.reachoutTimeLock,
+            recipientRetryAt: getRecipient463RetryAt(sessionId, jid),
+        });
+    };
 
     // 🆕 Register SSE connection
     if (SSE && res) {
@@ -366,9 +489,13 @@ async function createInstanceInternal(options: createInstanceOptions): Promise<v
      * Logout from WhatsApp
      */
     const cleanupWhatsAppSession = async (shouldLogout: boolean): Promise<{ success: boolean; error?: string }> => {
-        if (!shouldLogout) return { success: true };
+        if (!shouldLogout) {
+            closeSocketTransport(sock);
+            return { success: true };
+        }
         
         try {
+            detachSocketListeners(sock);
             await sock.logout();
             return { success: true };
         } catch (err: any) {
@@ -382,9 +509,9 @@ async function createInstanceInternal(options: createInstanceOptions): Promise<v
     };
 
     // Main destroy function - orchestrates all cleanup
-    const destroy = async (logout = true) => {
+    const destroy = async (logout = true, purgeAuth = logout) => {
         const currentInstance = instances.get(sessionId);
-        if (currentInstance && currentInstance.ws !== sock.ws) {
+        if (!isActiveGeneration() || (currentInstance && currentInstance.ws !== sock.ws)) {
             logger.info(
                 { sessionId, deviceId },
                 'Ignoring cleanup from a superseded WhatsApp instance',
@@ -404,11 +531,18 @@ async function createInstanceInternal(options: createInstanceOptions): Promise<v
             activeSSEConnections.delete(deviceId);
             logger.info({ deviceId, sessionId }, '🔧 [RACE CONDITION FIX] SSE connection removed from tracking BEFORE async cleanup');
         }
-        instances.delete(sessionId);
+        if (instances.get(sessionId)?.ws === sock.ws) {
+            instances.delete(sessionId);
+        }
         if (deviceSessionOwners.get(deviceId) === sessionId) {
             deviceSessionOwners.delete(deviceId);
         }
         circuitOpenSessions.delete(sessionId);
+        conflictRecoveryAttempts.delete(sessionId);
+        recipient463Cooldowns.delete(sessionId);
+        reachoutTimelockFetchTimestamps.delete(sessionId);
+        clearManualLogout(deviceId);
+        socketGenerations.clear(sessionId, generation);
         removeSessionState(sessionId); // 🔧 FIX: Cleanup centralized state
         logger.info({ sessionId }, '🔧 [RACE CONDITION FIX] Instance and state removed from maps BEFORE async cleanup');
         
@@ -424,9 +558,15 @@ async function createInstanceInternal(options: createInstanceOptions): Promise<v
         // 🔧 REFACTORED: Run all cleanup operations in parallel with individual error handling
         const cleanupResults = await Promise.allSettled([
             cleanupWhatsAppSession(logout),
-            cleanupWhatsAppGroups(),
-            cleanupDatabaseRecords(),
-            cleanupMediaFiles(),
+            purgeAuth
+                ? cleanupWhatsAppGroups()
+                : Promise.resolve({ success: true } as { success: boolean; error?: string }),
+            purgeAuth
+                ? cleanupDatabaseRecords()
+                : Promise.resolve({ success: true, errors: [] as string[] }),
+            purgeAuth
+                ? cleanupMediaFiles()
+                : Promise.resolve({ success: true } as { success: boolean; error?: string }),
         ]);
         
         // 🔧 Log summary of cleanup results
@@ -461,13 +601,18 @@ async function createInstanceInternal(options: createInstanceOptions): Promise<v
         if (failures.length > 0) {
             logger.warn({ sessionId, deviceId, failures }, '⚠️ Session destroy completed with some failures');
         } else {
-            logger.info({ sessionId, deviceId }, '✅ Session destroy completed successfully');
+            logger.info(
+                { sessionId, deviceId, purgeAuth },
+                purgeAuth
+                    ? '✅ Session destroy and credential purge completed successfully'
+                    : '✅ Session transport retired; credentials and persisted data retained',
+            );
         }
     };
 
     const handleConnectionClose = async () => {
         const activeInstance = instances.get(sessionId);
-        if (activeInstance && activeInstance.ws !== sock.ws) {
+        if (!isActiveGeneration() || (activeInstance && activeInstance.ws !== sock.ws)) {
             logger.debug({ sessionId, deviceId }, 'Ignoring close from superseded socket');
             return;
         }
@@ -478,6 +623,21 @@ async function createInstanceInternal(options: createInstanceOptions): Promise<v
         const lastDisconnect = currentState?.connectionState.lastDisconnect;
         const code = (lastDisconnect?.error as Boom)?.output?.statusCode;
         const restartRequired = code === DisconnectReason.restartRequired;
+        const errorMessage = (lastDisconnect?.error as Boom)?.message || 'Connection closed';
+        const conflictAttempts = conflictRecoveryAttempts.get(sessionId) ?? 0;
+        const recoverConflict = isRecoverableConnectionConflict(
+            code,
+            errorMessage,
+            conflictAttempts,
+        );
+
+        if (recoverConflict) {
+            conflictRecoveryAttempts.set(sessionId, conflictAttempts + 1);
+            logger.warn(
+                { sessionId, deviceId, code, conflictAttempts: conflictAttempts + 1 },
+                'Recovering once from WhatsApp stream conflict without deleting credentials',
+            );
+        }
         
         // 🆕 Check if SSE was aborted - jika iya, jangan reconnect
         if (SSE && isSSEAborted(deviceId)) {
@@ -498,7 +658,7 @@ async function createInstanceInternal(options: createInstanceOptions): Promise<v
 
         // 🔥 Record connection error signal for ban detection
         // Skip jika ini manual logout (user sengaja logout via API)
-        if (code && code !== DisconnectReason.restartRequired && code !== 515) {
+        if (code && code !== DisconnectReason.restartRequired && code !== 515 && !recoverConflict) {
             if (isManualLogout(deviceId)) {
                 logger.info(
                     { sessionId, deviceId, code },
@@ -506,7 +666,6 @@ async function createInstanceInternal(options: createInstanceOptions): Promise<v
                 );
                 clearManualLogout(deviceId);
             } else {
-                const errorMessage = (lastDisconnect?.error as Boom)?.message || 'Connection closed';
                 recordConnectionError(deviceId, code, errorMessage).catch((err) => {
                     logger.error({ err }, 'Failed to record connection error signal');
                 });
@@ -521,7 +680,7 @@ async function createInstanceInternal(options: createInstanceOptions): Promise<v
             DisconnectReason.connectionReplaced,
             DisconnectReason.badSession,
         ]);
-        if (code && terminalDisconnectCodes.has(code)) {
+        if (code && terminalDisconnectCodes.has(code) && !recoverConflict) {
             logger.info({ sessionId, deviceId, code }, 'Terminal disconnect - removing invalid session');
             if (res && !res.writableEnded) {
                 if (SSE) {
@@ -537,14 +696,16 @@ async function createInstanceInternal(options: createInstanceOptions): Promise<v
                 res.end();
             }
             await publishDeviceConnectionStatus(deviceId, sessionId, 'logged_out');
-            await destroy(false); // false = jangan coba logout lagi
+            await destroy(false, true); // transport sudah ditutup; purge sesi invalid secara eksplisit
             return;
         }
 
         const attempt = nextReconnectAttempt(sessionId);
-        const reconnectLimit = SSE
-            ? MAX_RECONNECT_RETRIES
-            : MAX_BACKGROUND_RECONNECT_RETRIES;
+        const reconnectLimit = isConnectionSuccessful(sessionId)
+            ? MAX_BACKGROUND_RECONNECT_RETRIES
+            : SSE
+              ? MAX_RECONNECT_RETRIES
+              : MAX_BACKGROUND_RECONNECT_RETRIES;
 
         // Pairing via SSE has a bounded lifetime. Existing authenticated sessions
         // keep retrying with a capped delay so a temporary outage never deletes
@@ -568,6 +729,8 @@ async function createInstanceInternal(options: createInstanceOptions): Promise<v
             if (reconnectTimer) clearTimeout(reconnectTimer);
             reconnectTimers.delete(sessionId);
             instances.delete(sessionId);
+            conflictRecoveryAttempts.delete(sessionId);
+            socketGenerations.clear(sessionId, generation);
             removeSessionState(sessionId);
             if (deviceSessionOwners.get(deviceId) === sessionId) {
                 deviceSessionOwners.delete(deviceId);
@@ -616,7 +779,17 @@ async function createInstanceInternal(options: createInstanceOptions): Promise<v
 
         const timer = setTimeout(() => {
             reconnectTimers.delete(sessionId);
-            void createInstance({ ...options, replaceExisting: true }).catch(async (error) => {
+            if (!isActiveGeneration()) return;
+            const replacementOptions: createInstanceOptions = isConnectionSuccessful(sessionId)
+                ? {
+                      ...options,
+                      res: undefined,
+                      SSE: false,
+                      sseCleanup: undefined,
+                      replaceExisting: true,
+                  }
+                : { ...options, replaceExisting: true };
+            void createInstance(replacementOptions).catch(async (error) => {
                 logger.error(
                     { error, sessionId, deviceId, attempt },
                     'Failed to recreate WhatsApp instance',
@@ -692,7 +865,7 @@ async function createInstanceInternal(options: createInstanceOptions): Promise<v
             // Hanya destroy jika koneksi BELUM berhasil (masih dalam proses pairing)
             if (!connSuccessful) {
                 logger.info({ sessionId, deviceId }, 'SSE stream closed before connection success - destroying session');
-                destroy();
+                void destroy(false);
             } else {
                 logger.info({ sessionId, deviceId }, 'SSE stream closed after connection success - keeping session alive');
             }
@@ -713,7 +886,7 @@ async function createInstanceInternal(options: createInstanceOptions): Promise<v
                 if (!res.writableEnded) {
                     res.end();
                 }
-                destroy();
+                void destroy(false);
             }, 1000); // Give time for the client to receive the final QR
             return;
         }
@@ -727,7 +900,7 @@ async function createInstanceInternal(options: createInstanceOptions): Promise<v
             logger.error(e, 'Error writing SSE data');
             // 🔧 FIX: Jangan destroy jika koneksi sudah berhasil
             if (!connSuccessful) {
-                destroy();
+                void destroy(false);
             }
             return;
         }
@@ -764,11 +937,11 @@ async function createInstanceInternal(options: createInstanceOptions): Promise<v
         },
         logger: logger as any,
         markOnlineOnConnect: false,
-        // Inbox only records messages that occur while this system is active.
-        // Do not import the account's pre-existing WhatsApp chat history when
-        // pairing or reconnecting a device.
+        // Process bootstrap/app-state history internally so Baileys can restore
+        // LID mappings and trusted-contact tokens. FULL chat history remains
+        // disabled, and Inbox deliberately ignores messaging-history.set.
         syncFullHistory: false,
-        shouldSyncHistoryMessage: () => false,
+        shouldSyncHistoryMessage: shouldProcessHistorySync,
 
         getMessage: async (key) => {
             const data = await prisma.message.findFirst({
@@ -779,10 +952,37 @@ async function createInstanceInternal(options: createInstanceOptions): Promise<v
     });
 
     const store = new Store(sessionId, sock.ev, deviceId);
-    instances.set(sessionId, { ...sock, destroy, store, deviceId });
+    instances.set(sessionId, {
+        ...sock,
+        destroy,
+        store,
+        deviceId,
+        generation,
+        getSendReadiness,
+    });
 
-    sock.ev.on('creds.update', saveCreds);
+    sock.ev.on('creds.update', async () => {
+        if (!isActiveGeneration()) return;
+        try {
+            await saveCreds();
+        } catch (error) {
+            // The key store intentionally propagates persistence failures. Catch
+            // them at the event boundary so they are visible without becoming an
+            // unhandled promise rejection that can terminate the process.
+            logger.error(
+                { error, sessionId, deviceId },
+                'Failed to persist WhatsApp credential update',
+            );
+        }
+    });
     sock.ev.on('connection.update', async (update) => {
+        if (!isActiveGeneration()) {
+            logger.debug(
+                { sessionId, deviceId, generation },
+                'Ignoring connection update from retired WhatsApp socket',
+            );
+            return;
+        }
         logger.debug(update);
 
         // Manually print QR to terminal when available (replacement for deprecated printQRInTerminal)
@@ -821,6 +1021,13 @@ async function createInstanceInternal(options: createInstanceOptions): Promise<v
             // 🔧 FIX: Mark connection successful di centralized state
             markConnectionSuccessful(sessionId);
 
+            // Pairing ownership ends as soon as WhatsApp is authenticated. The
+            // SSE response may now close without being mistaken for a cancelled
+            // pairing and future reconnects run as background sessions.
+            if (SSE) {
+                activeSSEConnections.delete(deviceId);
+            }
+
             // 🔥 Record successful reconnection for health tracking
             recordReconnection(deviceId).catch((err) => {
                 logger.error({ err }, 'Failed to record reconnection signal');
@@ -834,9 +1041,13 @@ async function createInstanceInternal(options: createInstanceOptions): Promise<v
                 data: { phone, updatedAt: new Date() },
             });
 
+            if (!isActiveGeneration()) return;
+
             // Publish online immediately. Group/profile synchronization is
             // intentionally background work and may take several seconds.
             await publishDeviceConnectionStatus(deviceId, sessionId, 'open');
+
+            if (!isActiveGeneration()) return;
 
             // Populate missing/stale profile pictures without putting WhatsApp
             // or CDN work in the browser-facing profile endpoint.
@@ -931,7 +1142,7 @@ async function createInstanceInternal(options: createInstanceOptions): Promise<v
                     'Device not found during status update - device may have been deleted'
                 );
                 // Optionally destroy the instance if device is gone
-                await destroy(false);
+                await destroy(false, true);
             } else {
                 logger.error(
                     { error, sessionId, deviceId, connection },
@@ -944,6 +1155,7 @@ async function createInstanceInternal(options: createInstanceOptions): Promise<v
     if (readIncomingMessages) {
         sock.ev.on('messages.upsert', async (m) => {
             try {
+                if (!isActiveGeneration()) return;
                 const message = m.messages[0];
                 if (!message.key || message.key.fromMe || m.type !== 'notify') return;
 
@@ -969,6 +1181,7 @@ async function createInstanceInternal(options: createInstanceOptions): Promise<v
     // 🆕 Listen untuk grup baru yang di-join
     sock.ev.on('groups.upsert', async (groups) => {
         try {
+            if (!isActiveGeneration()) return;
             // 🔧 FIX: Check connection via centralized state (Issue 3.5)
             if (!isSessionConnected(sessionId)) {
                 logger.debug({ sessionId }, 'Skipping groups.upsert - connection not open');
@@ -1052,6 +1265,7 @@ async function createInstanceInternal(options: createInstanceOptions): Promise<v
     // 🆕 Listen untuk update grup (nama berubah, participant berubah, dll)
     sock.ev.on('groups.update', async (updates) => {
         try {
+            if (!isActiveGeneration()) return;
             // 🔧 FIX: Check connection via centralized state (Issue 3.5)
             if (!isSessionConnected(sessionId)) {
                 logger.debug({ sessionId }, 'Skipping groups.update - connection not open');
@@ -1123,6 +1337,7 @@ async function createInstanceInternal(options: createInstanceOptions): Promise<v
     // 🆕 Listen untuk participant changes (termasuk ketika device keluar/dikick dari grup)
     sock.ev.on('group-participants.update', async (update) => {
         try {
+            if (!isActiveGeneration()) return;
             // 🔧 FIX: Check connection via centralized state (Issue 3.5)
             if (!isSessionConnected(sessionId)) {
                 logger.debug({ sessionId }, 'Skipping group-participants.update - connection not open');
@@ -1229,6 +1444,7 @@ async function createInstanceInternal(options: createInstanceOptions): Promise<v
     // 🆕 Listen untuk chats.update - mendeteksi ketika keluar dari grup
     sock.ev.on('chats.update', async (chats) => {
         try {
+            if (!isActiveGeneration()) return;
             // 🔧 FIX: Check connection via centralized state (Issue 3.5)
             if (!isSessionConnected(sessionId)) {
                 logger.debug({ sessionId }, 'Skipping chats.update - connection not open');
@@ -1312,12 +1528,7 @@ async function createInstanceInternal(options: createInstanceOptions): Promise<v
     // 🆕 Listen untuk message receipts (delivered & read status)
     sock.ev.on('messages.update', async (updates) => {
         try {
-            // 🔧 FIX: Check connection via centralized state
-            if (!isSessionConnected(sessionId)) {
-                logger.debug({ sessionId }, 'Skipping messages.update - connection not open');
-                return;
-            }
-
+            if (!isActiveGeneration()) return;
             for (const update of updates) {
                 try {
                     // Update hanya untuk pesan yang kita kirim (fromMe: true)
@@ -1352,27 +1563,12 @@ async function createInstanceInternal(options: createInstanceOptions): Promise<v
                     }
 
                     if (newStatus) {
-                        // ✅ CRITICAL FIX: Only update if new status is HIGHER than current
-                        // Define status hierarchy
-                        const statusHierarchy: Record<string, number> = {
-                            pending: 1,
-                            error: 0,
-                            server_ack: 2,
-                            delivery_ack: 3,
-                            read: 4,
-                            played: 5,
-                        };
-                        
-                        const newLevel = statusHierarchy[newStatus] || 0;
-                        
-                        // A terminal WhatsApp NACK is allowed to replace
-                        // pending/server_ack. It must never downgrade a message
-                        // that was already delivered/read by another device.
-                        const eligibleStatuses = newStatus === 'error'
-                            ? ['pending', 'server_ack']
-                            : Object.keys(statusHierarchy).filter(
-                                  s => statusHierarchy[s] < newLevel,
-                              );
+                        const newLevel = outgoingMessageStatusLevel(newStatus);
+
+                        // The database filter makes transitions atomic: a
+                        // delayed ACK cannot revive error/failed, while NACK is
+                        // still allowed to replace pending/server_ack.
+                        const eligibleStatuses = eligibleOutgoingMessageStatuses(newStatus);
 
                         if (newStatus === 'error') {
                             logger.warn(
@@ -1387,6 +1583,32 @@ async function createInstanceInternal(options: createInstanceOptions): Promise<v
                                 '[DeliveryReceipt] WhatsApp rejected outgoing message',
                             );
 
+                            if (
+                                failureCode === '463' &&
+                                typeof sock.fetchAccountReachoutTimelock === 'function'
+                            ) {
+                                setRecipient463Cooldown(sessionId, update.key.remoteJid);
+
+                                // rc14 classifies 463 in an earlier branch and
+                                // therefore never reaches its timelock fetch.
+                                // Refresh at most once per interval; the result
+                                // is persisted in centralized connection state
+                                // through connection.update. Never retry the
+                                // rejected message automatically.
+                                const now = Date.now();
+                                const lastRefresh =
+                                    reachoutTimelockFetchTimestamps.get(sessionId) || 0;
+                                if (now - lastRefresh >= REACHOUT_TIMELOCK_REFRESH_MS) {
+                                    reachoutTimelockFetchTimestamps.set(sessionId, now);
+                                    void sock.fetchAccountReachoutTimelock().catch(error => {
+                                        logger.warn(
+                                            { error, sessionId, messageId },
+                                            'Failed to fetch WhatsApp reachout timelock after 463',
+                                        );
+                                    });
+                                }
+                            }
+
                         }
                         
                         // First, try to update by waMessageId (only if status would upgrade)
@@ -1395,7 +1617,7 @@ async function createInstanceInternal(options: createInstanceOptions): Promise<v
                                 waMessageId: messageId,
                                 sessionId,
                                 // ✅ CRITICAL: Only update messages with LOWER status
-                                status: eligibleStatuses.length > 0 ? { in: eligibleStatuses } : undefined,
+                                status: { in: eligibleStatuses },
                             },
                             data: {
                                 status: newStatus,
@@ -1436,7 +1658,7 @@ async function createInstanceInternal(options: createInstanceOptions): Promise<v
                                     id: messageId,
                                     sessionId,
                                     // ✅ CRITICAL: Only update messages with LOWER status
-                                    status: eligibleStatuses.length > 0 ? { in: eligibleStatuses } : undefined,
+                                    status: { in: eligibleStatuses },
                                 },
                                 data: {
                                     status: newStatus,
@@ -1538,6 +1760,37 @@ export function getInstanceStatus(session: Instance) {
     return status;
 }
 
+/**
+ * Route legacy/session-scoped sends through the same pending, readiness,
+ * idempotency, and receipt-tracking pipeline as Inbox and broadcasts.
+ */
+export async function sendTrackedSessionMessage(
+    session: Instance,
+    jid: string,
+    content: any,
+    options?: SendMessageOptions,
+) {
+    const device = await prisma.device.findUnique({
+        where: { pkId: session.deviceId },
+        select: { id: true },
+    });
+    if (!device) {
+        throw new Error('Device tidak ditemukan untuk sesi WhatsApp aktif');
+    }
+
+    const queued = await sendGenericMessage(session, device.id, jid, content, options);
+    if (!queued.success) {
+        const error = new Error(queued.error || 'Gagal mengirim pesan WhatsApp') as Error & {
+            code?: string;
+            statusCode?: number;
+        };
+        error.code = queued.errorCode;
+        error.statusCode = queued.statusCode;
+        throw error;
+    }
+    return queued.result;
+}
+
 export async function deleteInstance(sessionId: string) {
     await instances.get(sessionId)?.destroy();
 }
@@ -1618,10 +1871,12 @@ export async function sendMediaFile(
                 };
             }
 
-            const result = await session.sendMessage(getJid(recipient), message, {
-                quoted: data,
-                messageId,
-            });
+            const result = await sendTrackedSessionMessage(
+                session,
+                getJid(recipient),
+                message,
+                { quoted: data, messageId },
+            );
             results.push({ index, result });
         } catch (error: unknown) {
             const message =
@@ -1643,7 +1898,7 @@ export async function sendButtonMessage(
         const recipientJid = getJid(to);
         await verifyJid(session, recipientJid);
 
-        const result = await session.sendMessage(recipientJid, {
+        const result = await sendTrackedSessionMessage(session, recipientJid, {
             text: data.text || '',
             footer: data.footerText || '',
         });

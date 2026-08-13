@@ -1731,8 +1731,6 @@ schedule.scheduleJob('* * * * *', async () => {
                             broadcastType: broadcast.broadcastType || null,
                             isGroup: jid.includes('@g.us'),
                             updatedAt: new Date(),
-                            readBy: [],
-                            status: 'server_ack',
                         },
                         create: {
                             id: messageId,
@@ -1740,7 +1738,10 @@ schedule.scheduleJob('* * * * *', async () => {
                             to: jid,
                             message: encryptMessage(textPayload),
                             schedule: new Date(),
-                            status: 'server_ack',
+                            // sendMessage returning only confirms local stanza
+                            // submission. WhatsApp status=2 is the sole source
+                            // allowed to promote this row to server_ack.
+                            status: 'pending',
                             sessionId,
                             deviceId: broadcast.device.pkId,
                             contactId: contact?.pkId ?? null,

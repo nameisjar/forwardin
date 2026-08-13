@@ -133,7 +133,7 @@ export const createSSE: RequestHandler = async (req, res) => {
             },
         }).then(device => {
             if (device) {
-                markSSEAborted(device.pkId);
+                markSSEAborted(device.pkId, sessionId);
             }
         });
         
@@ -154,7 +154,24 @@ export const createSSE: RequestHandler = async (req, res) => {
             return;
         }
 
-        // 🆕 CRITICAL FIX: Force clear old SSE connection untuk device ini
+        // Reject a second tab/request before touching the existing socket. A
+        // duplicate pairing request must never revoke an already active login.
+        {
+            const currentPairingState = await prepareDeviceForPairing(existingDevice.pkId);
+            if (currentPairingState.active) {
+                res.write(
+                    `data: ${JSON.stringify({
+                        error: 'Device sudah terhubung atau pairing sedang berlangsung.',
+                        alreadyConnected: true,
+                    })}\n\n`,
+                );
+                cleanup();
+                return;
+            }
+        }
+
+        // Clear only a stale SSE registration. An active socket is rejected
+        // below and is never logged out by a duplicate pairing request.
         const activeSSEMap = getActiveSSEConnections();
         const existingConnection = activeSSEMap.get(existingDevice.pkId);
         
@@ -165,7 +182,7 @@ export const createSSE: RequestHandler = async (req, res) => {
                     oldSessionId: existingConnection.sessionId,
                     newSessionId: sessionId 
                 }, 
-                '🔧 [RACE CONDITION FIX] Found existing SSE connection - force clearing before creating new one'
+                'Found stale SSE pairing registration; clearing it before creating a new one'
             );
             
             // Mark old connection as aborted
@@ -174,13 +191,21 @@ export const createSSE: RequestHandler = async (req, res) => {
             // Delete dari Map
             activeSSEMap.delete(existingDevice.pkId);
             
-            // Destroy old instance if exists
+            // A socket may have become active while the stale registration was
+            // being cleared. Leave it untouched and reject this new request.
             if (verifyInstance(existingConnection.sessionId)) {
-                logger.info(
+                logger.warn(
                     { oldSessionId: existingConnection.sessionId },
-                    '🔧 Destroying old instance to prevent conflict'
+                    'Pairing instance became active during validation; leaving it untouched'
                 );
-                await deleteInstance(existingConnection.sessionId);
+                res.write(
+                    `data: ${JSON.stringify({
+                        error: 'Pairing lain sedang aktif. Tunggu hingga proses tersebut selesai.',
+                        alreadyConnected: true,
+                    })}\n\n`,
+                );
+                cleanup();
+                return;
             }
         }
 

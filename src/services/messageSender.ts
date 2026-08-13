@@ -4,10 +4,11 @@ import { executeWithRateLimit, RateLimitResult } from './rateLimiter';
 import { canDeviceSend, incrementMessageCount } from './signalDetector';
 import prisma from '../utils/db';
 import logger from '../config/logger';
-import { encryptMessage } from '../utils/messageEncryption';
+import { decryptMessage, encryptMessage } from '../utils/messageEncryption';
 import { getSocketIO } from '../socket';
 import { createInboxProfileUrl } from '../utils/inboxMedia';
 import { refreshInboxProfileCache } from './inboxProfileCache';
+import { createTrackedMessageId } from '../utils/outgoingMessageId';
 
 // ============================================
 // 🚀 MESSAGE SENDER SERVICE
@@ -61,7 +62,7 @@ async function assertDeviceCanSend(deviceId: string): Promise<void> {
     }
 }
 
-async function persistOutgoingMessage(params: {
+async function persistPendingOutgoingMessage(params: {
     deviceId: string;
     jid: string;
     messageId?: string;
@@ -69,44 +70,70 @@ async function persistOutgoingMessage(params: {
     mediaPath?: string | null;
     fileName?: string | null;
     session?: any;
-}): Promise<void> {
-    if (!params.messageId) return;
+}): Promise<boolean> {
+    if (!params.messageId) return true;
 
-    try {
-        const context = await getDeviceContext(params.deviceId);
-        if (!context) {
-            logger.warn(
-                { deviceId: params.deviceId, messageId: params.messageId },
-                '[MessageSender] Cannot persist outgoing message: device not found',
-            );
-            return;
+    const context = await getDeviceContext(params.deviceId);
+    if (!context) {
+        throw new Error('Device tidak ditemukan');
+    }
+
+    const findExistingReservation = async () => {
+        const existing = await prisma.outgoingMessage.findUnique({
+            where: { id: params.messageId! },
+        });
+        if (!existing) return null;
+
+        let existingText: string | null = null;
+        try {
+            existingText = existing.message ? decryptMessage(existing.message) : null;
+        } catch {
+            existingText = null;
         }
 
-        const phone = params.jid.split('@')[0].replace(/\D/g, '');
-        const contact = await prisma.contact.findFirst({
-            where: {
-                phone: { in: [phone, `+${phone}`] },
-                contactDevices: { some: { deviceId: context.pkId } },
-            },
-            select: { pkId: true },
-        });
-        const encryptedText = params.text ? encryptMessage(params.text) : null;
+        const requestedText = params.text || null;
+        const sameRequest =
+            existing.deviceId === context.pkId &&
+            existing.sessionId === context.sessionId &&
+            existing.to === params.jid &&
+            existingText === requestedText &&
+            (params.fileName == null || existing.fileName === params.fileName) &&
+            (params.mediaPath == null || existing.mediaPath === params.mediaPath);
 
-        const savedMessage = await prisma.outgoingMessage.upsert({
-            where: { id: params.messageId },
-            update: {
-                waMessageId: params.messageId,
-                to: params.jid,
-                sessionId: context.sessionId,
-                deviceId: context.pkId,
-                ...(encryptedText ? { message: encryptedText } : {}),
-                ...(params.mediaPath ? { mediaPath: params.mediaPath } : {}),
-                ...(params.fileName ? { fileName: params.fileName } : {}),
-                contactId: contact?.pkId || null,
-                isGroup: params.jid.includes('@g.us'),
-                updatedAt: new Date(),
-            },
-            create: {
+        if (!sameRequest) {
+            const conflict = new Error(
+                'ID pesan sudah digunakan untuk permintaan pengiriman yang berbeda.',
+            ) as Error & { code?: string; statusCode?: number };
+            conflict.code = 'MESSAGE_ID_CONFLICT';
+            conflict.statusCode = 409;
+            throw conflict;
+        }
+
+        return existing;
+    };
+
+    if (await findExistingReservation()) {
+        logger.info(
+            { deviceId: params.deviceId, messageId: params.messageId },
+            '[MessageSender] Reusing idempotent outgoing-message reservation',
+        );
+        return false;
+    }
+
+    const phone = params.jid.split('@')[0].replace(/\D/g, '');
+    const contact = await prisma.contact.findFirst({
+        where: {
+            phone: { in: [phone, `+${phone}`] },
+            contactDevices: { some: { deviceId: context.pkId } },
+        },
+        select: { pkId: true },
+    });
+    const encryptedText = params.text ? encryptMessage(params.text) : null;
+
+    let savedMessage;
+    try {
+        savedMessage = await prisma.outgoingMessage.create({
+            data: {
                 id: params.messageId,
                 waMessageId: params.messageId,
                 to: params.jid,
@@ -114,7 +141,7 @@ async function persistOutgoingMessage(params: {
                 mediaPath: params.mediaPath || null,
                 fileName: params.fileName || null,
                 schedule: new Date(),
-                status: 'server_ack',
+                status: 'pending',
                 sessionId: context.sessionId,
                 deviceId: context.pkId,
                 contactId: contact?.pkId || null,
@@ -122,7 +149,17 @@ async function persistOutgoingMessage(params: {
                 readBy: [],
             },
         });
+    } catch (error) {
+        if ((error as { code?: unknown })?.code !== 'P2002') throw error;
+        if (!(await findExistingReservation())) throw error;
+        logger.info(
+            { deviceId: params.deviceId, messageId: params.messageId },
+            '[MessageSender] Concurrent duplicate send reused existing reservation',
+        );
+        return false;
+    }
 
+    try {
         if (context.sessionId) {
             getSocketIO().to(`session:${context.sessionId}`).emit(`outgoing:${context.sessionId}`, {
                 ...savedMessage,
@@ -130,39 +167,91 @@ async function persistOutgoingMessage(params: {
                 isOutgoing: true,
             });
         }
-
-        if (
-            !params.jid.endsWith('@lid') &&
-            context.sessionId &&
-            params.session &&
-            typeof params.session.profilePictureUrl === 'function'
-        ) {
-            void refreshInboxProfileCache({
-                deviceId: context.pkId,
-                jid: params.jid,
-                session: params.session,
-            }).then((result) => {
-                if (!result.hasImage) return;
-                const profileUrl = createInboxProfileUrl(params.deviceId, params.jid);
-                getSocketIO().to(`session:${context.sessionId}`).emit(
-                    `incoming:${context.sessionId}:profile-updated`,
-                    {
-                        from: params.jid,
-                        profilePicUrl: params.jid.includes('@g.us') ? null : profileUrl,
-                        groupPicUrl: params.jid.includes('@g.us') ? profileUrl : null,
-                        profilePictureStatus: result.status,
-                        isGroup: params.jid.includes('@g.us'),
-                    },
-                );
-            }).catch(() => undefined);
-        }
     } catch (error) {
-        // Pengiriman WhatsApp sudah sukses; kegagalan pencatatan tidak boleh
-        // mengubah hasil kirim, tetapi harus terlihat jelas di log.
-        logger.error(
-            { error, deviceId: params.deviceId, jid: params.jid, messageId: params.messageId },
-            '[MessageSender] Failed to persist outgoing message',
+        // Tracking is already durable. A notification failure must not turn a
+        // successfully reserved message into an untracked send failure.
+        logger.warn(
+            { error, messageId: params.messageId, sessionId: context.sessionId },
+            '[MessageSender] Failed to emit pending outgoing message',
         );
+    }
+
+    if (
+        !params.jid.endsWith('@lid') &&
+        context.sessionId &&
+        params.session &&
+        typeof params.session.profilePictureUrl === 'function'
+    ) {
+        void refreshInboxProfileCache({
+            deviceId: context.pkId,
+            jid: params.jid,
+            session: params.session,
+        }).then((result) => {
+            if (!result.hasImage) return;
+            const profileUrl = createInboxProfileUrl(params.deviceId, params.jid);
+            getSocketIO().to(`session:${context.sessionId}`).emit(
+                `incoming:${context.sessionId}:profile-updated`,
+                {
+                    from: params.jid,
+                    profilePicUrl: params.jid.includes('@g.us') ? null : profileUrl,
+                    groupPicUrl: params.jid.includes('@g.us') ? profileUrl : null,
+                    profilePictureStatus: result.status,
+                    isGroup: params.jid.includes('@g.us'),
+                },
+            );
+        }).catch(() => undefined);
+    }
+
+    return true;
+}
+
+async function markPendingOutgoingMessageAsFailed(messageId: string): Promise<void> {
+    await prisma.outgoingMessage.updateMany({
+        where: { id: messageId, status: 'pending' },
+        data: { status: 'error', updatedAt: new Date() },
+    });
+}
+
+export function resolveTrackedOutboundMessageId(session: any, requestedId?: string): string {
+    return requestedId || createTrackedMessageId(undefined, session?.user?.id);
+}
+
+/**
+ * Keep reservation/send ordering in one place so every public sender has a
+ * durable pending row before WhatsApp can emit a fast ACK or NACK.
+ */
+export async function runWithPendingOutgoingMessage<T>(params: {
+    persist: boolean;
+    reserve: () => Promise<boolean | void>;
+    send: () => Promise<T>;
+    markFailed: () => Promise<void>;
+    onDuplicate?: () => Promise<T> | T;
+}): Promise<T> {
+    let reserved = false;
+    try {
+        if (params.persist) {
+            const reservationCreated = await params.reserve();
+            if (reservationCreated === false) {
+                if (!params.onDuplicate) {
+                    throw new Error('Duplicate outgoing-message reservation');
+                }
+                return await params.onDuplicate();
+            }
+            reserved = true;
+        }
+        return await params.send();
+    } catch (error) {
+        if (reserved) {
+            try {
+                await params.markFailed();
+            } catch (markError) {
+                logger.error(
+                    { error: markError },
+                    '[MessageSender] Failed to mark pending outgoing message as error',
+                );
+            }
+        }
+        throw error;
     }
 }
 
@@ -171,6 +260,12 @@ export interface SendMessageOptions {
     messageId?: string;
     persist?: boolean;
     trackHealth?: boolean;
+    /**
+     * Resolve a personal phone-number JID to its canonical LID before delivery.
+     * Disable this for operations that must keep the exact addressing of an
+     * existing message (for example protocol actions or quoted replies).
+     */
+    resolveToLid?: boolean;
 }
 
 export interface SendMediaOptions extends SendMessageOptions {
@@ -182,6 +277,7 @@ export interface SendMediaOptions extends SendMessageOptions {
 export interface SendResult {
     success: boolean;
     messageId?: string;
+    idempotent?: boolean;
     result?: any;
     error?: string;
     errorCode?: string;
@@ -189,9 +285,204 @@ export interface SendResult {
     rateLimitInfo?: RateLimitResult;
 }
 
-function createSendFailure(error: any, fallback: string): SendResult {
+type TrackedSendExecution = {
+    result: any;
+    rateLimitInfo: RateLimitResult;
+    idempotent?: boolean;
+};
+
+function createIdempotentExecution(messageId: string, jid: string): TrackedSendExecution {
+    return {
+        result: {
+            key: { id: messageId, remoteJid: jid, fromMe: true },
+            idempotent: true,
+        },
+        rateLimitInfo: {
+            allowed: true,
+            delayed: false,
+            delayMs: 0,
+            estimatedSendTime: new Date(),
+            queuePosition: 0,
+            message: 'Permintaan duplikat menggunakan hasil pengiriman yang sama',
+        },
+        idempotent: true,
+    };
+}
+
+export function assertReturnedMessageId(result: any, expectedMessageId: string): void {
+    const returnedMessageId = result?.key?.id;
+    if (returnedMessageId === expectedMessageId) return;
+
+    const error = new Error(
+        returnedMessageId
+            ? 'WhatsApp mengembalikan ID pesan yang berbeda dari ID pelacakan.'
+            : 'WhatsApp tidak mengembalikan ID pesan untuk pelacakan.',
+    ) as Error & { code?: string; statusCode?: number };
+    error.code = 'WHATSAPP_MESSAGE_ID_MISMATCH';
+    error.statusCode = 502;
+    throw error;
+}
+
+async function sendTrackedMessage(
+    session: any,
+    jid: string,
+    content: any,
+    sendOptions: any,
+    messageId: string,
+): Promise<any> {
+    const result = await session.sendMessage(jid, content, sendOptions);
+    assertReturnedMessageId(result, messageId);
+    return result;
+}
+
+function isPersonalPhoneJid(jid: string): boolean {
+    return jid.endsWith('@s.whatsapp.net') || jid.endsWith('@hosted');
+}
+
+function isCanonicalLidJid(jid: unknown): jid is string {
+    return (
+        typeof jid === 'string' &&
+        /^[^@\s]+@(lid|hosted\.lid)$/.test(jid)
+    );
+}
+
+function isProtocolMessageContent(content: any): boolean {
+    if (!content || typeof content !== 'object') return false;
+
+    return Boolean(
+        content.react ||
+        content.delete ||
+        content.edit ||
+        content.pin ||
+        content.keepInChat ||
+        content.protocolMessage ||
+        Object.prototype.hasOwnProperty.call(content, 'disappearingMessagesInChat') ||
+        Object.prototype.hasOwnProperty.call(content, 'limitSharing') ||
+        Object.prototype.hasOwnProperty.call(content, 'sharePhoneNumber')
+    );
+}
+
+type SessionSendReadiness = {
+    ready: boolean;
+    code?: string;
+    message?: string;
+    statusCode?: number;
+    retryAt?: string;
+};
+
+export function assertOutboundSessionReady(session: any, jid?: string): void {
+    const readiness: SessionSendReadiness | undefined =
+        typeof session?.getSendReadiness === 'function'
+            ? session.getSendReadiness(jid)
+            : undefined;
+
+    if (readiness?.ready === false) {
+        const error = new Error(
+            readiness.message || 'Sesi WhatsApp belum siap mengirim pesan',
+        ) as Error & { code?: string; statusCode?: number; retryAt?: string };
+        error.code = readiness.code || 'WHATSAPP_SESSION_NOT_READY';
+        error.statusCode = readiness.statusCode || 503;
+        error.retryAt = readiness.retryAt;
+        throw error;
+    }
+
+    // Compatibility fallback for raw Baileys sockets that do not carry the
+    // generation-aware readiness probe installed by whatsapp.ts.
+    if (!readiness && (!session?.user || session?.ws?.readyState !== 1)) {
+        const error = new Error(
+            'Sesi WhatsApp sedang tidak terhubung atau menyambung ulang.',
+        ) as Error & { code?: string; statusCode?: number };
+        error.code = 'WHATSAPP_SESSION_NOT_READY';
+        error.statusCode = 503;
+        throw error;
+    }
+}
+
+function shouldGuardRecipientCooldown(
+    jid: string,
+    content?: any,
+): boolean {
+    return (
+        !jid.endsWith('@g.us') &&
+        !jid.endsWith('@newsletter') &&
+        !isProtocolMessageContent(content)
+    );
+}
+
+async function prepareOutboundDeliveryJid(
+    session: any,
+    jid: string,
+    options?: SendMessageOptions,
+    content?: any,
+): Promise<string> {
+    const guardRecipient = shouldGuardRecipientCooldown(jid, content);
+    assertOutboundSessionReady(session, guardRecipient ? jid : undefined);
+
+    const deliveryJid = await resolveCanonicalOutboundJid(
+        session,
+        jid,
+        shouldUseCanonicalOutboundRouting(jid, options, content),
+    );
+
+    // Mapping and other pre-send work can await I/O. Re-check the active socket
+    // generation immediately before handing the stanza to Baileys.
+    assertOutboundSessionReady(session, guardRecipient ? deliveryJid : undefined);
+    return deliveryJid;
+}
+
+/**
+ * Decide whether a send may use canonical PN -> LID routing.
+ *
+ * New one-to-one messages opt in by default. Address-bound operations keep the
+ * original JID so their message keys and quoted context remain consistent.
+ */
+export function shouldUseCanonicalOutboundRouting(
+    jid: string,
+    options?: SendMessageOptions,
+    content?: any,
+): boolean {
+    return (
+        isPersonalPhoneJid(jid) &&
+        options?.resolveToLid !== false &&
+        !options?.quoted &&
+        !isProtocolMessageContent(content)
+    );
+}
+
+/**
+ * Resolve a personal PN JID through Baileys' stored PN/LID mapping.
+ * Missing, invalid, or failed lookups safely fall back to the original JID.
+ */
+export async function resolveCanonicalOutboundJid(
+    session: any,
+    jid: string,
+    enabled = true,
+): Promise<string> {
+    if (!enabled || !isPersonalPhoneJid(jid)) return jid;
+
+    try {
+        const mappedJid = await session?.signalRepository?.lidMapping?.getLIDForPN?.(jid);
+        if (isCanonicalLidJid(mappedJid)) {
+            logger.debug(
+                { sourceAddressing: 'pn', deliveryAddressing: 'lid' },
+                '[MessageSender] Using canonical LID routing for personal message',
+            );
+            return mappedJid;
+        }
+    } catch (error) {
+        logger.warn(
+            { error: error instanceof Error ? error.message : 'LID lookup failed' },
+            '[MessageSender] Canonical LID lookup failed; falling back to PN routing',
+        );
+    }
+
+    return jid;
+}
+
+function createSendFailure(error: any, fallback: string, messageId?: string): SendResult {
     return {
         success: false,
+        messageId,
         error: error?.message || fallback,
         errorCode: typeof error?.code === 'string' ? error.code : undefined,
         statusCode: typeof error?.statusCode === 'number' ? error.statusCode : undefined,
@@ -228,28 +519,49 @@ export async function sendTextMessage(
     text: string,
     options?: SendMessageOptions
 ): Promise<SendResult> {
-    const taskId = options?.messageId || `text-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    const messageId = resolveTrackedOutboundMessageId(session, options?.messageId);
+    const taskId = messageId;
     
     try {
-        const { result, rateLimitInfo } = await executeWithRateLimit(
-            deviceId,
-            async () => {
-                await assertDeviceCanSend(deviceId);
-                const sendOptions: any = {};
-                if (options?.quoted) sendOptions.quoted = options.quoted;
-                if (options?.messageId) sendOptions.messageId = options.messageId;
+        const { result, rateLimitInfo, idempotent } =
+            await runWithPendingOutgoingMessage<TrackedSendExecution>({
+            persist: options?.persist !== false,
+            reserve: () => persistPendingOutgoingMessage({
+                deviceId,
+                jid,
+                messageId,
+                text,
+                session,
+            }),
+            markFailed: () => markPendingOutgoingMessageAsFailed(messageId),
+            onDuplicate: () => createIdempotentExecution(messageId, jid),
+            send: () => executeWithRateLimit(
+                deviceId,
+                async () => {
+                    await assertDeviceCanSend(deviceId);
+                    const sendOptions: any = { messageId };
+                    if (options?.quoted) sendOptions.quoted = options.quoted;
 
-                return await session.sendMessage(jid, { text }, sendOptions);
-            },
-            taskId
-        );
-
-        const messageId = result?.key?.id;
-        await persistOutgoingMessage({ deviceId, jid, messageId, text, session });
+                    const deliveryJid = await prepareOutboundDeliveryJid(
+                        session,
+                        jid,
+                        options,
+                    );
+                    return sendTrackedMessage(
+                        session,
+                        deliveryJid,
+                        { text },
+                        sendOptions,
+                        messageId,
+                    );
+                },
+                taskId,
+            ),
+        });
         
         // 🔥 Increment message count for health tracking
         const devicePkId = await getDevicePkId(deviceId);
-        if (devicePkId) {
+        if (devicePkId && !idempotent) {
             await incrementMessageCount(devicePkId);
         }
         
@@ -261,6 +573,7 @@ export async function sendTextMessage(
         return {
             success: true,
             messageId,
+            idempotent,
             result,
             rateLimitInfo
         };
@@ -269,7 +582,7 @@ export async function sendTextMessage(
             { error: error.message, deviceId, jid },
             '[MessageSender] Failed to send text message'
         );
-        return createSendFailure(error, 'Failed to send message');
+        return createSendFailure(error, 'Failed to send message', messageId);
     }
 }
 
@@ -283,40 +596,56 @@ export async function sendImageMessage(
     image: Buffer | { url: string },
     options?: SendMediaOptions
 ): Promise<SendResult> {
-    const taskId = options?.messageId || `image-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    const messageId = resolveTrackedOutboundMessageId(session, options?.messageId);
+    const taskId = messageId;
     
     try {
-        const { result, rateLimitInfo } = await executeWithRateLimit(
-            deviceId,
-            async () => {
-                await assertDeviceCanSend(deviceId);
-                const message: any = { image };
-                if (options?.caption) message.caption = options.caption;
-                if (options?.fileName) message.fileName = options.fileName;
-                
-                const sendOptions: any = {};
-                if (options?.quoted) sendOptions.quoted = options.quoted;
-                if (options?.messageId) sendOptions.messageId = options.messageId;
+        const { result, rateLimitInfo, idempotent } =
+            await runWithPendingOutgoingMessage<TrackedSendExecution>({
+            persist: options?.persist !== false,
+            reserve: () => persistPendingOutgoingMessage({
+                deviceId,
+                jid,
+                messageId,
+                text: options?.caption || '[Gambar]',
+                mediaPath: !Buffer.isBuffer(image) ? image.url : null,
+                fileName: options?.fileName || null,
+                session,
+            }),
+            markFailed: () => markPendingOutgoingMessageAsFailed(messageId),
+            onDuplicate: () => createIdempotentExecution(messageId, jid),
+            send: () => executeWithRateLimit(
+                deviceId,
+                async () => {
+                    await assertDeviceCanSend(deviceId);
+                    const message: any = { image };
+                    if (options?.caption) message.caption = options.caption;
+                    if (options?.fileName) message.fileName = options.fileName;
 
-                return await session.sendMessage(jid, message, sendOptions);
-            },
-            taskId
-        );
+                    const sendOptions: any = { messageId };
+                    if (options?.quoted) sendOptions.quoted = options.quoted;
 
-        const messageId = result?.key?.id;
-        await persistOutgoingMessage({
-            deviceId,
-            jid,
-            messageId,
-            text: options?.caption || '[Gambar]',
-            mediaPath: !Buffer.isBuffer(image) ? image.url : null,
-            fileName: options?.fileName || null,
-            session,
+                    const deliveryJid = await prepareOutboundDeliveryJid(
+                        session,
+                        jid,
+                        options,
+                        message,
+                    );
+                    return sendTrackedMessage(
+                        session,
+                        deliveryJid,
+                        message,
+                        sendOptions,
+                        messageId,
+                    );
+                },
+                taskId,
+            ),
         });
         
         // 🔥 Increment message count for health tracking
         const devicePkId = await getDevicePkId(deviceId);
-        if (devicePkId) {
+        if (devicePkId && !idempotent) {
             await incrementMessageCount(devicePkId);
         }
         
@@ -328,6 +657,7 @@ export async function sendImageMessage(
         return {
             success: true,
             messageId,
+            idempotent,
             result,
             rateLimitInfo
         };
@@ -336,7 +666,7 @@ export async function sendImageMessage(
             { error: error.message, deviceId, jid },
             '[MessageSender] Failed to send image message'
         );
-        return createSendFailure(error, 'Failed to send image');
+        return createSendFailure(error, 'Failed to send image', messageId);
     }
 }
 
@@ -350,43 +680,59 @@ export async function sendDocumentMessage(
     document: Buffer | { url: string },
     options?: SendMediaOptions
 ): Promise<SendResult> {
-    const taskId = options?.messageId || `doc-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    const messageId = resolveTrackedOutboundMessageId(session, options?.messageId);
+    const taskId = messageId;
     
     try {
-        const { result, rateLimitInfo } = await executeWithRateLimit(
-            deviceId,
-            async () => {
-                await assertDeviceCanSend(deviceId);
-                const message: any = { 
-                    document,
-                    mimetype: options?.mimetype || 'application/octet-stream'
-                };
-                if (options?.caption) message.caption = options.caption;
-                if (options?.fileName) message.fileName = options.fileName;
-                
-                const sendOptions: any = {};
-                if (options?.quoted) sendOptions.quoted = options.quoted;
-                if (options?.messageId) sendOptions.messageId = options.messageId;
+        const { result, rateLimitInfo, idempotent } =
+            await runWithPendingOutgoingMessage<TrackedSendExecution>({
+            persist: options?.persist !== false,
+            reserve: () => persistPendingOutgoingMessage({
+                deviceId,
+                jid,
+                messageId,
+                text: options?.caption || options?.fileName || '[Dokumen]',
+                mediaPath: !Buffer.isBuffer(document) ? document.url : null,
+                fileName: options?.fileName || null,
+                session,
+            }),
+            markFailed: () => markPendingOutgoingMessageAsFailed(messageId),
+            onDuplicate: () => createIdempotentExecution(messageId, jid),
+            send: () => executeWithRateLimit(
+                deviceId,
+                async () => {
+                    await assertDeviceCanSend(deviceId);
+                    const message: any = {
+                        document,
+                        mimetype: options?.mimetype || 'application/octet-stream'
+                    };
+                    if (options?.caption) message.caption = options.caption;
+                    if (options?.fileName) message.fileName = options.fileName;
 
-                return await session.sendMessage(jid, message, sendOptions);
-            },
-            taskId
-        );
+                    const sendOptions: any = { messageId };
+                    if (options?.quoted) sendOptions.quoted = options.quoted;
 
-        const messageId = result?.key?.id;
-        await persistOutgoingMessage({
-            deviceId,
-            jid,
-            messageId,
-            text: options?.caption || options?.fileName || '[Dokumen]',
-            mediaPath: !Buffer.isBuffer(document) ? document.url : null,
-            fileName: options?.fileName || null,
-            session,
+                    const deliveryJid = await prepareOutboundDeliveryJid(
+                        session,
+                        jid,
+                        options,
+                        message,
+                    );
+                    return sendTrackedMessage(
+                        session,
+                        deliveryJid,
+                        message,
+                        sendOptions,
+                        messageId,
+                    );
+                },
+                taskId,
+            ),
         });
         
         // 🔥 Increment message count for health tracking
         const devicePkId = await getDevicePkId(deviceId);
-        if (devicePkId) {
+        if (devicePkId && !idempotent) {
             await incrementMessageCount(devicePkId);
         }
         
@@ -398,6 +744,7 @@ export async function sendDocumentMessage(
         return {
             success: true,
             messageId,
+            idempotent,
             result,
             rateLimitInfo
         };
@@ -406,7 +753,7 @@ export async function sendDocumentMessage(
             { error: error.message, deviceId, jid },
             '[MessageSender] Failed to send document message'
         );
-        return createSendFailure(error, 'Failed to send document');
+        return createSendFailure(error, 'Failed to send document', messageId);
     }
 }
 
@@ -420,40 +767,56 @@ export async function sendVideoMessage(
     video: Buffer | { url: string },
     options?: SendMediaOptions
 ): Promise<SendResult> {
-    const taskId = options?.messageId || `video-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    const messageId = resolveTrackedOutboundMessageId(session, options?.messageId);
+    const taskId = messageId;
     
     try {
-        const { result, rateLimitInfo } = await executeWithRateLimit(
-            deviceId,
-            async () => {
-                await assertDeviceCanSend(deviceId);
-                const message: any = { video };
-                if (options?.caption) message.caption = options.caption;
-                if (options?.fileName) message.fileName = options.fileName;
-                
-                const sendOptions: any = {};
-                if (options?.quoted) sendOptions.quoted = options.quoted;
-                if (options?.messageId) sendOptions.messageId = options.messageId;
+        const { result, rateLimitInfo, idempotent } =
+            await runWithPendingOutgoingMessage<TrackedSendExecution>({
+            persist: options?.persist !== false,
+            reserve: () => persistPendingOutgoingMessage({
+                deviceId,
+                jid,
+                messageId,
+                text: options?.caption || '[Video]',
+                mediaPath: !Buffer.isBuffer(video) ? video.url : null,
+                fileName: options?.fileName || null,
+                session,
+            }),
+            markFailed: () => markPendingOutgoingMessageAsFailed(messageId),
+            onDuplicate: () => createIdempotentExecution(messageId, jid),
+            send: () => executeWithRateLimit(
+                deviceId,
+                async () => {
+                    await assertDeviceCanSend(deviceId);
+                    const message: any = { video };
+                    if (options?.caption) message.caption = options.caption;
+                    if (options?.fileName) message.fileName = options.fileName;
 
-                return await session.sendMessage(jid, message, sendOptions);
-            },
-            taskId
-        );
+                    const sendOptions: any = { messageId };
+                    if (options?.quoted) sendOptions.quoted = options.quoted;
 
-        const messageId = result?.key?.id;
-        await persistOutgoingMessage({
-            deviceId,
-            jid,
-            messageId,
-            text: options?.caption || '[Video]',
-            mediaPath: !Buffer.isBuffer(video) ? video.url : null,
-            fileName: options?.fileName || null,
-            session,
+                    const deliveryJid = await prepareOutboundDeliveryJid(
+                        session,
+                        jid,
+                        options,
+                        message,
+                    );
+                    return sendTrackedMessage(
+                        session,
+                        deliveryJid,
+                        message,
+                        sendOptions,
+                        messageId,
+                    );
+                },
+                taskId,
+            ),
         });
         
         // 🔥 Increment message count for health tracking
         const devicePkId = await getDevicePkId(deviceId);
-        if (devicePkId) {
+        if (devicePkId && !idempotent) {
             await incrementMessageCount(devicePkId);
         }
         
@@ -465,6 +828,7 @@ export async function sendVideoMessage(
         return {
             success: true,
             messageId,
+            idempotent,
             result,
             rateLimitInfo
         };
@@ -473,7 +837,7 @@ export async function sendVideoMessage(
             { error: error.message, deviceId, jid },
             '[MessageSender] Failed to send video message'
         );
-        return createSendFailure(error, 'Failed to send video');
+        return createSendFailure(error, 'Failed to send video', messageId);
     }
 }
 
@@ -487,42 +851,58 @@ export async function sendAudioMessage(
     audio: Buffer | { url: string },
     options?: SendMediaOptions
 ): Promise<SendResult> {
-    const taskId = options?.messageId || `audio-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    const messageId = resolveTrackedOutboundMessageId(session, options?.messageId);
+    const taskId = messageId;
     
     try {
-        const { result, rateLimitInfo } = await executeWithRateLimit(
-            deviceId,
-            async () => {
-                await assertDeviceCanSend(deviceId);
-                const message: any = { 
-                    audio,
-                    mimetype: options?.mimetype || 'audio/mp4'
-                };
-                if (options?.fileName) message.fileName = options.fileName;
-                
-                const sendOptions: any = {};
-                if (options?.quoted) sendOptions.quoted = options.quoted;
-                if (options?.messageId) sendOptions.messageId = options.messageId;
+        const { result, rateLimitInfo, idempotent } =
+            await runWithPendingOutgoingMessage<TrackedSendExecution>({
+            persist: options?.persist !== false,
+            reserve: () => persistPendingOutgoingMessage({
+                deviceId,
+                jid,
+                messageId,
+                text: options?.fileName || '[Audio]',
+                mediaPath: !Buffer.isBuffer(audio) ? audio.url : null,
+                fileName: options?.fileName || null,
+                session,
+            }),
+            markFailed: () => markPendingOutgoingMessageAsFailed(messageId),
+            onDuplicate: () => createIdempotentExecution(messageId, jid),
+            send: () => executeWithRateLimit(
+                deviceId,
+                async () => {
+                    await assertDeviceCanSend(deviceId);
+                    const message: any = {
+                        audio,
+                        mimetype: options?.mimetype || 'audio/mp4'
+                    };
+                    if (options?.fileName) message.fileName = options.fileName;
 
-                return await session.sendMessage(jid, message, sendOptions);
-            },
-            taskId
-        );
+                    const sendOptions: any = { messageId };
+                    if (options?.quoted) sendOptions.quoted = options.quoted;
 
-        const messageId = result?.key?.id;
-        await persistOutgoingMessage({
-            deviceId,
-            jid,
-            messageId,
-            text: options?.fileName || '[Audio]',
-            mediaPath: !Buffer.isBuffer(audio) ? audio.url : null,
-            fileName: options?.fileName || null,
-            session,
+                    const deliveryJid = await prepareOutboundDeliveryJid(
+                        session,
+                        jid,
+                        options,
+                        message,
+                    );
+                    return sendTrackedMessage(
+                        session,
+                        deliveryJid,
+                        message,
+                        sendOptions,
+                        messageId,
+                    );
+                },
+                taskId,
+            ),
         });
         
         // 🔥 Increment message count for health tracking
         const devicePkId = await getDevicePkId(deviceId);
-        if (devicePkId) {
+        if (devicePkId && !idempotent) {
             await incrementMessageCount(devicePkId);
         }
         
@@ -534,6 +914,7 @@ export async function sendAudioMessage(
         return {
             success: true,
             messageId,
+            idempotent,
             result,
             rateLimitInfo
         };
@@ -542,7 +923,7 @@ export async function sendAudioMessage(
             { error: error.message, deviceId, jid },
             '[MessageSender] Failed to send audio message'
         );
-        return createSendFailure(error, 'Failed to send audio');
+        return createSendFailure(error, 'Failed to send audio', messageId);
     }
 }
 
@@ -583,35 +964,24 @@ export async function sendGenericMessage(
     content: any,
     options?: SendMessageOptions
 ): Promise<SendResult> {
-    const taskId = options?.messageId || `generic-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    const messageId = resolveTrackedOutboundMessageId(session, options?.messageId);
+    const taskId = messageId;
+    const genericText =
+        typeof content === 'string'
+            ? content
+            : content?.text || content?.caption || '[Pesan]';
+    const genericMedia =
+        content?.image?.url ||
+        content?.document?.url ||
+        content?.video?.url ||
+        content?.audio?.url ||
+        null;
     
     try {
-        const { result, rateLimitInfo } = await executeWithRateLimit(
-            deviceId,
-            async () => {
-                await assertDeviceCanSend(deviceId);
-                const sendOptions: any = {};
-                if (options?.quoted) sendOptions.quoted = options.quoted;
-                if (options?.messageId) sendOptions.messageId = options.messageId;
-
-                return await session.sendMessage(jid, content, sendOptions);
-            },
-            taskId
-        );
-
-        const messageId = result?.key?.id;
-        const genericText =
-            typeof content === 'string'
-                ? content
-                : content?.text || content?.caption || '[Pesan]';
-        const genericMedia =
-            content?.image?.url ||
-            content?.document?.url ||
-            content?.video?.url ||
-            content?.audio?.url ||
-            null;
-        if (options?.persist !== false) {
-            await persistOutgoingMessage({
+        const { result, rateLimitInfo, idempotent } =
+            await runWithPendingOutgoingMessage<TrackedSendExecution>({
+            persist: options?.persist !== false,
+            reserve: () => persistPendingOutgoingMessage({
                 deviceId,
                 jid,
                 messageId,
@@ -619,11 +989,36 @@ export async function sendGenericMessage(
                 mediaPath: genericMedia,
                 fileName: content?.fileName || null,
                 session,
-            });
-        }
+            }),
+            markFailed: () => markPendingOutgoingMessageAsFailed(messageId),
+            onDuplicate: () => createIdempotentExecution(messageId, jid),
+            send: () => executeWithRateLimit(
+                deviceId,
+                async () => {
+                    await assertDeviceCanSend(deviceId);
+                    const sendOptions: any = { messageId };
+                    if (options?.quoted) sendOptions.quoted = options.quoted;
+
+                    const deliveryJid = await prepareOutboundDeliveryJid(
+                        session,
+                        jid,
+                        options,
+                        content,
+                    );
+                    return sendTrackedMessage(
+                        session,
+                        deliveryJid,
+                        content,
+                        sendOptions,
+                        messageId,
+                    );
+                },
+                taskId,
+            ),
+        });
         
         // 🔥 Increment message count for health tracking
-        if (options?.trackHealth !== false) {
+        if (options?.trackHealth !== false && !idempotent) {
             const devicePkId = await getDevicePkId(deviceId);
             if (devicePkId) {
                 await incrementMessageCount(devicePkId);
@@ -638,6 +1033,7 @@ export async function sendGenericMessage(
         return {
             success: true,
             messageId,
+            idempotent,
             result,
             rateLimitInfo
         };
@@ -646,7 +1042,7 @@ export async function sendGenericMessage(
             { error: error.message, deviceId, jid },
             '[MessageSender] Failed to send generic message'
         );
-        return createSendFailure(error, 'Failed to send message');
+        return createSendFailure(error, 'Failed to send message', messageId);
     }
 }
 

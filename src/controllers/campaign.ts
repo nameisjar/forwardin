@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { RequestHandler } from 'express';
 import prisma from '../utils/db';
-import { getInstance, getJid, sendMediaFile } from '../whatsapp';
+import { getInstance, getJid, sendMediaFile, sendTrackedSessionMessage } from '../whatsapp';
 import logger from '../config/logger';
 import schedule from 'node-schedule';
 import { delay as delayMs } from '../utils/delay';
@@ -315,7 +315,8 @@ export async function sendCampaignReply(sessionId: any, data: any) {
             //         data,
             //     );
             // } else {
-            session.sendMessage(
+            await sendTrackedSessionMessage(
+                session,
                 jid,
                 { text: replaceVariables(replyText, variables) },
                 { quoted: data },

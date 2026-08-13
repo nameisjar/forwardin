@@ -1,5 +1,12 @@
 import { RequestHandler } from 'express';
-import { getInstance, verifyJid, sendButtonMessage, sendMediaFile, getJid } from '../whatsapp';
+import {
+    getInstance,
+    verifyJid,
+    sendButtonMessage,
+    sendMediaFile,
+    getJid,
+    sendTrackedSessionMessage,
+} from '../whatsapp';
 import logger from '../config/logger';
 import prisma, { serializePrisma } from '../utils/db';
 import { delay as delayMs } from '../utils/delay';
@@ -1278,7 +1285,12 @@ export const deleteMessagesForEveryone: RequestHandler = async (req, res) => {
                         fromMe: true, // assuming it's from the sender's perspective
                     };
 
-                    const deleteMessageResult = await session.sendMessage(jid, { delete: key });
+                    const deleteMessageResult = await sendTrackedSessionMessage(
+                        session,
+                        jid,
+                        { delete: key },
+                        { persist: false, trackHealth: false },
+                    );
                     results.push({ index, result: deleteMessageResult });
                     await prisma.outgoingMessage.deleteMany({
                         where: { sessionId: req.params.sessionId, id: deleteMessageKey.id },
@@ -1379,10 +1391,15 @@ export const updateMessage: RequestHandler = async (req, res) => {
                         fromMe: true, // assuming it's from the sender's perspective
                     };
 
-                    const updateMessageResult = await session.sendMessage(jid, {
-                        text: newText,
-                        edit: key,
-                    });
+                    const updateMessageResult = await sendTrackedSessionMessage(
+                        session,
+                        jid,
+                        {
+                            text: newText,
+                            edit: key,
+                        },
+                        { persist: false, trackHealth: false },
+                    );
 
                     results.push({ index, result: updateMessageResult });
                     await prisma.outgoingMessage.update({

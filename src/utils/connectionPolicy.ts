@@ -44,6 +44,24 @@ export function getReconnectDelay(
 }
 
 /**
+ * A 401 accompanied by an explicit stream conflict can be caused by two local
+ * transports briefly overlapping during socket replacement. Allow exactly one
+ * controlled recovery before treating it as a terminal credential failure.
+ */
+export function isRecoverableConnectionConflict(
+    code: number | undefined,
+    message: string,
+    recoveryAttempts: number,
+    maxRecoveryAttempts = 1,
+): boolean {
+    return (
+        code === 401 &&
+        /stream\s+errored.*conflict/i.test(message) &&
+        recoveryAttempts < Math.max(0, maxRecoveryAttempts)
+    );
+}
+
+/**
  * Derive one public status from database and in-memory session state.
  * Runtime state wins in both directions, so a stale DB value cannot report
  * an instance as online or hide an already-open connection.
