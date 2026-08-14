@@ -7,6 +7,7 @@ import { useDevice } from '../utils/quota';
 import fs from 'fs';
 import path from 'path';
 import schedule from 'node-schedule';
+import sharp from 'sharp';
 import { isUUID } from '../utils/uuidChecker';
 import { generateDeviceAccessToken } from '../utils/jwtGenerator';
 import {
@@ -1254,7 +1255,7 @@ export const getDeviceOutbox: RequestHandler = async (req, res) => {
             return res.status(400).json({ message: 'Invalid deviceId' });
         }
 
-        const { to, limit = '50' } = req.query;
+        const { to, limit = '30', before } = req.query;
         const userPkId = req.authenticatedUser.pkId;
 
         const device = await prisma.device.findFirst({
@@ -1276,12 +1277,19 @@ export const getDeviceOutbox: RequestHandler = async (req, res) => {
         if (to && typeof to === 'string') {
             where.to = to;
         }
+        if (typeof before === 'string' && before.trim()) {
+            const beforeDate = new Date(before);
+            if (Number.isNaN(beforeDate.getTime())) {
+                return res.status(400).json({ message: 'Invalid before cursor' });
+            }
+            where.createdAt = { lt: beforeDate };
+        }
 
         // Fetch outgoing messages
         const messages = await prisma.outgoingMessage.findMany({
             where,
             orderBy: { createdAt: 'desc' }, // ✅ DESC untuk ambil yang TERBARU dulu
-            take: parseInt(limit as string) || 50,
+            take: Math.min(50, Math.max(1, parseInt(limit as string) || 30)),
             select: {
                 id: true,
                 waMessageId: true,
@@ -1298,7 +1306,10 @@ export const getDeviceOutbox: RequestHandler = async (req, res) => {
 
         // ✅ CRITICAL: Decrypt messages before sending to frontend
         const { decryptOutgoingMessages } = await import('../utils/messageEncryption');
-        const decryptedMessages = decryptOutgoingMessages(messages);
+        const decryptedMessages = decryptOutgoingMessages(messages).map((message) => ({
+            ...message,
+            mediaPath: serializeInboxMediaPath(message.mediaPath, deviceUuid, message.id),
+        }));
 
         // ✅ CRITICAL: Disable ETag caching for this endpoint
         // Pesan baru harus selalu di-fetch dari database, tidak boleh di-cache
@@ -1384,7 +1395,10 @@ export const getDeviceOutboxConversations: RequestHandler = async (req, res) => 
         });
 
         const { decryptOutgoingMessages } = await import('../utils/messageEncryption');
-        const decryptedMessages = decryptOutgoingMessages(latestMessages);
+        const decryptedMessages = decryptOutgoingMessages(latestMessages).map((message) => ({
+            ...message,
+            mediaPath: serializeInboxMediaPath(message.mediaPath, deviceUuid, message.id),
+        }));
         const recipientJids = [...new Set(decryptedMessages.map((message) => message.to))];
         const recipientPhones = [
             ...new Set(
@@ -1671,9 +1685,9 @@ async function normalizeIncomingConversationIdentities(messages: any[], devicePk
 }
 
 /**
- * Serve persisted Inbox media through a regular HTTPS URL. The URL contains an
- * HMAC token and can therefore be used by img/video elements without exposing a
- * user JWT or a database data URL to the browser.
+ * Serve persisted Inbox/outbox media through a regular HTTPS URL. The URL
+ * contains an HMAC token and can therefore be used by native media elements
+ * without exposing a user JWT, filesystem path, or database data URL.
  */
 export const getInboxMedia: RequestHandler = async (req, res) => {
     try {
@@ -1683,15 +1697,44 @@ export const getInboxMedia: RequestHandler = async (req, res) => {
             return res.status(404).end();
         }
 
-        const message = await prisma.incomingMessage.findFirst({
+        const incomingMessage = await prisma.incomingMessage.findFirst({
             where: {
                 id: messageId,
                 device: { id: deviceId },
             },
             select: { mediaPath: true },
         });
-        const storedMedia = message?.mediaPath;
+        const outgoingMessage = incomingMessage?.mediaPath
+            ? null
+            : await prisma.outgoingMessage.findFirst({
+                  where: {
+                      id: messageId,
+                      device: { id: deviceId },
+                  },
+                  select: { mediaPath: true },
+              });
+        const storedMedia = incomingMessage?.mediaPath || outgoingMessage?.mediaPath;
         if (!storedMedia) return res.status(404).end();
+        const wantsThumbnail = req.query.thumbnail === '1';
+
+        const sendThumbnail = async (source: Buffer | string) => {
+            const thumbnail = await sharp(source, {
+                animated: false,
+                limitInputPixels: 64_000_000,
+            })
+                .rotate()
+                .resize({
+                    width: 640,
+                    height: 640,
+                    fit: 'inside',
+                    withoutEnlargement: true,
+                })
+                .webp({ quality: 78 })
+                .toBuffer();
+            res.setHeader('Content-Type', 'image/webp');
+            res.setHeader('Content-Length', String(thumbnail.length));
+            return res.status(200).send(thumbnail);
+        };
 
         res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
         res.setHeader('Cache-Control', 'private, max-age=86400');
@@ -1705,6 +1748,14 @@ export const getInboxMedia: RequestHandler = async (req, res) => {
                 : 'application/octet-stream';
             const mediaBuffer = Buffer.from(match[2], 'base64');
             if (mediaBuffer.length === 0) return res.status(404).end();
+
+            if (wantsThumbnail) {
+                try {
+                    return await sendThumbnail(mediaBuffer);
+                } catch {
+                    return res.status(415).end();
+                }
+            }
 
             res.setHeader('Content-Type', contentType);
             res.setHeader('Content-Length', String(mediaBuffer.length));
@@ -1721,6 +1772,17 @@ export const getInboxMedia: RequestHandler = async (req, res) => {
             return res.status(404).end();
         }
         if (!fs.existsSync(mediaFile)) return res.status(404).end();
+        if (wantsThumbnail) {
+            const extension = path.extname(mediaFile).toLowerCase();
+            if (!['.jpg', '.jpeg', '.png', '.gif', '.webp'].includes(extension)) {
+                return res.status(415).end();
+            }
+            try {
+                return await sendThumbnail(mediaFile);
+            } catch {
+                return res.status(415).end();
+            }
+        }
         return res.sendFile(mediaFile);
     } catch (error) {
         logger.error({ error, messageId: req.params.messageId }, 'Failed to serve Inbox media');
@@ -1808,6 +1870,8 @@ export const getDeviceInbox: RequestHandler = async (req, res) => {
         const {
             page = 1,
             pageSize = 25,
+            limit = 30,
+            before,
             phoneNumber,
             message,
             contactName,
@@ -1818,6 +1882,14 @@ export const getDeviceInbox: RequestHandler = async (req, res) => {
         const directConversationJid = typeof conversationJid === 'string'
             ? conversationJid.trim()
             : '';
+        const requestedConversationLimit = Math.min(50, Math.max(1, Number(limit) || 30));
+        let conversationBefore: Date | null = null;
+        if (directConversationJid && typeof before === 'string' && before.trim()) {
+            conversationBefore = new Date(before);
+            if (Number.isNaN(conversationBefore.getTime())) {
+                return res.status(400).json({ message: 'Invalid before cursor' });
+            }
+        }
 
         const whereClause: any = {
             deviceId: device.pkId,
@@ -1839,7 +1911,9 @@ export const getDeviceInbox: RequestHandler = async (req, res) => {
         }
 
         const hasSearchFilter = Boolean(phoneNumber || message || contactName);
-        const [incomingGroups, outgoingGroups] = await Promise.all([
+        const todayStart = new Date();
+        todayStart.setHours(0, 0, 0, 0);
+        const [incomingGroups, outgoingGroups, unreadGroups, todayIncomingCount] = await Promise.all([
             prisma.incomingMessage.groupBy({
                 by: ['from'],
                 where: whereClause,
@@ -1858,7 +1932,22 @@ export const getDeviceInbox: RequestHandler = async (req, res) => {
                       _count: { _all: true },
                   })
                 : Promise.resolve([]),
+            prisma.incomingMessage.groupBy({
+                by: ['from'],
+                where: { ...whereClause, isRead: false },
+                _count: { _all: true },
+            }),
+            prisma.incomingMessage.count({
+                where: {
+                    deviceId: device.pkId,
+                    inboxHiddenAt: null,
+                    receivedAt: { gte: todayStart },
+                },
+            }),
         ]);
+        const unreadCountByJid = new Map(
+            unreadGroups.map((group) => [group.from, group._count._all]),
+        );
 
         // Pagination must operate on conversations, not individual messages.
         // Otherwise a busy sender can occupy an entire page and the same chat
@@ -1910,8 +1999,16 @@ export const getDeviceInbox: RequestHandler = async (req, res) => {
         const messagesByConversation = await Promise.all(
             conversationKeys.map((from) =>
                 prisma.incomingMessage.findMany({
-                    take: 100,
-                    where: { ...whereClause, from },
+                    // The list needs only one latest message. Conversation detail
+                    // is fetched lazily in small cursor-based pages.
+                    take: directConversationJid ? requestedConversationLimit + 1 : 1,
+                    where: {
+                        ...whereClause,
+                        from,
+                        ...(directConversationJid && conversationBefore
+                            ? { receivedAt: { lt: conversationBefore } }
+                            : {}),
+                    },
                     include: {
                         contact: {
                             select: {
@@ -1926,7 +2023,13 @@ export const getDeviceInbox: RequestHandler = async (req, res) => {
                 }),
             ),
         );
-        const messages = messagesByConversation.flat();
+        const fetchedMessages = messagesByConversation.flat();
+        const conversationHasMore = Boolean(
+            directConversationJid && fetchedMessages.length > requestedConversationLimit,
+        );
+        const messages = directConversationJid
+            ? fetchedMessages.slice(0, requestedConversationLimit)
+            : fetchedMessages;
         const totalMessages = [...conversationIndex.values()].reduce(
             (sum, item) => sum + item.incomingCount + item.outgoingCount,
             0,
@@ -1964,6 +2067,10 @@ export const getDeviceInbox: RequestHandler = async (req, res) => {
                 message.id,
             );
             const profileCache = profileCacheByJid.get(message.from);
+            const conversationStats = conversationIndex.get(message.from);
+            item.conversationIncomingCount = conversationStats?.incomingCount || 0;
+            item.conversationOutgoingCount = conversationStats?.outgoingCount || 0;
+            item.conversationUnreadCount = unreadCountByJid.get(message.from) || 0;
             item.profilePictureStatus = profileCache?.status || 'unknown';
             if (profileCache?.hasImage) {
                 const profileUrl = createInboxProfileUrl(deviceUuid, message.from);
@@ -1997,6 +2104,12 @@ export const getDeviceInbox: RequestHandler = async (req, res) => {
                 totalPages,
                 hasMore,
                 conversationKeys,
+                conversationHasMore,
+                conversationNextCursor:
+                    directConversationJid && messages.length > 0
+                        ? messages[messages.length - 1].receivedAt.toISOString()
+                        : null,
+                todayIncomingCount,
             },
         });
     } catch (error) {

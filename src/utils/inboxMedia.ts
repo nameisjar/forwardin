@@ -38,9 +38,7 @@ export function serializeInboxMediaPath(
     deviceId: string,
     messageId: string,
 ): string | null | undefined {
-    return mediaPath?.startsWith('data:')
-        ? createInboxMediaUrl(deviceId, messageId)
-        : mediaPath;
+    return mediaPath ? createInboxMediaUrl(deviceId, messageId) : mediaPath;
 }
 
 export function createInboxProfileUrl(deviceId: string, jid: string): string {

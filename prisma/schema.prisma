@@ -388,6 +388,7 @@ model OutgoingMessage {
   @@index([sessionId, createdAt], map: "idx_outgoing_message_session_time")
   @@index([deviceId, createdAt], map: "idx_outgoing_message_device_time")
   @@index([deviceId, inboxHiddenAt, createdAt], map: "idx_outgoing_message_inbox_retention")
+  @@index([deviceId, inboxHiddenAt, to, createdAt], map: "idx_outgoing_message_inbox_conversation")
   @@index([status], map: "idx_outgoing_message_status")
 }
 
@@ -417,6 +418,8 @@ model IncomingMessage {
   @@index([deviceId], map: "idx_incoming_message_device")
   @@index([deviceId, isRead], map: "idx_incoming_message_device_read")
   @@index([deviceId, inboxHiddenAt, receivedAt], map: "idx_incoming_message_inbox_retention")
+  @@index([deviceId, inboxHiddenAt, from, receivedAt], map: "idx_incoming_message_inbox_conversation")
+  @@index([deviceId, from, isRead], map: "idx_incoming_message_conversation_read")
 }
 
 model InboxRetentionSetting {
