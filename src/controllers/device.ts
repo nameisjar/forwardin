@@ -1,4 +1,5 @@
 import { RequestHandler } from 'express';
+import { Prisma } from '@prisma/client';
 import { generateUuid } from '../utils/keyGenerator';
 import prisma, { serializePrisma } from '../utils/db';
 import logger from '../config/logger';
@@ -35,7 +36,7 @@ import {
     getInboxProfileCacheSummaries,
     refreshInboxProfileCache,
 } from '../services/inboxProfileCache';
-import { decryptIncomingMessage } from '../utils/messageEncryption';
+import { decryptIncomingMessage, decryptMessage } from '../utils/messageEncryption';
 import {
     deleteAllDeviceReactions,
     deleteConversationReactions,
@@ -1325,6 +1326,179 @@ export const getDeviceOutbox: RequestHandler = async (req, res) => {
     }
 };
 
+type ConversationTimelineRow = {
+    sourcePkId: number;
+    id: string;
+    direction: 'incoming' | 'outgoing';
+    directionOrder: number;
+    conversationJid: string;
+    message: string | null;
+    mediaPath: string | null;
+    fileName: string | null;
+    timestamp: Date;
+    status: string | null;
+    isRead: boolean | null;
+    isGroup: boolean;
+    participant: string | null;
+    pushName: string | null;
+    groupName: string | null;
+    waMessageId: string | null;
+    readBy: unknown;
+};
+
+type ConversationTimelineCursor = {
+    timestamp: Date;
+    directionOrder: number;
+    sourcePkId: number;
+};
+
+function encodeConversationTimelineCursor(row: ConversationTimelineRow): string {
+    return Buffer.from(
+        JSON.stringify({
+            timestamp: row.timestamp.toISOString(),
+            directionOrder: row.directionOrder,
+            sourcePkId: row.sourcePkId,
+        }),
+    ).toString('base64url');
+}
+
+function decodeConversationTimelineCursor(value: unknown): ConversationTimelineCursor | null {
+    if (typeof value !== 'string' || !value.trim()) return null;
+    try {
+        const parsed = JSON.parse(Buffer.from(value, 'base64url').toString('utf8'));
+        const timestamp = new Date(parsed.timestamp);
+        const directionOrder = Number(parsed.directionOrder);
+        const sourcePkId = Number(parsed.sourcePkId);
+        if (
+            Number.isNaN(timestamp.getTime())
+            || ![0, 1].includes(directionOrder)
+            || !Number.isSafeInteger(sourcePkId)
+            || sourcePkId < 1
+        ) {
+            return null;
+        }
+        return { timestamp, directionOrder, sourcePkId };
+    } catch {
+        return null;
+    }
+}
+
+/**
+ * Get one cursor-paginated timeline containing both incoming and outgoing
+ * messages. The browser no longer has to merge two independently paginated
+ * windows, which guarantees that the final item is the actual latest message.
+ * GET /devices/:deviceId/inbox/timeline?conversationJid=<jid>&limit=30&before=<cursor>
+ */
+export const getDeviceConversationTimeline: RequestHandler = async (req, res) => {
+    try {
+        const deviceUuid = req.params.deviceId;
+        const conversationJid = typeof req.query.conversationJid === 'string'
+            ? req.query.conversationJid.trim()
+            : '';
+        if (!isUUID(deviceUuid) || !conversationJid) {
+            return res.status(400).json({ message: 'Invalid deviceId or conversationJid' });
+        }
+
+        const requestedLimit = Math.min(50, Math.max(1, Number(req.query.limit) || 30));
+        const hasCursor = typeof req.query.before === 'string' && Boolean(req.query.before.trim());
+        const cursor = decodeConversationTimelineCursor(req.query.before);
+        if (hasCursor && !cursor) {
+            return res.status(400).json({ message: 'Invalid timeline cursor' });
+        }
+
+        const device = await prisma.device.findFirst({
+            where: {
+                id: deviceUuid,
+                ...accessibleDeviceWhere(req.authenticatedUser.pkId, req.privilege?.pkId),
+            },
+            select: { pkId: true },
+        });
+        if (!device) return res.status(404).json({ message: 'Device not found' });
+
+        const cursorFilter = cursor
+            ? Prisma.sql`WHERE ("timestamp", "directionOrder", "sourcePkId") < (${cursor.timestamp}, ${cursor.directionOrder}, ${cursor.sourcePkId})`
+            : Prisma.empty;
+        const rows = await prisma.$queryRaw<ConversationTimelineRow[]>(Prisma.sql`
+            SELECT *
+            FROM (
+                SELECT
+                    incoming."pkId" AS "sourcePkId",
+                    incoming."id" AS "id",
+                    'incoming'::TEXT AS "direction",
+                    0::INTEGER AS "directionOrder",
+                    incoming."from" AS "conversationJid",
+                    incoming."message" AS "message",
+                    incoming."mediaPath" AS "mediaPath",
+                    incoming."file_name" AS "fileName",
+                    incoming."received_at" AS "timestamp",
+                    NULL::TEXT AS "status",
+                    incoming."is_read" AS "isRead",
+                    (incoming."from" LIKE '%@g.us') AS "isGroup",
+                    incoming."participant" AS "participant",
+                    incoming."push_name" AS "pushName",
+                    incoming."group_name" AS "groupName",
+                    NULL::TEXT AS "waMessageId",
+                    NULL::JSONB AS "readBy"
+                FROM "IncomingMessage" incoming
+                WHERE incoming."device_id" = ${device.pkId}
+                  AND incoming."from" = ${conversationJid}
+                  AND incoming."inbox_hidden_at" IS NULL
+
+                UNION ALL
+
+                SELECT
+                    outgoing."pkId" AS "sourcePkId",
+                    outgoing."id" AS "id",
+                    'outgoing'::TEXT AS "direction",
+                    1::INTEGER AS "directionOrder",
+                    outgoing."to" AS "conversationJid",
+                    outgoing."message" AS "message",
+                    outgoing."mediaPath" AS "mediaPath",
+                    outgoing."file_name" AS "fileName",
+                    outgoing."created_at" AS "timestamp",
+                    outgoing."status" AS "status",
+                    NULL::BOOLEAN AS "isRead",
+                    COALESCE(outgoing."isGroup", false) OR (outgoing."to" LIKE '%@g.us') AS "isGroup",
+                    NULL::TEXT AS "participant",
+                    NULL::TEXT AS "pushName",
+                    NULL::TEXT AS "groupName",
+                    outgoing."wa_message_id" AS "waMessageId",
+                    outgoing."read_by" AS "readBy"
+                FROM "OutgoingMessage" outgoing
+                WHERE outgoing."device_id" = ${device.pkId}
+                  AND outgoing."to" = ${conversationJid}
+                  AND outgoing."inbox_hidden_at" IS NULL
+            ) timeline
+            ${cursorFilter}
+            ORDER BY "timestamp" DESC, "directionOrder" DESC, "sourcePkId" DESC
+            LIMIT ${requestedLimit + 1}
+        `);
+
+        const hasMore = rows.length > requestedLimit;
+        const page = rows.slice(0, requestedLimit);
+        const nextCursor = hasMore && page.length > 0
+            ? encodeConversationTimelineCursor(page[page.length - 1])
+            : null;
+        const serialized = page.reverse().map((row) => ({
+            ...serializePrisma(row),
+            message: decryptMessage(row.message),
+            mediaPath: serializeInboxMediaPath(row.mediaPath, deviceUuid, row.id),
+        }));
+
+        res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+        res.setHeader('Pragma', 'no-cache');
+        res.setHeader('Expires', '0');
+        res.removeHeader('ETag');
+        return res.status(200).json({
+            data: serialized,
+            metadata: { hasMore, nextCursor },
+        });
+    } catch (error) {
+        logger.error({ error }, 'Error in getDeviceConversationTimeline');
+        return res.status(500).json({ message: 'Internal server error' });
+    }
+};
+
 /**
  * Get the latest outgoing message per recipient for the Inbox conversation list.
  * Includes broadcast, campaign, direct-send, and other persisted outgoing messages.
@@ -1913,85 +2087,140 @@ export const getDeviceInbox: RequestHandler = async (req, res) => {
         const hasSearchFilter = Boolean(phoneNumber || message || contactName);
         const todayStart = new Date();
         todayStart.setHours(0, 0, 0, 0);
-        const [incomingGroups, outgoingGroups, unreadGroups, todayIncomingCount] = await Promise.all([
-            prisma.incomingMessage.groupBy({
-                by: ['from'],
-                where: whereClause,
-                _max: { receivedAt: true },
-                _count: { _all: true },
-            }),
-            (!hasSearchFilter || Boolean(directConversationJid))
-                ? prisma.outgoingMessage.groupBy({
-                      by: ['to'],
-                      where: {
-                          deviceId: device.pkId,
-                          inboxHiddenAt: null,
-                          ...(directConversationJid ? { to: directConversationJid } : {}),
-                      },
-                      _max: { createdAt: true },
-                      _count: { _all: true },
-                  })
-                : Promise.resolve([]),
-            prisma.incomingMessage.groupBy({
-                by: ['from'],
-                where: { ...whereClause, isRead: false },
-                _count: { _all: true },
-            }),
-            prisma.incomingMessage.count({
-                where: {
-                    deviceId: device.pkId,
-                    inboxHiddenAt: null,
-                    receivedAt: { gte: todayStart },
-                },
-            }),
-        ]);
-        const unreadCountByJid = new Map(
-            unreadGroups.map((group) => [group.from, group._count._all]),
-        );
-
-        // Pagination must operate on conversations, not individual messages.
-        // Otherwise a busy sender can occupy an entire page and the same chat
-        // appears split or disappears when the user changes pages.
-        const conversationIndex = new Map<
+        let conversationIndex = new Map<
             string,
             { latestAt: Date; incomingCount: number; outgoingCount: number }
         >();
-        for (const group of incomingGroups) {
-            if (!group._max.receivedAt) continue;
-            conversationIndex.set(group.from, {
-                latestAt: group._max.receivedAt,
-                incomingCount: group._count._all,
-                outgoingCount: 0,
+        let unreadCountByJid = new Map<string, number>();
+        let totalConversations = 0;
+        let totalMessages = 0;
+        let totalPages = 1;
+        let currentPage = requestedPage;
+        let conversationKeys: string[] = [];
+        let todayIncomingCount = 0;
+
+        if (!directConversationJid && !hasSearchFilter) {
+            // The common Inbox path reads the denormalized summary table. This
+            // replaces three full message GROUP BY queries on every page load.
+            const [summaryCount, summaryTotals, todayCount] = await Promise.all([
+                prisma.conversation.count({ where: { deviceId: device.pkId } }),
+                prisma.conversation.aggregate({
+                    where: { deviceId: device.pkId },
+                    _sum: { incomingCount: true, outgoingCount: true },
+                }),
+                prisma.incomingMessage.count({
+                    where: {
+                        deviceId: device.pkId,
+                        inboxHiddenAt: null,
+                        receivedAt: { gte: todayStart },
+                    },
+                }),
+            ]);
+            totalConversations = summaryCount;
+            totalMessages = Number(summaryTotals._sum.incomingCount || 0)
+                + Number(summaryTotals._sum.outgoingCount || 0);
+            todayIncomingCount = todayCount;
+            totalPages = Math.max(1, Math.ceil(totalConversations / requestedPageSize));
+            currentPage = Math.min(requestedPage, totalPages);
+            const summaries = await prisma.conversation.findMany({
+                where: { deviceId: device.pkId },
+                orderBy: [{ lastMessageAt: 'desc' }, { pkId: 'desc' }],
+                skip: (currentPage - 1) * requestedPageSize,
+                take: requestedPageSize,
+                select: {
+                    jid: true,
+                    lastMessageAt: true,
+                    incomingCount: true,
+                    outgoingCount: true,
+                    unreadCount: true,
+                },
             });
-        }
-        for (const group of outgoingGroups) {
-            if (!group._max.createdAt) continue;
-            const existing = conversationIndex.get(group.to);
-            if (existing) {
-                if (group._max.createdAt > existing.latestAt) {
-                    existing.latestAt = group._max.createdAt;
-                }
-                existing.outgoingCount = group._count._all;
-            } else {
-                conversationIndex.set(group.to, {
-                    latestAt: group._max.createdAt,
-                    incomingCount: 0,
-                    outgoingCount: group._count._all,
+            summaries.forEach((summary) => {
+                if (!summary.lastMessageAt) return;
+                conversationIndex.set(summary.jid, {
+                    latestAt: summary.lastMessageAt,
+                    incomingCount: summary.incomingCount,
+                    outgoingCount: summary.outgoingCount,
+                });
+                unreadCountByJid.set(summary.jid, summary.unreadCount);
+            });
+            conversationKeys = summaries.map((summary) => summary.jid);
+        } else {
+            // Message-content/contact searches and the legacy direct endpoint
+            // retain their exact filtering semantics.
+            const [incomingGroups, outgoingGroups, unreadGroups, todayCount] = await Promise.all([
+                prisma.incomingMessage.groupBy({
+                    by: ['from'],
+                    where: whereClause,
+                    _max: { receivedAt: true },
+                    _count: { _all: true },
+                }),
+                (!hasSearchFilter || Boolean(directConversationJid))
+                    ? prisma.outgoingMessage.groupBy({
+                          by: ['to'],
+                          where: {
+                              deviceId: device.pkId,
+                              inboxHiddenAt: null,
+                              ...(directConversationJid ? { to: directConversationJid } : {}),
+                          },
+                          _max: { createdAt: true },
+                          _count: { _all: true },
+                      })
+                    : Promise.resolve([]),
+                prisma.incomingMessage.groupBy({
+                    by: ['from'],
+                    where: { ...whereClause, isRead: false },
+                    _count: { _all: true },
+                }),
+                prisma.incomingMessage.count({
+                    where: {
+                        deviceId: device.pkId,
+                        inboxHiddenAt: null,
+                        receivedAt: { gte: todayStart },
+                    },
+                }),
+            ]);
+            unreadCountByJid = new Map(
+                unreadGroups.map((group) => [group.from, group._count._all]),
+            );
+            for (const group of incomingGroups) {
+                if (!group._max.receivedAt) continue;
+                conversationIndex.set(group.from, {
+                    latestAt: group._max.receivedAt,
+                    incomingCount: group._count._all,
+                    outgoingCount: 0,
                 });
             }
+            for (const group of outgoingGroups) {
+                if (!group._max.createdAt) continue;
+                const existing = conversationIndex.get(group.to);
+                if (existing) {
+                    if (group._max.createdAt > existing.latestAt) {
+                        existing.latestAt = group._max.createdAt;
+                    }
+                    existing.outgoingCount = group._count._all;
+                } else {
+                    conversationIndex.set(group.to, {
+                        latestAt: group._max.createdAt,
+                        incomingCount: 0,
+                        outgoingCount: group._count._all,
+                    });
+                }
+            }
+            const orderedConversationKeys = [...conversationIndex.entries()]
+                .sort((left, right) => right[1].latestAt.getTime() - left[1].latestAt.getTime())
+                .map(([jid]) => jid);
+            totalConversations = orderedConversationKeys.length;
+            totalMessages = [...conversationIndex.values()].reduce(
+                (sum, item) => sum + item.incomingCount + item.outgoingCount,
+                0,
+            );
+            totalPages = Math.max(1, Math.ceil(totalConversations / requestedPageSize));
+            currentPage = Math.min(requestedPage, totalPages);
+            const offset = (currentPage - 1) * requestedPageSize;
+            conversationKeys = orderedConversationKeys.slice(offset, offset + requestedPageSize);
+            todayIncomingCount = todayCount;
         }
-
-        const orderedConversationKeys = [...conversationIndex.entries()]
-            .sort((left, right) => right[1].latestAt.getTime() - left[1].latestAt.getTime())
-            .map(([jid]) => jid);
-        const totalConversations = orderedConversationKeys.length;
-        const totalPages = Math.max(1, Math.ceil(totalConversations / requestedPageSize));
-        const currentPage = Math.min(requestedPage, totalPages);
-        const offset = (currentPage - 1) * requestedPageSize;
-        const conversationKeys = orderedConversationKeys.slice(
-            offset,
-            offset + requestedPageSize,
-        );
 
         // Keep enough history for the detail modal while bounding the response.
         // Profile/media binaries are served by signed URLs, so they are not
@@ -2030,11 +2259,6 @@ export const getDeviceInbox: RequestHandler = async (req, res) => {
         const messages = directConversationJid
             ? fetchedMessages.slice(0, requestedConversationLimit)
             : fetchedMessages;
-        const totalMessages = [...conversationIndex.values()].reduce(
-            (sum, item) => sum + item.incomingCount + item.outgoingCount,
-            0,
-        );
-
         const normalizedMessages = await normalizeIncomingConversationIdentities(
             messages,
             device.pkId,

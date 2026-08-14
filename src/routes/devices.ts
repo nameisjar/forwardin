@@ -21,6 +21,7 @@ router.post('/:deviceId/access-token', controller.issueDeviceAccessToken);
 
 // Inbox - incoming messages (persists across session reconnects)
 router.get('/:deviceId/inbox', controller.getDeviceInbox);
+router.get('/:deviceId/inbox/timeline', controller.getDeviceConversationTimeline);
 router.get('/:deviceId/inbox/reactions', controller.getInboxConversationReactions);
 router.delete('/:deviceId/inbox', controller.deleteAllInbox);
 router.delete('/:deviceId/inbox/conversation', controller.deleteConversation);

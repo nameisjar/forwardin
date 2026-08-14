@@ -190,6 +190,7 @@ model Device {
   OutgoingMessage    OutgoingMessage[]
   inboxProfileCaches InboxProfileCache[]
   messageReactions   MessageReaction[]
+  conversations      Conversation[]
   assignments        DeviceAssignment[]
 
   // Health monitoring fields
@@ -283,6 +284,7 @@ model Contact {
   ContactLabel    ContactLabel[]
   OutgoingMessage OutgoingMessage[]
   IncomingMessage IncomingMessage[]
+  conversations   Conversation[]
 
   @@index([phone], name: "idx_contact_phone")
 }
@@ -420,6 +422,36 @@ model IncomingMessage {
   @@index([deviceId, inboxHiddenAt, receivedAt], map: "idx_incoming_message_inbox_retention")
   @@index([deviceId, inboxHiddenAt, from, receivedAt], map: "idx_incoming_message_inbox_conversation")
   @@index([deviceId, from, isRead], map: "idx_incoming_message_conversation_read")
+}
+
+/// Denormalized Inbox conversation summary. Message bodies remain in
+/// IncomingMessage and OutgoingMessage; this model makes conversation lists,
+/// counts, unread state, and latest-message ordering inexpensive.
+model Conversation {
+  pkId                 BigInt    @id @default(autoincrement()) @map("pk_id")
+  deviceId             Int       @map("device_id")
+  jid                  String    @db.VarChar(128)
+  isGroup              Boolean   @default(false) @map("is_group")
+  contactId            Int?      @map("contact_id")
+  pushName              String?   @map("push_name") @db.VarChar(255)
+  groupName             String?   @map("group_name") @db.VarChar(255)
+  lastMessageId        String?   @map("last_message_id") @db.VarChar(255)
+  lastMessageDirection String?   @map("last_message_direction") @db.VarChar(10)
+  lastMessageAt        DateTime? @map("last_message_at")
+  lastMessagePreview   String?   @map("last_message_preview") @db.Text
+  lastMediaPath        String?   @map("last_media_path")
+  lastFileName         String?   @map("last_file_name")
+  incomingCount        Int       @default(0) @map("incoming_count")
+  outgoingCount        Int       @default(0) @map("outgoing_count")
+  unreadCount          Int       @default(0) @map("unread_count")
+  createdAt            DateTime  @default(now()) @map("created_at")
+  updatedAt            DateTime  @updatedAt @map("updated_at")
+  device               Device    @relation(fields: [deviceId], references: [pkId], onDelete: Cascade)
+  contact              Contact?  @relation(fields: [contactId], references: [pkId], onDelete: SetNull)
+
+  @@unique([deviceId, jid], map: "conversation_device_jid_key")
+  @@index([deviceId, lastMessageAt], map: "idx_conversation_device_latest")
+  @@index([deviceId, unreadCount], map: "idx_conversation_device_unread")
 }
 
 model InboxRetentionSetting {

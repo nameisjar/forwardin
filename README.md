@@ -205,6 +205,21 @@ npx.cmd prisma generate
 npx.cmd prisma migrate deploy
 ```
 
+Migration `20260814150000_add_conversation_summary` membuat dan mengisi tabel
+ringkasan Inbox `Conversation` secara otomatis. Trigger database kemudian menjaga
+jumlah pesan, unread count, serta pesan terakhir tetap sinkron untuk semua jalur
+pengiriman dan penerimaan.
+
+Jika ringkasan perlu diperiksa atau dibangun ulang setelah pemulihan database,
+jalankan rekonsiliasi berikut setelah migration selesai:
+
+```bash
+npm run rebuild:conversations
+```
+
+Perintah tersebut aman dijalankan ulang dan tidak mengubah isi
+`IncomingMessage` maupun `OutgoingMessage`.
+
 ### Seeder
 
 Seeder utama saat ini menghapus data subscription plan, privilege, dan user,

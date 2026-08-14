@@ -15,7 +15,8 @@
         "format:write": "prettier --write .",
         "test": "mocha dist/tests/*.test.js --exit --timeout 10000",
         "configure-husky": "npx husky install && npx husky add .husky/pre-commit \"npx --no-install lint-staged\"",
-        "seed:dummy-broadcasts": "ts-node ./prisma/seed/dummyBroadcasts"
+        "seed:dummy-broadcasts": "ts-node ./prisma/seed/dummyBroadcasts",
+        "rebuild:conversations": "ts-node scripts/rebuild-conversations.ts --batch=250"
     },
     "prisma": {
         "seed": "ts-node ./prisma/seed"
