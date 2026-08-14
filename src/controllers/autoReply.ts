@@ -10,7 +10,7 @@ import {
 import logger from '../config/logger';
 import { replaceVariables } from '../utils/variableHelper';
 import { generateSlug } from '../utils/slug';
-import { diskUpload } from '../config/multer';
+import { diskUpload, getMediaUploadErrorMessage } from '../config/multer';
 import { useAutoReply } from '../utils/quota';
 import { isUUID } from '../utils/uuidChecker';
 import { accessibleDeviceWhere } from '../utils/deviceAccess';
@@ -21,7 +21,7 @@ export const createAutoReplies: RequestHandler = async (req, res) => {
     try {
         diskUpload.single('media')(req, res, async (err: any) => {
             if (err) {
-                return res.status(400).json({ message: 'Error uploading file' });
+                return res.status(400).json({ message: getMediaUploadErrorMessage(err) });
             }
             const { name, deviceId, recipients, requests, response } = req.body;
 
@@ -226,7 +226,7 @@ export const updateAutoReply: RequestHandler = async (req, res) => {
 
         diskUpload.single('media')(req, res, async (err: any) => {
             if (err) {
-                return res.status(400).json({ message: 'Error uploading file' });
+                return res.status(400).json({ message: getMediaUploadErrorMessage(err) });
             }
             const { name, deviceId, recipients, requests, response, status } = req.body;
 

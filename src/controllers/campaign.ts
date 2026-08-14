@@ -8,7 +8,7 @@ import { delay as delayMs } from '../utils/delay';
 import { replaceVariables } from '../utils/variableHelper';
 import { generateSlug } from '../utils/slug';
 import { getRandomColor } from '../utils/profilePic';
-import { diskUpload } from '../config/multer';
+import { diskUpload, getMediaUploadErrorMessage } from '../config/multer';
 import { isUUID } from '../utils/uuidChecker';
 import { accessibleDeviceWhere } from '../utils/deviceAccess';
 import { 
@@ -23,7 +23,7 @@ export const createCampaign: RequestHandler = async (req, res) => {
     try {
         diskUpload.single('media')(req, res, async (err: any) => {
             if (err) {
-                return res.status(400).json({ message: 'Error uploading file' });
+                return res.status(400).json({ message: getMediaUploadErrorMessage(err) });
             }
             const {
                 name,
@@ -148,7 +148,7 @@ export const createCampaignMessage: RequestHandler = async (req, res) => {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         diskUpload.single('media')(req, res, async (err: any) => {
             if (err) {
-                return res.status(400).json({ message: 'Error uploading file' });
+                return res.status(400).json({ message: getMediaUploadErrorMessage(err) });
             }
             const { name, message, schedule, campaignId } = req.body;
 
@@ -758,7 +758,7 @@ export const updateCampaignMessage: RequestHandler = async (req, res) => {
         }
         diskUpload.single('media')(req, res, async (err: any) => {
             if (err) {
-                return res.status(400).json({ message: 'Error uploading file' });
+                return res.status(400).json({ message: getMediaUploadErrorMessage(err) });
             }
             const { name, message, schedule, campaignId } = req.body;
             const delay = Number(req.body.delay) || 5000;
@@ -823,7 +823,7 @@ export const updateCampaign: RequestHandler = async (req, res) => {
 
         diskUpload.single('media')(req, res, async (err: any) => {
             if (err) {
-                return res.status(400).json({ message: 'Error uploading file' });
+                return res.status(400).json({ message: getMediaUploadErrorMessage(err) });
             }
             const {
                 name,

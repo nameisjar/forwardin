@@ -7,7 +7,7 @@ import logger from '../config/logger';
 import { delay as delayMs } from '../utils/delay';
 import { getRecipients } from '../utils/recipients';
 import { replaceVariables } from '../utils/variableHelper';
-import { diskUpload } from '../config/multer';
+import { diskUpload, getMediaUploadErrorMessage } from '../config/multer';
 import {
     decryptBroadcast,
     decryptBroadcasts,
@@ -20,11 +20,11 @@ import { useBroadcast } from '../utils/quota';
 import { isUUID } from '../utils/uuidChecker';
 import fs from 'fs';
 import { Prisma } from '@prisma/client';
-import { 
-    sendTextMessage, 
-    sendMediaMessage, 
+import {
+    sendTextMessage,
+    sendMediaMessage,
     detectMediaType,
-    SendResult 
+    SendResult,
 } from '../services/messageSender';
 import {
     calculateNaturalDelay,
@@ -34,7 +34,11 @@ import {
     NaturalDelayResult,
 } from '../services/naturalDelay';
 import { redactPhone } from '../utils/logRedaction';
-import { canDeviceSend, incrementMessageCount, recordRateLimitWithError } from '../services/signalDetector';
+import {
+    canDeviceSend,
+    incrementMessageCount,
+    recordRateLimitWithError,
+} from '../services/signalDetector';
 import { accessibleDeviceWhere } from '../utils/deviceAccess';
 import { cleanupMediaFilesIfUnreferenced } from '../services/mediaCleanup';
 import { resolveMediaFileName, sanitizeMediaFileName } from '../utils/mediaFileName';
@@ -50,20 +54,20 @@ function extractMessageId(sentMessage: any): string | undefined {
     try {
         // Format 1: sentMessage.key.id
         if (sentMessage?.key?.id) return sentMessage.key.id;
-        
+
         // Format 2: sentMessage.message.key.id
         if (sentMessage?.message?.key?.id) return sentMessage.message.key.id;
-        
+
         // Format 3: Array response dari sendMediaFile
         if (Array.isArray(sentMessage)) {
             const first = sentMessage[0];
             if (first?.key?.id) return first.key.id;
             if (first?.result?.key?.id) return first.result.key.id;
         }
-        
+
         // Format 4: Wrapped result
         if (sentMessage?.result?.key?.id) return sentMessage.result.key.id;
-        
+
         return undefined;
     } catch (e) {
         logger.error({ error: e }, 'Failed to extract messageId');
@@ -74,7 +78,7 @@ function extractMessageId(sentMessage: any): string | undefined {
 // Helper: Check if error is transient (bisa di-retry)
 function isTransientError(error: any): boolean {
     if (!error) return false;
-    
+
     const errorString = String(error.message || error).toLowerCase();
     const transientKeywords = [
         'timeout',
@@ -85,19 +89,23 @@ function isTransientError(error: any): boolean {
         'network',
         'temporary',
     ];
-    
-    return transientKeywords.some(keyword => errorString.includes(keyword));
+
+    return transientKeywords.some((keyword) => errorString.includes(keyword));
 }
 
 // Helper: Check if error is rate limit
 function isRateLimitError(error: any): boolean {
     if (!error) return false;
-    
+
     return (
         error?.data === 429 ||
         error?.output?.statusCode === 429 ||
-        String(error.message || '').toLowerCase().includes('rate-overlimit') ||
-        String(error.message || '').toLowerCase().includes('rate limit')
+        String(error.message || '')
+            .toLowerCase()
+            .includes('rate-overlimit') ||
+        String(error.message || '')
+            .toLowerCase()
+            .includes('rate limit')
     );
 }
 
@@ -117,12 +125,12 @@ async function sendMessageWithRetry(
     textPayload: string,
     mediaPath: string | null,
     mediaFileName: string | null,
-    maxRetries = 3
+    maxRetries = 3,
 ): Promise<{ success: boolean; messageId?: string; error?: any; isRateLimit?: boolean }> {
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
         try {
             let result: SendResult;
-            
+
             if (mediaPath) {
                 // Kirim dengan media menggunakan rate limiter
                 const mediaType = detectMediaType(mediaPath);
@@ -135,7 +143,7 @@ async function sendMessageWithRetry(
                     {
                         caption: textPayload,
                         fileName: resolveMediaFileName(mediaFileName, mediaPath),
-                    }
+                    },
                 );
             } else {
                 // Kirim teks menggunakan rate limiter
@@ -143,40 +151,45 @@ async function sendMessageWithRetry(
             }
 
             if (!result.success) {
-                logger.warn({ jid: redactPhone(jid), attempt, error: result.error }, 'Message send failed');
-                
+                logger.warn(
+                    { jid: redactPhone(jid), attempt, error: result.error },
+                    'Message send failed',
+                );
+
                 // Check if it's a rate limit error
                 const errorStr = String(result.error || '').toLowerCase();
                 const isRateLimit = errorStr.includes('rate') || errorStr.includes('limit');
-                
+
                 if (attempt < maxRetries) {
                     const waitTime = getRetryDelay(attempt, BASE_RETRY_DELAY);
-                    logger.warn({ jid: redactPhone(jid), attempt, waitTime }, `Retrying in ${waitTime}ms...`);
+                    logger.warn(
+                        { jid: redactPhone(jid), attempt, waitTime },
+                        `Retrying in ${waitTime}ms...`,
+                    );
                     await delayMs(waitTime);
                     continue;
                 }
-                
+
                 return { success: false, error: result.error, isRateLimit };
             }
 
             return { success: true, messageId: result.messageId };
-            
         } catch (error: any) {
             const isRateLimit = isRateLimitError(error);
             const isTransient = isTransientError(error);
             const isLastAttempt = attempt === maxRetries;
 
             logger.error(
-                { 
-                    jid: redactPhone(jid), 
-                    attempt, 
+                {
+                    jid: redactPhone(jid),
+                    attempt,
                     maxRetries,
-                    isRateLimit, 
+                    isRateLimit,
                     isTransient,
                     errorMessage: error?.message,
-                    errorData: error?.data 
+                    errorData: error?.data,
                 },
-                'Send message attempt failed'
+                'Send message attempt failed',
             );
 
             // Retry logic
@@ -184,17 +197,17 @@ async function sendMessageWithRetry(
                 const waitTime = getRetryDelay(attempt, BASE_RETRY_DELAY);
                 logger.warn(
                     { jid: redactPhone(jid), attempt, waitTime, isRateLimit, isTransient },
-                    `Retrying in ${waitTime}ms...`
+                    `Retrying in ${waitTime}ms...`,
                 );
                 await delayMs(waitTime);
                 continue;
             }
 
             // Final failure
-            return { 
-                success: false, 
-                error, 
-                isRateLimit 
+            return {
+                success: false,
+                error,
+                isRateLimit,
             };
         }
     }
@@ -211,7 +224,7 @@ export const createBroadcast: RequestHandler = async (req, res) => {
         const subscription = req.subscription;
         diskUpload.single('media')(req, res, async (err: any) => {
             if (err) {
-                return res.status(400).json({ message: 'Error uploading file' });
+                return res.status(400).json({ message: getMediaUploadErrorMessage(err) });
             }
             const { name, deviceId, recipients, message, schedule } = req.body;
             const delay = Number(req.body.delay) || 5000;
@@ -229,9 +242,7 @@ export const createBroadcast: RequestHandler = async (req, res) => {
 
             if (
                 recipients.includes('all') &&
-                recipients.some((recipient: string) =>
-                    recipient.startsWith('label'),
-                )
+                recipients.some((recipient: string) => recipient.startsWith('label'))
             ) {
                 return res.status(400).json({
                     message:
@@ -309,7 +320,12 @@ export const createBroadcastFeedback: RequestHandler = async (req, res) => {
         const delay = Number(req.body.delay) || 5000;
 
         if (!name || !courseName || !schedule || !recipients || !deviceId) {
-            return res.status(400).json({ message: 'Missing required fields: name, courseName, schedule, recipients, deviceId' });
+            return res
+                .status(400)
+                .json({
+                    message:
+                        'Missing required fields: name, courseName, schedule, recipients, deviceId',
+                });
         }
 
         if (
@@ -323,7 +339,7 @@ export const createBroadcastFeedback: RequestHandler = async (req, res) => {
 
         // Verify device exists AND belongs to current user (IDOR protection)
         const device = await prisma.device.findFirst({
-            where: { 
+            where: {
                 id: deviceId,
                 ...accessibleDeviceWhere(req.authenticatedUser.pkId, req.privilege?.pkId),
             },
@@ -346,15 +362,13 @@ export const createBroadcastFeedback: RequestHandler = async (req, res) => {
         });
 
         if (courseFeedbacks.length === 0) {
-            return res.status(404).json({ 
-                message: 'No feedback lessons found for the specified course and start lesson' 
+            return res.status(404).json({
+                message: 'No feedback lessons found for the specified course and start lesson',
             });
         }
 
         const baseName = typeof name === 'string' && name.trim() ? name.trim() : 'Feedback';
-        const taggedBaseName = /\[feedback\]/i.test(baseName)
-            ? baseName
-            : `${baseName} [Feedback]`;
+        const taggedBaseName = /\[feedback\]/i.test(baseName) ? baseName : `${baseName} [Feedback]`;
 
         await prisma.$transaction(async (transaction) => {
             for (let i = 0; i < courseFeedbacks.length; i++) {
@@ -376,9 +390,9 @@ export const createBroadcastFeedback: RequestHandler = async (req, res) => {
             }
         });
 
-        res.status(201).json({ 
+        res.status(201).json({
             message: 'Feedback broadcasts created successfully',
-            totalBroadcasts: courseFeedbacks.length
+            totalBroadcasts: courseFeedbacks.length,
         });
     } catch (error) {
         logger.error(error);
@@ -390,14 +404,19 @@ export const createBroadcastReminder: RequestHandler = async (req, res) => {
     try {
         diskUpload.single('media')(req, res, async (err: any) => {
             if (err) {
-                return res.status(400).json({ message: 'Error uploading file' });
+                return res.status(400).json({ message: getMediaUploadErrorMessage(err) });
             }
 
             const { name, message, lessons, schedule, recipients, deviceId } = req.body;
             const delay = Number(req.body.delay) || 5000;
 
             if (!name || !message || !lessons || !schedule || !recipients || !deviceId) {
-                return res.status(400).json({ message: 'Missing required fields: name, message, lessons, schedule, recipients, deviceId' });
+                return res
+                    .status(400)
+                    .json({
+                        message:
+                            'Missing required fields: name, message, lessons, schedule, recipients, deviceId',
+                    });
             }
 
             if (
@@ -411,7 +430,7 @@ export const createBroadcastReminder: RequestHandler = async (req, res) => {
 
             // Verify device exists AND belongs to current user (IDOR protection)
             const device = await prisma.device.findFirst({
-                where: { 
+                where: {
                     id: deviceId,
                     ...accessibleDeviceWhere(req.authenticatedUser.pkId, req.privilege?.pkId),
                 },
@@ -455,9 +474,9 @@ export const createBroadcastReminder: RequestHandler = async (req, res) => {
                 }
             });
 
-            res.status(201).json({ 
+            res.status(201).json({
                 message: 'Reminder broadcasts created successfully',
-                totalBroadcasts: totalLessons
+                totalBroadcasts: totalLessons,
             });
         });
     } catch (error) {
@@ -470,7 +489,7 @@ export const createBroadcastScheduled: RequestHandler = async (req, res) => {
     try {
         diskUpload.single('media')(req, res, async (err: any) => {
             if (err) {
-                return res.status(400).json({ message: 'Error uploading file' });
+                return res.status(400).json({ message: getMediaUploadErrorMessage(err) });
             }
 
             const {
@@ -509,9 +528,7 @@ export const createBroadcastScheduled: RequestHandler = async (req, res) => {
 
             if (
                 recipients.includes('all') &&
-                recipients.some((recipient: string) =>
-                    recipient.startsWith('label'),
-                )
+                recipients.some((recipient: string) => recipient.startsWith('label'))
             ) {
                 return res.status(400).json({
                     message:
@@ -552,9 +569,7 @@ export const createBroadcastScheduled: RequestHandler = async (req, res) => {
                     delay,
                     recipients: { set: recipients },
                     mediaPath: req.file?.path,
-                    mediaFileName: req.file
-                        ? sanitizeMediaFileName(req.file.originalname)
-                        : null,
+                    mediaFileName: req.file ? sanitizeMediaFileName(req.file.originalname) : null,
                     broadcastType: 'recurrence', // ✅ Tambahkan broadcastType
                 });
 
@@ -587,7 +602,7 @@ export const createBroadcastScheduled: RequestHandler = async (req, res) => {
 
             res.status(201).json({
                 message: 'Broadcasts created successfully',
-                totalBroadcasts: broadcasts.length
+                totalBroadcasts: broadcasts.length,
             });
         });
     } catch (error) {
@@ -794,7 +809,10 @@ export const getBroadcastNameGroups: RequestHandler = async (req, res) => {
         }
 
         const page = Math.max(1, Number((req.query.page as string | undefined) || 1));
-        const pageSize = Math.min(100, Math.max(1, Number((req.query.pageSize as string | undefined) || 10)));
+        const pageSize = Math.min(
+            100,
+            Math.max(1, Number((req.query.pageSize as string | undefined) || 10)),
+        );
         const qRaw = ((req.query.q as string | undefined) || '').trim();
         const statusFilter = (req.query.status as string | undefined) || 'all';
         const typeFilter = (req.query.type as string | undefined) || 'all'; // ✅ Tambahkan filter type
@@ -1096,16 +1114,14 @@ export const updateBroadcast: RequestHandler = async (req, res) => {
 
         diskUpload.single('media')(req, res, async (err: any) => {
             if (err) {
-                return res.status(400).json({ message: 'Error uploading file' });
+                return res.status(400).json({ message: getMediaUploadErrorMessage(err) });
             }
             const { name, deviceId, recipients, message, schedule } = req.body;
             const delay = Number(req.body.delay) || 5000;
 
             if (
                 recipients.includes('all') &&
-                recipients.some((recipient: string) =>
-                    recipient.startsWith('label'),
-                )
+                recipients.some((recipient: string) => recipient.startsWith('label'))
             ) {
                 return res.status(400).json({
                     message:
@@ -1189,10 +1205,7 @@ export const updateBroadcastMessage: RequestHandler = async (req, res) => {
         const broadcast = await prisma.broadcast.findFirst({
             where: {
                 id,
-                device: accessibleDeviceWhere(
-                    req.authenticatedUser.pkId,
-                    req.privilege?.pkId,
-                ),
+                device: accessibleDeviceWhere(req.authenticatedUser.pkId, req.privilege?.pkId),
             },
             select: {
                 pkId: true,
@@ -1249,10 +1262,7 @@ const getEditableBroadcastMediaTarget = async (req: Express.Request, id: string)
     return prisma.broadcast.findFirst({
         where: {
             id,
-            device: accessibleDeviceWhere(
-                req.authenticatedUser.pkId,
-                req.privilege?.pkId,
-            ),
+            device: accessibleDeviceWhere(req.authenticatedUser.pkId, req.privilege?.pkId),
         },
         select: {
             pkId: true,
@@ -1296,8 +1306,8 @@ export const updateBroadcastMedia: RequestHandler = async (req, res) => {
 
         // Pin Multer's destination to the authorized device. Do not trust a
         // multipart deviceId or x-device-id value for filesystem paths.
-        (req as Express.Request & { authorizedMediaDeviceId?: string })
-            .authorizedMediaDeviceId = broadcast!.device.id;
+        (req as Express.Request & { authorizedMediaDeviceId?: string }).authorizedMediaDeviceId =
+            broadcast!.device.id;
 
         diskUpload.single('media')(req, res, async (uploadError: any) => {
             if (uploadError) {
@@ -1405,10 +1415,7 @@ export const removeBroadcastMedia: RequestHandler = async (req, res) => {
             });
         }
 
-        await cleanupMediaFilesIfUnreferenced(
-            [broadcast!.mediaPath],
-            'removed-scheduled-media',
-        );
+        await cleanupMediaFilesIfUnreferenced([broadcast!.mediaPath], 'removed-scheduled-media');
 
         return res.status(200).json({
             message: 'Media berhasil dihapus dari jadwal',
@@ -1455,7 +1462,7 @@ export const updateBroadcastStatus: RequestHandler = async (req, res) => {
         res.status(200).json(updatedBroadcast);
     } catch (error) {
         logger.error(error);
-        res.status  (500).json({ message: 'Internal server error' });
+        res.status(500).json({ message: 'Internal server error' });
     }
 };
 
@@ -1651,10 +1658,7 @@ schedule.scheduleJob('* * * * *', async () => {
                 status: true,
                 isSent: false,
                 attemptCount: { lt: MAX_ATTEMPTS },
-                OR: [
-                    { lastAttemptAt: null },
-                    { lastAttemptAt: { lt: cooldownThreshold } }
-                ]
+                OR: [{ lastAttemptAt: null }, { lastAttemptAt: { lt: cooldownThreshold } }],
             },
             include: {
                 device: {
@@ -1681,12 +1685,12 @@ schedule.scheduleJob('* * * * *', async () => {
         for (const broadcast of pendingBroadcasts) {
             const sessionId = broadcast.device.sessions[0]?.sessionId;
             const session = sessionId ? getInstance(sessionId) : null;
-            
+
             // CRITICAL: Jangan proses jika session tidak ada
             if (!session) {
                 logger.warn(
                     { broadcastId: broadcast.id, attemptCount: broadcast.attemptCount },
-                    'Session not found, skipping (will NOT increment attempt or mark sent)'
+                    'Session not found, skipping (will NOT increment attempt or mark sent)',
                 );
                 continue;
             }
@@ -1695,12 +1699,12 @@ schedule.scheduleJob('* * * * *', async () => {
             const deviceCanSend = await canDeviceSend(broadcast.device.pkId);
             if (!deviceCanSend.allowed) {
                 logger.warn(
-                    { 
-                        broadcastId: broadcast.id, 
+                    {
+                        broadcastId: broadcast.id,
                         deviceId: broadcast.device.id,
-                        reason: deviceCanSend.reason 
+                        reason: deviceCanSend.reason,
                     },
-                    'Device is paused or unhealthy, skipping broadcast'
+                    'Device is paused or unhealthy, skipping broadcast',
                 );
                 continue;
             }
@@ -1714,8 +1718,8 @@ schedule.scheduleJob('* * * * *', async () => {
                     // Hanya lock jika belum diproses dalam 2 menit terakhir
                     OR: [
                         { lastAttemptAt: null },
-                        { lastAttemptAt: { lt: new Date(Date.now() - 2 * 60 * 1000) } }
-                    ]
+                        { lastAttemptAt: { lt: new Date(Date.now() - 2 * 60 * 1000) } },
+                    ],
                 },
                 data: {
                     attemptCount: { increment: 1 },
@@ -1727,7 +1731,7 @@ schedule.scheduleJob('* * * * *', async () => {
             if (lockAcquired.count === 0) {
                 logger.info(
                     { broadcastId: broadcast.id },
-                    'Broadcast already being processed by another worker, skipping'
+                    'Broadcast already being processed by another worker, skipping',
                 );
                 continue;
             }
@@ -1738,14 +1742,14 @@ schedule.scheduleJob('* * * * *', async () => {
             const currentAttempt = (broadcast.attemptCount || 0) + 1;
             logger.info(
                 { broadcastId: broadcast.id, attempt: currentAttempt, maxAttempts: MAX_ATTEMPTS },
-                `Processing broadcast attempt ${currentAttempt}/${MAX_ATTEMPTS}`
+                `Processing broadcast attempt ${currentAttempt}/${MAX_ATTEMPTS}`,
             );
 
             let successCount = 0;
             let failCount = 0;
             let rateLimitCount = 0;
             const errors: string[] = [];
-            
+
             // 🔥 QUICK WIN: Consecutive failure detection untuk early ban detection
             let consecutiveFailures = 0;
             const MAX_CONSECUTIVE_FAILURES = 5;
@@ -1765,7 +1769,7 @@ schedule.scheduleJob('* * * * *', async () => {
             if (pendingRecipients.length === 0) {
                 const rawRecipients = await getRecipients(broadcast);
                 const uniqueRecipients = Array.from(new Set(rawRecipients));
-                
+
                 if (uniqueRecipients.length > 0) {
                     // Check if any records exist at all (could be all sent already)
                     const existingCount = await prisma.broadcastRecipient.count({
@@ -1776,7 +1780,7 @@ schedule.scheduleJob('* * * * *', async () => {
                         // Old broadcast without BroadcastRecipient records - migrate
                         logger.info(
                             { broadcastId: broadcast.id, recipientCount: uniqueRecipients.length },
-                            'Migrating old broadcast: creating BroadcastRecipient records'
+                            'Migrating old broadcast: creating BroadcastRecipient records',
                         );
                         await prisma.broadcastRecipient.createMany({
                             data: uniqueRecipients.map((phone) => ({
@@ -1799,7 +1803,7 @@ schedule.scheduleJob('* * * * *', async () => {
                         // All recipients already processed - mark as complete
                         logger.info(
                             { broadcastId: broadcast.id },
-                            'All recipients already processed - marking broadcast as sent'
+                            'All recipients already processed - marking broadcast as sent',
                         );
                         await prisma.broadcast.update({
                             where: { id: broadcast.id },
@@ -1812,14 +1816,14 @@ schedule.scheduleJob('* * * * *', async () => {
 
             logger.info(
                 { broadcastId: broadcast.id, pendingCount: pendingRecipients.length },
-                `Processing ${pendingRecipients.length} pending recipients`
+                `Processing ${pendingRecipients.length} pending recipients`,
             );
 
             // Skip if no pending recipients
             if (pendingRecipients.length === 0) {
                 logger.info(
                     { broadcastId: broadcast.id },
-                    'No pending recipients - marking broadcast as sent'
+                    'No pending recipients - marking broadcast as sent',
                 );
                 await prisma.broadcast.update({
                     where: { id: broadcast.id },
@@ -1839,11 +1843,15 @@ schedule.scheduleJob('* * * * *', async () => {
                     where: { pkId: recipientRecord.pkId },
                     select: { status: true },
                 });
-                
+
                 if (currentStatus?.status === 'sent' || currentStatus?.status === 'sending') {
                     logger.debug(
-                        { broadcastId: broadcast.id, phone: recipient, status: currentStatus.status },
-                        'Recipient already sent/sending, skipping'
+                        {
+                            broadcastId: broadcast.id,
+                            phone: recipient,
+                            status: currentStatus.status,
+                        },
+                        'Recipient already sent/sending, skipping',
                     );
                     continue;
                 }
@@ -1856,17 +1864,21 @@ schedule.scheduleJob('* * * * *', async () => {
 
                 const variables = {
                     firstName:
-                        broadcast.device.contactDevices.find((cd: any) => cd.contact.phone == recipient)
-                            ?.contact.firstName ?? undefined,
+                        broadcast.device.contactDevices.find(
+                            (cd: any) => cd.contact.phone == recipient,
+                        )?.contact.firstName ?? undefined,
                     lastName:
-                        broadcast.device.contactDevices.find((cd: any) => cd.contact.phone == recipient)
-                            ?.contact.lastName ?? undefined,
+                        broadcast.device.contactDevices.find(
+                            (cd: any) => cd.contact.phone == recipient,
+                        )?.contact.lastName ?? undefined,
                     phoneNumber:
-                        broadcast.device.contactDevices.find((cd: any) => cd.contact.phone == recipient)
-                            ?.contact.phone ?? undefined,
+                        broadcast.device.contactDevices.find(
+                            (cd: any) => cd.contact.phone == recipient,
+                        )?.contact.phone ?? undefined,
                     email:
-                        broadcast.device.contactDevices.find((cd: any) => cd.contact.phone == recipient)
-                            ?.contact.email ?? undefined,
+                        broadcast.device.contactDevices.find(
+                            (cd: any) => cd.contact.phone == recipient,
+                        )?.contact.email ?? undefined,
                 };
 
                 // 🔐 Decrypt message sebelum dikirim ke WhatsApp
@@ -1874,7 +1886,10 @@ schedule.scheduleJob('* * * * *', async () => {
                 try {
                     decryptedMessage = decryptMessage(broadcast.message) || '';
                 } catch (err) {
-                    logger.error({ err, broadcastId: broadcast.id }, 'Failed to decrypt message, using original');
+                    logger.error(
+                        { err, broadcastId: broadcast.id },
+                        'Failed to decrypt message, using original',
+                    );
                     decryptedMessage = broadcast.message;
                 }
                 const textPayload = replaceVariables(decryptedMessage, variables);
@@ -1885,7 +1900,7 @@ schedule.scheduleJob('* * * * *', async () => {
                     broadcast.device.id,
                     broadcast.delay, // base delay dari broadcast config
                     textPayload.length, // panjang pesan untuk typing simulation
-                    naturalDelayConfig
+                    naturalDelayConfig,
                 );
 
                 // 🔥 Tampilkan typing indicator atau delay sebelum kirim pesan
@@ -1893,10 +1908,10 @@ schedule.scheduleJob('* * * * *', async () => {
                 // TYPING_INDICATOR_ENABLED=false → hanya delay tanpa indicator
                 if (naturalDelay.shouldShowTypingIndicator) {
                     await showTypingIndicator(
-                        session, 
-                        jid, 
+                        session,
+                        jid,
                         naturalDelay.typingIndicatorDuration,
-                        naturalDelay.showIndicatorInWhatsApp
+                        naturalDelay.showIndicatorInWhatsApp,
                     );
                 }
 
@@ -1908,49 +1923,53 @@ schedule.scheduleJob('* * * * *', async () => {
                     textPayload,
                     broadcast.mediaPath,
                     broadcast.mediaFileName,
-                    3 // max retries per message
+                    3, // max retries per message
                 );
 
                 if (!result.success) {
                     consecutiveFailures++;
-                    
+
                     if (result.isRateLimit) {
                         rateLimitCount++;
                         errors.push(`Rate limit: ${jid}`);
-                        
+
                         // 🔥 Record rate limit signal with error details for better classification
-                        recordRateLimitWithError(broadcast.device.pkId, result.error).catch((err) => {
-                            logger.error({ err }, 'Failed to record rate limit signal');
-                        });
+                        recordRateLimitWithError(broadcast.device.pkId, result.error).catch(
+                            (err) => {
+                                logger.error({ err }, 'Failed to record rate limit signal');
+                            },
+                        );
                     } else {
                         errors.push(`Failed: ${jid} - ${result.error?.message || 'Unknown'}`);
                     }
-                    
+
                     failCount++;
 
                     // 🔥 QUICK WIN: Stop broadcast jika 5x gagal berturut-turut
                     if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
                         logger.error(
-                            { 
-                                broadcastId: broadcast.id, 
+                            {
+                                broadcastId: broadcast.id,
                                 deviceId: broadcast.device.id,
                                 consecutiveFailures,
                                 lastError: result.error?.message,
                                 processedCount: i + 1,
-                                totalCount: pendingRecipients.length
+                                totalCount: pendingRecipients.length,
                             },
-                            '🛑 BROADCAST STOPPED: 5 consecutive failures detected - likely device issue or ban'
+                            '🛑 BROADCAST STOPPED: 5 consecutive failures detected - likely device issue or ban',
                         );
-                        
+
                         // Record sebagai critical signal untuk tracking
                         recordRateLimitWithError(broadcast.device.pkId, {
                             message: `Broadcast stopped: ${consecutiveFailures} consecutive failures - possible ban`,
-                            data: 500
+                            data: 500,
                         }).catch((err) => {
                             logger.error({ err }, 'Failed to record consecutive failure signal');
                         });
-                        
-                        errors.push(`STOPPED: ${consecutiveFailures} consecutive failures detected`);
+
+                        errors.push(
+                            `STOPPED: ${consecutiveFailures} consecutive failures detected`,
+                        );
                         broadcastStopped = true;
                         break; // EXIT LOOP
                     }
@@ -1965,44 +1984,43 @@ schedule.scheduleJob('* * * * *', async () => {
                             updatedAt: new Date(),
                         },
                     });
-                    
+
                     // 🔥 Gunakan natural delay meskipun gagal
                     if (!isLastRecipient) {
                         logger.debug(
-                            { 
-                                jid, 
+                            {
+                                jid,
                                 delay: naturalDelay.totalDelay,
                                 breakdown: naturalDelay.breakdown,
-                                isClusterEnd: naturalDelay.isClusterEnd
+                                isClusterEnd: naturalDelay.isClusterEnd,
                             },
-                            '[Broadcast] Applying natural delay after failed send'
+                            '[Broadcast] Applying natural delay after failed send',
                         );
                         await delayMs(naturalDelay.totalDelay);
                     }
                     continue;
                 }
-                
+
                 // 🔥 Reset consecutive failures on success
                 consecutiveFailures = 0;
 
                 const messageId = result.messageId!;
                 logger.info(
-                    { 
-                        broadcastId: broadcast.id, 
-                        messageId, 
+                    {
+                        broadcastId: broadcast.id,
+                        messageId,
                         recipient: jid,
                         naturalDelay: naturalDelay.totalDelay,
-                        isClusterEnd: naturalDelay.isClusterEnd
-                    }, 
-                    'Message sent successfully'
+                        isClusterEnd: naturalDelay.isClusterEnd,
+                    },
+                    'Message sent successfully',
                 );
 
                 // Save to OutgoingMessage
                 try {
                     const recipientPhone = String(recipient).replace(/\D/g, '');
                     const contact = broadcast.device.contactDevices.find(
-                        (cd: any) =>
-                            String(cd.contact.phone).replace(/\D/g, '') === recipientPhone,
+                        (cd: any) => String(cd.contact.phone).replace(/\D/g, '') === recipientPhone,
                     )?.contact;
 
                     await prisma.outgoingMessage.upsert({
@@ -2015,10 +2033,11 @@ schedule.scheduleJob('* * * * *', async () => {
                             deviceId: broadcast.device.pkId,
                             contactId: contact?.pkId ?? null,
                             mediaPath: broadcast.mediaPath || null,
-                            fileName: resolveMediaFileName(
-                                broadcast.mediaFileName,
-                                broadcast.mediaPath,
-                            ) || null,
+                            fileName:
+                                resolveMediaFileName(
+                                    broadcast.mediaFileName,
+                                    broadcast.mediaPath,
+                                ) || null,
                             broadcastId: broadcast.pkId,
                             broadcastType: broadcast.broadcastType || null,
                             isGroup: jid.includes('@g.us'),
@@ -2038,10 +2057,11 @@ schedule.scheduleJob('* * * * *', async () => {
                             deviceId: broadcast.device.pkId,
                             contactId: contact?.pkId ?? null,
                             mediaPath: broadcast.mediaPath || null,
-                            fileName: resolveMediaFileName(
-                                broadcast.mediaFileName,
-                                broadcast.mediaPath,
-                            ) || null,
+                            fileName:
+                                resolveMediaFileName(
+                                    broadcast.mediaFileName,
+                                    broadcast.mediaPath,
+                                ) || null,
                             broadcastId: broadcast.pkId,
                             broadcastType: broadcast.broadcastType || null,
                             isGroup: jid.includes('@g.us'),
@@ -2066,7 +2086,7 @@ schedule.scheduleJob('* * * * *', async () => {
                 } catch (dbError) {
                     logger.error(
                         { error: dbError, messageId, recipient: jid },
-                        'Failed to save OutgoingMessage'
+                        'Failed to save OutgoingMessage',
                     );
 
                     // 🔥 ATOMIC: Even if DB save fails, message was sent - mark as sent with warning
@@ -2087,13 +2107,13 @@ schedule.scheduleJob('* * * * *', async () => {
                 // 🔥 Gunakan natural delay (bukan delay konstan)
                 if (!isLastRecipient) {
                     logger.debug(
-                        { 
-                            jid, 
+                        {
+                            jid,
                             delay: naturalDelay.totalDelay,
                             breakdown: naturalDelay.breakdown,
-                            isClusterEnd: naturalDelay.isClusterEnd
+                            isClusterEnd: naturalDelay.isClusterEnd,
                         },
-                        '[Broadcast] Applying natural delay'
+                        '[Broadcast] Applying natural delay',
                     );
                     await delayMs(naturalDelay.totalDelay);
                 }
@@ -2115,9 +2135,9 @@ schedule.scheduleJob('* * * * *', async () => {
                     attempt: currentAttempt,
                     maxAttempts: MAX_ATTEMPTS,
                 },
-                broadcastStopped 
-                    ? '🛑 Broadcast stopped due to consecutive failures' 
-                    : 'Broadcast processing completed'
+                broadcastStopped
+                    ? '🛑 Broadcast stopped due to consecutive failures'
+                    : 'Broadcast processing completed',
             );
 
             // 🔥 If broadcast was stopped due to consecutive failures, mark as failed
@@ -2148,27 +2168,24 @@ schedule.scheduleJob('* * * * *', async () => {
                 updateData.isSent = true;
                 logger.info(
                     { broadcastId: broadcast.id, successCount, failCount },
-                    '✅ Broadcast marked as SENT (at least 1 success)'
+                    '✅ Broadcast marked as SENT (at least 1 success)',
                 );
-            } 
-            else if (allFailed && !hasRateLimit && reachedMaxAttempts) {
+            } else if (allFailed && !hasRateLimit && reachedMaxAttempts) {
                 updateData.isSent = true;
                 logger.error(
                     { broadcastId: broadcast.id, attemptCount: currentAttempt },
-                    '❌ Broadcast marked as SENT (failed after max attempts, no rate limit)'
+                    '❌ Broadcast marked as SENT (failed after max attempts, no rate limit)',
                 );
-            }
-            else if (hasRateLimit && !reachedMaxAttempts) {
+            } else if (hasRateLimit && !reachedMaxAttempts) {
                 logger.warn(
                     { broadcastId: broadcast.id, rateLimitCount, attemptCount: currentAttempt },
-                    '⏳ Broadcast will retry (rate limit detected, not at max attempts yet)'
+                    '⏳ Broadcast will retry (rate limit detected, not at max attempts yet)',
                 );
-            }
-            else if (allFailed && hasRateLimit && reachedMaxAttempts) {
+            } else if (allFailed && hasRateLimit && reachedMaxAttempts) {
                 updateData.isSent = true;
                 logger.error(
                     { broadcastId: broadcast.id, rateLimitCount, attemptCount: currentAttempt },
-                    '❌ Broadcast marked as SENT (rate limit persists after max attempts)'
+                    '❌ Broadcast marked as SENT (rate limit persists after max attempts)',
                 );
             }
 
@@ -2210,7 +2227,7 @@ schedule.scheduleJob('*/5 * * * *', async () => {
         if (updated.count > 0) {
             logger.warn(
                 { count: updated.count, threshold: '5 minutes' },
-                '🔄 Cleaned up stuck sending recipients - reset to pending for retry'
+                '🔄 Cleaned up stuck sending recipients - reset to pending for retry',
             );
         }
     } catch (error) {

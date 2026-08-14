@@ -3,7 +3,7 @@ import { getInstance, verifyJid, sendButtonMessage, getJid } from '../whatsapp';
 import logger from '../config/logger';
 import prisma, { serializePrisma } from '../utils/db';
 import { delay as delayMs } from '../utils/delay';
-import { diskUpload, memoryUpload } from '../config/multer';
+import { diskUpload, getMediaUploadErrorMessage, memoryUpload } from '../config/multer';
 import { isUUID } from '../utils/uuidChecker';
 import fs from 'fs';
 import path from 'path';
@@ -40,10 +40,16 @@ const profilePictureCache = new Map<
 
 type QueuedMediaType = 'image' | 'document' | 'audio' | 'video';
 
-async function markPendingMessageAsFailed(
-    messageId: string,
-    clearMedia = false,
+async function cleanupUnpersistedUpload(
+    mediaPath: string | undefined,
+    persisted: boolean,
+    reason: string,
 ): Promise<void> {
+    if (!mediaPath || persisted) return;
+    await cleanupMediaFilesIfUnreferenced([mediaPath], reason);
+}
+
+async function markPendingMessageAsFailed(messageId: string, clearMedia = false): Promise<void> {
     await prisma.outgoingMessage.updateMany({
         where: { id: messageId, status: { in: ['pending', 'error'] } },
         data: {
@@ -134,9 +140,9 @@ async function sendQueuedMediaRecipients(params: {
             }
             const jid = getJid(params.recipients[index]);
             await verifyJid(params.session, jid, jid.includes('@g.us') ? 'group' : 'number');
-            const media = params.fileData.buffer ?? (
-                params.fileData.url ? { url: params.fileData.url } : undefined
-            );
+            const media =
+                params.fileData.buffer ??
+                (params.fileData.url ? { url: params.fileData.url } : undefined);
             if (!media) throw new Error('Media file tidak tersedia');
 
             const content: any = {
@@ -148,12 +154,7 @@ async function sendQueuedMediaRecipients(params: {
                     : {}),
                 ...(params.mediaType === 'audio' ? { ptt: false } : {}),
             };
-            const sent = await sendGenericMessage(
-                params.session,
-                params.deviceUuid,
-                jid,
-                content,
-            );
+            const sent = await sendGenericMessage(params.session, params.deviceUuid, jid, content);
             if (!sent.success) throw new Error(sent.error || 'Pengiriman media gagal');
             results.push({ index, result: sent.result });
         } catch (error) {
@@ -216,9 +217,7 @@ export const sendMessages: RequestHandler = async (req, res) => {
                     // Relaxed validation: just check if it's a valid @g.us format
                     // Some group JIDs may not have hyphen in newer WhatsApp versions
                     if (!jid.includes('@g.us')) {
-                        throw new Error(
-                            'Invalid group JID. Group JID must end with @g.us domain.',
-                        );
+                        throw new Error('Invalid group JID. Group JID must end with @g.us domain.');
                     }
 
                     // Opsional: coba ambil metadata grup jika tersedia untuk memastikan grup ada
@@ -289,10 +288,7 @@ export const sendMessages: RequestHandler = async (req, res) => {
                     typeof payload === 'string'
                         ? payload
                         : payload?.text || JSON.stringify(payload);
-                const messageId = createTrackedMessageId(
-                    options?.messageId,
-                    session?.user?.id,
-                );
+                const messageId = createTrackedMessageId(options?.messageId, session?.user?.id);
                 const encryptedMessage = encryptMessage(messageText);
                 const contactPhone = jid.split('@')[0].replace(/\D/g, '');
                 const contact = await prisma.contact.findFirst({
@@ -415,11 +411,9 @@ export const sendMessages: RequestHandler = async (req, res) => {
             errors.length > 0 &&
             typeof controlledStatus === 'number' &&
             [409, 423, 503].includes(controlledStatus) &&
-            errors.every(error => error.statusCode === controlledStatus);
+            errors.every((error) => error.statusCode === controlledStatus);
         res.status(
-            errors.length > 0
-                ? (allErrorsShareControlledStatus ? controlledStatus : 500)
-                : 200,
+            errors.length > 0 ? (allErrorsShareControlledStatus ? controlledStatus : 500) : 200,
         ).json({
             ...(errors.length > 0 ? { message: errors[0].error } : {}),
             results,
@@ -690,10 +684,10 @@ export const sendInboxMediaMessage: RequestHandler = async (req, res) => {
             const mediaType = mimeType.startsWith('image/')
                 ? 'image'
                 : mimeType.startsWith('video/')
-                  ? 'video'
-                  : mimeType.startsWith('audio/')
-                    ? 'audio'
-                    : 'document';
+                ? 'video'
+                : mimeType.startsWith('audio/')
+                ? 'audio'
+                : 'document';
             const caption = typeof req.body.caption === 'string' ? req.body.caption.trim() : '';
             const localMedia = { url: path.resolve(req.file.path) };
             const payload: any = {
@@ -720,10 +714,7 @@ export const sendInboxMediaMessage: RequestHandler = async (req, res) => {
                 select: { pkId: true },
             });
             const mediaPath = req.file.path.replace(/\\/g, '/');
-            const messageId = createTrackedMessageId(
-                req.body.messageId,
-                session?.user?.id,
-            );
+            const messageId = createTrackedMessageId(req.body.messageId, session?.user?.id);
             trackedMessageId = messageId;
             const reservation = await reserveInboxOutgoingMessage({
                 messageId,
@@ -823,7 +814,7 @@ export const sendInboxMediaMessage: RequestHandler = async (req, res) => {
             return res.status(200).json({ result, message: responseMessage });
         } catch (error) {
             if (trackedMessageId && reservationOwned && !sendAccepted) {
-                await markPendingMessageAsFailed(trackedMessageId, true).catch(markError => {
+                await markPendingMessageAsFailed(trackedMessageId, true).catch((markError) => {
                     logger.error(
                         { error: markError, messageId: trackedMessageId },
                         'Failed to mark media message as error',
@@ -875,9 +866,7 @@ export const sendInboxReaction: RequestHandler = async (req, res) => {
         const sessionId = req.authenticatedDevice.sessionId;
         const devicePkId = req.authenticatedDevice.deviceId;
         const targetMessageId =
-            typeof req.body.targetMessageId === 'string'
-                ? req.body.targetMessageId.trim()
-                : '';
+            typeof req.body.targetMessageId === 'string' ? req.body.targetMessageId.trim() : '';
         const targetFromMe = req.body.targetFromMe;
         const emoji = typeof req.body.emoji === 'string' ? req.body.emoji.trim() : '';
 
@@ -902,10 +891,7 @@ export const sendInboxReaction: RequestHandler = async (req, res) => {
             const target = await prisma.outgoingMessage.findFirst({
                 where: {
                     deviceId: devicePkId,
-                    OR: [
-                        { waMessageId: targetMessageId },
-                        { id: targetMessageId },
-                    ],
+                    OR: [{ waMessageId: targetMessageId }, { id: targetMessageId }],
                 },
                 select: { id: true, waMessageId: true, to: true },
             });
@@ -932,9 +918,7 @@ export const sendInboxReaction: RequestHandler = async (req, res) => {
             participant = target.participant;
         }
 
-        const jid = conversationJid.includes('@')
-            ? conversationJid
-            : getJid(conversationJid);
+        const jid = conversationJid.includes('@') ? conversationJid : getJid(conversationJid);
         const deliveryJid = whatsappMessageJid || jid;
         const targetKey = {
             remoteJid: deliveryJid,
@@ -970,10 +954,7 @@ export const sendInboxReaction: RequestHandler = async (req, res) => {
 
         return res.status(200).json({ success: true, reaction: event });
     } catch (error) {
-        logger.warn(
-            { code: (error as { code?: unknown })?.code },
-            'Failed to send Inbox reaction',
-        );
+        logger.warn({ code: (error as { code?: unknown })?.code }, 'Failed to send Inbox reaction');
         return res.status(500).json({
             message: 'Gagal memproses reaction WhatsApp. Silakan muat ulang dan coba kembali.',
         });
@@ -989,9 +970,7 @@ export const deleteInboxMessage: RequestHandler = async (req, res) => {
         const sessionId = req.authenticatedDevice.sessionId;
         const devicePkId = req.authenticatedDevice.deviceId;
         const targetMessageId =
-            typeof req.body.targetMessageId === 'string'
-                ? req.body.targetMessageId.trim()
-                : '';
+            typeof req.body.targetMessageId === 'string' ? req.body.targetMessageId.trim() : '';
         const targetFromMe = req.body.targetFromMe;
         const scope = req.body.scope;
 
@@ -1025,10 +1004,7 @@ export const deleteInboxMessage: RequestHandler = async (req, res) => {
             const target = await prisma.outgoingMessage.findFirst({
                 where: {
                     deviceId: devicePkId,
-                    OR: [
-                        { waMessageId: targetMessageId },
-                        { id: targetMessageId },
-                    ],
+                    OR: [{ waMessageId: targetMessageId }, { id: targetMessageId }],
                 },
                 select: {
                     pkId: true,
@@ -1070,9 +1046,7 @@ export const deleteInboxMessage: RequestHandler = async (req, res) => {
             targetMediaPath = target.mediaPath;
         }
 
-        const jid = conversationJid.includes('@')
-            ? conversationJid
-            : getJid(conversationJid);
+        const jid = conversationJid.includes('@') ? conversationJid : getJid(conversationJid);
         const key = {
             remoteJid: jid,
             id: whatsappTargetId,
@@ -1134,11 +1108,7 @@ export const deleteInboxMessage: RequestHandler = async (req, res) => {
         } else {
             await prisma.incomingMessage.delete({ where: { pkId: targetPkId } });
         }
-        await deleteMessageReactions(
-            devicePkId,
-            sessionId,
-            whatsappTargetId,
-        ).catch((error) => {
+        await deleteMessageReactions(devicePkId, sessionId, whatsappTargetId).catch((error) => {
             logger.warn(
                 { code: (error as { code?: unknown })?.code },
                 'Failed to delete reaction metadata for deleted message',
@@ -1157,9 +1127,7 @@ export const deleteInboxMessage: RequestHandler = async (req, res) => {
             placeholder: scope === 'everyone' ? 'Pesan ini telah dihapus' : null,
             whatsappSynced,
         };
-        getSocketIO()
-            .to(`session:${sessionId}`)
-            .emit(`message-deleted:${sessionId}`, event);
+        getSocketIO().to(`session:${sessionId}`).emit(`message-deleted:${sessionId}`, event);
 
         return res.status(200).json({
             success: true,
@@ -1176,10 +1144,7 @@ export const deleteInboxMessage: RequestHandler = async (req, res) => {
             'Failed to delete Inbox message',
         );
         return res.status(500).json({
-            message:
-                error instanceof Error
-                    ? error.message
-                    : 'Gagal menghapus pesan WhatsApp',
+            message: error instanceof Error ? error.message : 'Gagal menghapus pesan WhatsApp',
         });
     }
 };
@@ -1666,11 +1631,11 @@ export const getProfilePictureUrl: RequestHandler = async (req, res) => {
                 where: { sessionId },
                 include: { device: { select: { phone: true } } },
             });
-            
+
             if (!sessionData?.device?.phone) {
                 return res.status(400).json({ message: 'Phone number not found for this session' });
             }
-            
+
             jid = getJid(sessionData.device.phone);
         } else if (recipient.includes('@g.us')) {
             jid = recipient;
@@ -2102,73 +2067,89 @@ export const createBroadcast: RequestHandler = async (req, res) => {
     try {
         diskUpload.single('media')(req, res, async (err: any) => {
             if (err) {
-                return res.status(400).json({ message: 'Error uploading file' });
+                return res.status(400).json({ message: getMediaUploadErrorMessage(err) });
             }
-            const { deviceId } = req.authenticatedDevice;
-            const { name, message } = req.body as { name?: string; message?: string };
-            // Coerce recipients to array for both JSON and multipart
-            const bodyRecipients: any = (req.body as any).recipients;
-            const recipients: string[] = Array.isArray(bodyRecipients)
-                ? bodyRecipients
-                : typeof bodyRecipients === 'string' && bodyRecipients.length
-                ? [bodyRecipients]
-                : [];
-            const delay = Number((req.body as any).delay) ?? 5000;
-            // Normalize schedule: default to now if missing/invalid
-            const rawSchedule = (req.body as any).schedule as string | undefined;
-            const schedule =
-                rawSchedule && !isNaN(new Date(rawSchedule).getTime())
-                    ? new Date(rawSchedule)
-                    : new Date();
+            const uploadedPath = req.file?.path;
+            let mediaPersisted = false;
+            try {
+                const { deviceId } = req.authenticatedDevice;
+                const { name, message } = req.body as { name?: string; message?: string };
+                // Coerce recipients to array for both JSON and multipart
+                const bodyRecipients: any = (req.body as any).recipients;
+                const recipients: string[] = Array.isArray(bodyRecipients)
+                    ? bodyRecipients
+                    : typeof bodyRecipients === 'string' && bodyRecipients.length
+                    ? [bodyRecipients]
+                    : [];
+                const delay = Number((req.body as any).delay) ?? 5000;
+                // Normalize schedule: default to now if missing/invalid
+                const rawSchedule = (req.body as any).schedule as string | undefined;
+                const schedule =
+                    rawSchedule && !isNaN(new Date(rawSchedule).getTime())
+                        ? new Date(rawSchedule)
+                        : new Date();
 
-            if (!name || !message) {
-                return res
-                    .status(400)
-                    .json({ message: 'Missing required fields: name and message' });
-            }
-            if (!recipients.length) {
-                return res.status(400).json({ message: 'Recipients are required' });
-            }
+                if (!name || !message) {
+                    return res
+                        .status(400)
+                        .json({ message: 'Missing required fields: name and message' });
+                }
+                if (!recipients.length) {
+                    return res.status(400).json({ message: 'Recipients are required' });
+                }
 
-            if (
-                recipients.includes('all') &&
-                recipients.some((recipient: string) => recipient.startsWith('label'))
-            ) {
-                return res.status(400).json({
-                    message:
-                        "Recipients can't contain both all contacts and contact labels at the same input",
+                if (
+                    recipients.includes('all') &&
+                    recipients.some((recipient: string) => recipient.startsWith('label'))
+                ) {
+                    return res.status(400).json({
+                        message:
+                            "Recipients can't contain both all contacts and contact labels at the same input",
+                    });
+                }
+
+                const device = await prisma.device.findUnique({
+                    where: { pkId: deviceId },
+                    include: { sessions: { select: { sessionId: true } } },
                 });
-            }
 
-            const device = await prisma.device.findUnique({
-                where: { pkId: deviceId },
-                include: { sessions: { select: { sessionId: true } } },
-            });
-
-            if (!device) {
-                return res.status(404).json({ message: 'Device not found' });
-            }
-            if (!device.sessions[0]) {
-                return res.status(404).json({ message: 'Session not found' });
-            }
-            await prisma.$transaction(async (transaction) => {
-                await transaction.broadcast.create({
-                    data: {
-                        name: name.includes('[Broadcast]') ? name : `${name} [Broadcast]`,
-                        message: encryptMessage(message),
-                        schedule,
-                        deviceId: device.pkId,
-                        delay,
-                        broadcastType: 'broadcast', // 🔥 Set type for AdminSentHistory
-                        recipients: { set: recipients },
-                        mediaPath: req.file?.path,
-                        mediaFileName: req.file
-                            ? sanitizeMediaFileName(req.file.originalname)
-                            : null,
-                    },
+                if (!device) {
+                    return res.status(404).json({ message: 'Device not found' });
+                }
+                if (!device.sessions[0]) {
+                    return res.status(404).json({ message: 'Session not found' });
+                }
+                await prisma.$transaction(async (transaction) => {
+                    await transaction.broadcast.create({
+                        data: {
+                            name: name.includes('[Broadcast]') ? name : `${name} [Broadcast]`,
+                            message: encryptMessage(message),
+                            schedule,
+                            deviceId: device.pkId,
+                            delay,
+                            broadcastType: 'broadcast', // 🔥 Set type for AdminSentHistory
+                            recipients: { set: recipients },
+                            mediaPath: uploadedPath,
+                            mediaFileName: req.file
+                                ? sanitizeMediaFileName(req.file.originalname)
+                                : null,
+                        },
+                    });
                 });
-                res.status(201).json({ message: 'Broadcast created successfully' });
-            });
+                mediaPersisted = true;
+                return res.status(201).json({ message: 'Broadcast created successfully' });
+            } catch (error) {
+                logger.error(error);
+                if (!res.headersSent) {
+                    return res.status(500).json({ message: 'Internal server error' });
+                }
+            } finally {
+                await cleanupUnpersistedUpload(
+                    uploadedPath,
+                    mediaPersisted,
+                    'create-device-api-broadcast-failed',
+                );
+            }
         });
     } catch (error) {
         logger.error(error);
@@ -2180,7 +2161,7 @@ export const createAutoReplies: RequestHandler = async (req, res) => {
     try {
         diskUpload.single('media')(req, res, async (err: any) => {
             if (err) {
-                return res.status(400).json({ message: 'Error uploading file' });
+                return res.status(400).json({ message: getMediaUploadErrorMessage(err) });
             }
             const { deviceId } = req.authenticatedDevice;
             const { name, recipients, requests, response } = req.body;
@@ -2867,7 +2848,7 @@ export const createBroadcastFeedback: RequestHandler = async (req, res) => {
     try {
         diskUpload.single('media')(req, res, async (err: any) => {
             if (err) {
-                return res.status(400).json({ message: 'Error uploading file' });
+                return res.status(400).json({ message: getMediaUploadErrorMessage(err) });
             }
 
             const { deviceId } = req.authenticatedDevice;
@@ -3071,7 +3052,7 @@ export const createBroadcastReminder: RequestHandler = async (req, res) => {
     try {
         diskUpload.single('media')(req, res, async (err: any) => {
             if (err) {
-                return res.status(400).json({ message: 'Error uploading file' });
+                return res.status(400).json({ message: getMediaUploadErrorMessage(err) });
             }
 
             const { deviceId } = req.authenticatedDevice;
@@ -3159,116 +3140,132 @@ export const createBroadcastScheduled: RequestHandler = async (req, res) => {
     try {
         diskUpload.single('media')(req, res, async (err: any) => {
             if (err) {
-                return res.status(400).json({ message: 'Error uploading file' });
+                return res.status(400).json({ message: getMediaUploadErrorMessage(err) });
             }
 
-            const { deviceId } = req.authenticatedDevice;
-            const { name, message, recurrence, interval, startDate, endDate } = req.body;
-            const delay = Number(req.body.delay) || 5000;
+            const uploadedPath = req.file?.path;
+            let mediaPersisted = false;
+            try {
+                const { deviceId } = req.authenticatedDevice;
+                const { name, message, recurrence, interval, startDate, endDate } = req.body;
+                const delay = Number(req.body.delay) || 5000;
 
-            // Pastikan recipients berbentuk array
-            const recipients = Array.isArray(req.body.recipients)
-                ? req.body.recipients
-                : [req.body.recipients];
+                // Pastikan recipients berbentuk array
+                const recipients = Array.isArray(req.body.recipients)
+                    ? req.body.recipients
+                    : [req.body.recipients];
 
-            // Validasi parameter
-            if (
-                !recurrence ||
-                !['minute', 'hourly', 'daily', 'weekly', 'monthly'].includes(recurrence)
-            ) {
-                return res.status(400).json({ message: 'Invalid or missing recurrence type' });
-            }
-
-            if (!interval || isNaN(Number(interval)) || Number(interval) <= 0) {
-                return res.status(400).json({ message: 'Interval must be a positive number' });
-            }
-
-            if (!startDate || isNaN(new Date(startDate).getTime())) {
-                return res.status(400).json({ message: 'Invalid or missing start date' });
-            }
-
-            if (!endDate || isNaN(new Date(endDate).getTime())) {
-                return res.status(400).json({ message: 'Invalid or missing end date' });
-            }
-
-            if (new Date(startDate) > new Date(endDate)) {
-                return res.status(400).json({ message: 'Start date must be before end date' });
-            }
-
-            if (
-                recipients.includes('all') &&
-                recipients.some((recipient: { startsWith: (arg0: string) => string }) =>
-                    recipient.startsWith('label'),
-                )
-            ) {
-                return res.status(400).json({
-                    message:
-                        "Recipients can't contain both all contacts and contact labels at the same input",
-                });
-            }
-
-            // Ambil informasi perangkat
-            const device = await prisma.device.findUnique({
-                where: { pkId: deviceId },
-                include: { sessions: { select: { sessionId: true } } },
-            });
-
-            if (!device) {
-                return res.status(404).json({ message: 'Device not found' });
-            }
-            if (!device.sessions[0]) {
-                return res.status(404).json({ message: 'Session not found' });
-            }
-
-            const start = new Date(startDate);
-            const end = new Date(endDate);
-            const broadcasts = [];
-            let current = new Date(start);
-
-            // Hitung dan buat pesan broadcast berdasarkan interval dan durasi
-            while (current <= end) {
-                broadcasts.push({
-                    name: name.includes('[Recurrence]') ? name : `${name} [Recurrence]`,
-                    message: encryptMessage(message),
-                    schedule: new Date(current),
-                    deviceId: device.pkId,
-                    delay,
-                    broadcastType: 'recurrence', // 🔥 Set type for AdminSentHistory
-                    recipients: { set: recipients },
-                    mediaPath: req.file?.path,
-                    mediaFileName: req.file
-                        ? sanitizeMediaFileName(req.file.originalname)
-                        : null,
-                });
-
-                switch (recurrence) {
-                    case 'minute':
-                        current.setMinutes(current.getMinutes() + Number(interval));
-                        break;
-                    case 'hourly':
-                        current.setHours(current.getHours() + Number(interval));
-                        break;
-                    case 'daily':
-                        current.setDate(current.getDate() + Number(interval));
-                        break;
-                    case 'weekly':
-                        current.setDate(current.getDate() + Number(interval) * 7);
-                        break;
-                    case 'monthly':
-                        current.setMonth(current.getMonth() + Number(interval));
-                        break;
+                // Validasi parameter
+                if (
+                    !recurrence ||
+                    !['minute', 'hourly', 'daily', 'weekly', 'monthly'].includes(recurrence)
+                ) {
+                    return res.status(400).json({ message: 'Invalid or missing recurrence type' });
                 }
+
+                if (!interval || isNaN(Number(interval)) || Number(interval) <= 0) {
+                    return res.status(400).json({ message: 'Interval must be a positive number' });
+                }
+
+                if (!startDate || isNaN(new Date(startDate).getTime())) {
+                    return res.status(400).json({ message: 'Invalid or missing start date' });
+                }
+
+                if (!endDate || isNaN(new Date(endDate).getTime())) {
+                    return res.status(400).json({ message: 'Invalid or missing end date' });
+                }
+
+                if (new Date(startDate) > new Date(endDate)) {
+                    return res.status(400).json({ message: 'Start date must be before end date' });
+                }
+
+                if (
+                    recipients.includes('all') &&
+                    recipients.some((recipient: { startsWith: (arg0: string) => string }) =>
+                        recipient.startsWith('label'),
+                    )
+                ) {
+                    return res.status(400).json({
+                        message:
+                            "Recipients can't contain both all contacts and contact labels at the same input",
+                    });
+                }
+
+                // Ambil informasi perangkat
+                const device = await prisma.device.findUnique({
+                    where: { pkId: deviceId },
+                    include: { sessions: { select: { sessionId: true } } },
+                });
+
+                if (!device) {
+                    return res.status(404).json({ message: 'Device not found' });
+                }
+                if (!device.sessions[0]) {
+                    return res.status(404).json({ message: 'Session not found' });
+                }
+
+                const start = new Date(startDate);
+                const end = new Date(endDate);
+                const broadcasts = [];
+                let current = new Date(start);
+
+                // Hitung dan buat pesan broadcast berdasarkan interval dan durasi
+                while (current <= end) {
+                    broadcasts.push({
+                        name: name.includes('[Recurrence]') ? name : `${name} [Recurrence]`,
+                        message: encryptMessage(message),
+                        schedule: new Date(current),
+                        deviceId: device.pkId,
+                        delay,
+                        broadcastType: 'recurrence', // 🔥 Set type for AdminSentHistory
+                        recipients: { set: recipients },
+                        mediaPath: uploadedPath,
+                        mediaFileName: req.file
+                            ? sanitizeMediaFileName(req.file.originalname)
+                            : null,
+                    });
+
+                    switch (recurrence) {
+                        case 'minute':
+                            current.setMinutes(current.getMinutes() + Number(interval));
+                            break;
+                        case 'hourly':
+                            current.setHours(current.getHours() + Number(interval));
+                            break;
+                        case 'daily':
+                            current.setDate(current.getDate() + Number(interval));
+                            break;
+                        case 'weekly':
+                            current.setDate(current.getDate() + Number(interval) * 7);
+                            break;
+                        case 'monthly':
+                            current.setMonth(current.getMonth() + Number(interval));
+                            break;
+                    }
+                }
+
+                // Simpan semua broadcast ke database
+                await prisma.$transaction(
+                    broadcasts.map((broadcast) => prisma.broadcast.create({ data: broadcast })),
+                );
+
+                mediaPersisted = true;
+                return res.status(201).json({
+                    message: 'Broadcasts created successfully',
+                    totalBroadcasts: broadcasts.length,
+                });
+            } catch (error) {
+                logger.error(error);
+                if (!res.headersSent) {
+                    return res.status(500).json({ message: 'Internal server error' });
+                }
+            } finally {
+                await cleanupUnpersistedUpload(
+                    uploadedPath,
+                    mediaPersisted,
+                    'create-device-api-recurring-broadcast-failed',
+                );
             }
-
-            // Simpan semua broadcast ke database
-            await prisma.$transaction(
-                broadcasts.map((broadcast) => prisma.broadcast.create({ data: broadcast })),
-            );
-
-            res.status(201).json({
-                message: 'Broadcasts created successfully',
-                totalBroadcasts: broadcasts.length,
-            });
         });
     } catch (error) {
         logger.error(error);
@@ -3364,96 +3361,112 @@ export const createBroadcastReminderAlgo: RequestHandler = async (req, res) => {
     try {
         diskUpload.single('media')(req, res, async (err: any) => {
             if (err) {
-                return res.status(400).json({ message: 'Error uploading file' });
+                return res.status(400).json({ message: getMediaUploadErrorMessage(err) });
             }
 
-            const { deviceId } = req.authenticatedDevice;
-            const { name, message, lessons, recipients } = req.body;
-            // Terima juga schedule dari frontend (ISO string)
-            const scheduleRaw = req.body.schedule || '';
-            const delay = Number(req.body.delay) || 5000;
+            const uploadedPath = req.file?.path;
+            let mediaPersisted = false;
+            try {
+                const { deviceId } = req.authenticatedDevice;
+                const { name, message, lessons, recipients } = req.body;
+                // Terima juga schedule dari frontend (ISO string)
+                const scheduleRaw = req.body.schedule || '';
+                const delay = Number(req.body.delay) || 5000;
 
-            if (!name || !message || !lessons || !recipients) {
-                return res.status(400).json({
-                    message: 'Missing required fields: name, message, lessons, recipients',
-                });
-            }
-
-            // Validasi lessons harus berupa angka positif
-            const lessonCount = Number(lessons);
-            if (isNaN(lessonCount) || lessonCount <= 0) {
-                return res.status(400).json({ message: 'Lessons must be a positive number' });
-            }
-
-            // pastikan recipients array
-            const recipientArray = Array.isArray(recipients) ? recipients : [recipients];
-
-            if (
-                recipientArray.includes('all') &&
-                recipientArray.some((recipient: string) => recipient.startsWith('label'))
-            ) {
-                return res.status(400).json({
-                    message:
-                        "Recipients can't contain both all contacts and contact labels at the same input",
-                });
-            }
-
-            const device = await prisma.device.findUnique({
-                where: { pkId: deviceId },
-                include: { sessions: { select: { sessionId: true } } },
-            });
-
-            if (!device) {
-                return res.status(404).json({ message: 'Device not found' });
-            }
-            if (!device.sessions[0]) {
-                return res.status(404).json({ message: 'Session not found' });
-            }
-
-            // Validasi dan gunakan schedule yang dikirim client (fallback ke now jika kosong)
-            let baseDate: Date;
-            if (scheduleRaw) {
-                const parsed = new Date(scheduleRaw);
-                if (isNaN(parsed.getTime())) {
-                    return res.status(400).json({ message: 'Invalid schedule format' });
-                }
-                baseDate = parsed;
-            } else {
-                baseDate = new Date(); // fallback
-            }
-
-            await prisma.$transaction(async (transaction) => {
-                for (let i = 0; i < lessonCount; i++) {
-                    // buat salinan baseDate untuk tiap broadcast supaya tidak mutasi baseDate asli
-                    const schedule = new Date(baseDate);
-                    schedule.setDate(schedule.getDate() + i * 7); // + i minggu
-
-                    await transaction.broadcast.create({
-                        data: {
-                            // name: `${name} - [Reminder]`, // Store as "reminderName - Lesson 1, 2, 3, etc"
-                            name: name.includes('[Reminder]') ? name : `${name} [Reminder]`,
-                            message: encryptMessage(message),
-                            schedule,
-                            deviceId: device.pkId,
-                            delay,
-                            broadcastType: 'reminder', // 🔥 Set type for AdminSentHistory
-                            recipients: {
-                                set: recipientArray,
-                            },
-                            mediaPath: req.file?.path,
-                            mediaFileName: req.file
-                                ? sanitizeMediaFileName(req.file.originalname)
-                                : null,
-                        },
+                if (!name || !message || !lessons || !recipients) {
+                    return res.status(400).json({
+                        message: 'Missing required fields: name, message, lessons, recipients',
                     });
                 }
-            });
 
-            res.status(201).json({
-                message: 'Reminder broadcasts created successfully',
-                broadcastName: name,
-                totalLessons: lessonCount,
-            });
+                // Validasi lessons harus berupa angka positif
+                const lessonCount = Number(lessons);
+                if (isNaN(lessonCount) || lessonCount <= 0) {
+                    return res.status(400).json({ message: 'Lessons must be a positive number' });
+                }
+
+                // pastikan recipients array
+                const recipientArray = Array.isArray(recipients) ? recipients : [recipients];
+
+                if (
+                    recipientArray.includes('all') &&
+                    recipientArray.some((recipient: string) => recipient.startsWith('label'))
+                ) {
+                    return res.status(400).json({
+                        message:
+                            "Recipients can't contain both all contacts and contact labels at the same input",
+                    });
+                }
+
+                const device = await prisma.device.findUnique({
+                    where: { pkId: deviceId },
+                    include: { sessions: { select: { sessionId: true } } },
+                });
+
+                if (!device) {
+                    return res.status(404).json({ message: 'Device not found' });
+                }
+                if (!device.sessions[0]) {
+                    return res.status(404).json({ message: 'Session not found' });
+                }
+
+                // Validasi dan gunakan schedule yang dikirim client (fallback ke now jika kosong)
+                let baseDate: Date;
+                if (scheduleRaw) {
+                    const parsed = new Date(scheduleRaw);
+                    if (isNaN(parsed.getTime())) {
+                        return res.status(400).json({ message: 'Invalid schedule format' });
+                    }
+                    baseDate = parsed;
+                } else {
+                    baseDate = new Date(); // fallback
+                }
+
+                await prisma.$transaction(async (transaction) => {
+                    for (let i = 0; i < lessonCount; i++) {
+                        // buat salinan baseDate untuk tiap broadcast supaya tidak mutasi baseDate asli
+                        const schedule = new Date(baseDate);
+                        schedule.setDate(schedule.getDate() + i * 7); // + i minggu
+
+                        await transaction.broadcast.create({
+                            data: {
+                                // name: `${name} - [Reminder]`, // Store as "reminderName - Lesson 1, 2, 3, etc"
+                                name: name.includes('[Reminder]') ? name : `${name} [Reminder]`,
+                                message: encryptMessage(message),
+                                schedule,
+                                deviceId: device.pkId,
+                                delay,
+                                broadcastType: 'reminder', // 🔥 Set type for AdminSentHistory
+                                recipients: {
+                                    set: recipientArray,
+                                },
+                                mediaPath: uploadedPath,
+                                mediaFileName: req.file
+                                    ? sanitizeMediaFileName(req.file.originalname)
+                                    : null,
+                            },
+                        });
+                    }
+                });
+
+                mediaPersisted = true;
+                return res.status(201).json({
+                    message: 'Reminder broadcasts created successfully',
+                    broadcastName: name,
+                    totalLessons: lessonCount,
+                });
+            } catch (error) {
+                logger.error(error);
+                if (!res.headersSent) {
+                    return res.status(500).json({ message: 'Internal server error' });
+                }
+            } finally {
+                await cleanupUnpersistedUpload(
+                    uploadedPath,
+                    mediaPersisted,
+                    'create-device-api-reminder-broadcast-failed',
+                );
+            }
         });
     } catch (error) {
         logger.error(error);
@@ -3492,10 +3505,13 @@ interface ExpandedContact {
     firstName: string;
 }
 
-async function expandLabelToContacts(labelNameOrSlug: string, deviceId: string): Promise<ExpandedContact[]> {
+async function expandLabelToContacts(
+    labelNameOrSlug: string,
+    deviceId: string,
+): Promise<ExpandedContact[]> {
     try {
         logger.info(`[Label] Expanding label "${labelNameOrSlug}" for device ${deviceId}`);
-        
+
         // Find the label by name OR slug (case-insensitive)
         const label = await prisma.label.findFirst({
             where: {
@@ -3503,93 +3519,109 @@ async function expandLabelToContacts(labelNameOrSlug: string, deviceId: string):
                     {
                         name: {
                             equals: labelNameOrSlug,
-                            mode: 'insensitive'
-                        }
+                            mode: 'insensitive',
+                        },
                     },
                     {
                         slug: {
                             equals: labelNameOrSlug,
-                            mode: 'insensitive'
-                        }
-                    }
-                ]
-            }
+                            mode: 'insensitive',
+                        },
+                    },
+                ],
+            },
         });
-        
+
         if (!label) {
-            logger.warn(`[Label] Label "${labelNameOrSlug}" not found in database (checked both name and slug)`);
+            logger.warn(
+                `[Label] Label "${labelNameOrSlug}" not found in database (checked both name and slug)`,
+            );
             return [];
         }
-        
-        logger.info(`[Label] Found label: pkId=${label.pkId}, name="${label.name}", slug="${label.slug}"`);
-        
+
+        logger.info(
+            `[Label] Found label: pkId=${label.pkId}, name="${label.name}", slug="${label.slug}"`,
+        );
+
         // Then find contacts with this label that are associated with the device
         const contactsWithLabel = await prisma.contact.findMany({
             where: {
                 ContactLabel: {
                     some: {
-                        labelId: label.pkId
-                    }
+                        labelId: label.pkId,
+                    },
                 },
                 contactDevices: {
                     some: {
                         device: {
-                            id: deviceId
-                        }
-                    }
-                }
+                            id: deviceId,
+                        },
+                    },
+                },
             },
             select: {
                 pkId: true,
                 phone: true,
-                firstName: true
-            }
+                firstName: true,
+            },
         });
 
-        logger.info(`[Label] Found ${contactsWithLabel.length} contacts with label "${label.name}"`);
-        
+        logger.info(
+            `[Label] Found ${contactsWithLabel.length} contacts with label "${label.name}"`,
+        );
+
         if (contactsWithLabel.length === 0) {
             // Debug: check if contacts exist with this label at all
             const allContactsWithLabel = await prisma.contactLabel.count({
-                where: { labelId: label.pkId }
+                where: { labelId: label.pkId },
             });
-            logger.warn(`[Label] Total ContactLabel entries for this label: ${allContactsWithLabel}`);
-            
+            logger.warn(
+                `[Label] Total ContactLabel entries for this label: ${allContactsWithLabel}`,
+            );
+
             // Debug: check if device has any contacts
             const deviceContacts = await prisma.contactDevice.count({
                 where: {
-                    device: { id: deviceId }
-                }
+                    device: { id: deviceId },
+                },
             });
             logger.warn(`[Label] Total contacts for device ${deviceId}: ${deviceContacts}`);
-            
+
             // Debug: check intersection - contacts with label that also belong to device
             const contactIdsWithLabel = await prisma.contactLabel.findMany({
                 where: { labelId: label.pkId },
-                select: { contactId: true }
+                select: { contactId: true },
             });
-            const contactIds = contactIdsWithLabel.map(c => c.contactId);
-            
+            const contactIds = contactIdsWithLabel.map((c) => c.contactId);
+
             if (contactIds.length > 0) {
                 const contactsAlsoInDevice = await prisma.contactDevice.count({
                     where: {
                         contactId: { in: contactIds },
-                        device: { id: deviceId }
-                    }
+                        device: { id: deviceId },
+                    },
                 });
-                logger.warn(`[Label] Contacts with this label that also belong to device: ${contactsAlsoInDevice}`);
+                logger.warn(
+                    `[Label] Contacts with this label that also belong to device: ${contactsAlsoInDevice}`,
+                );
             }
         }
 
         // 🆕 Return both phone and firstName
         const expandedContacts = contactsWithLabel
-            .filter(contact => contact.phone && contact.phone.length > 0)
-            .map(contact => ({
+            .filter((contact) => contact.phone && contact.phone.length > 0)
+            .map((contact) => ({
                 phone: contact.phone!,
-                firstName: contact.firstName || ''
+                firstName: contact.firstName || '',
             }));
 
-        logger.info(`[Label] Label "${label.name}" expanded to ${expandedContacts.length} contacts: ${expandedContacts.map(c => `${c.firstName?.substring(0,3)}*** (${c.phone.substring(0,5)}***)`).join(', ')}`);
+        logger.info(
+            `[Label] Label "${label.name}" expanded to ${
+                expandedContacts.length
+            } contacts: ${expandedContacts
+                .map((c) => `${c.firstName?.substring(0, 3)}*** (${c.phone.substring(0, 5)}***)`)
+                .join(', ')}`,
+        );
         return expandedContacts;
     } catch (error) {
         logger.error(`[Label] Error expanding label "${labelNameOrSlug}":`, error);
@@ -3603,7 +3635,10 @@ interface ProcessedRecipient {
     firstName: string;
 }
 
-async function processRecipientsForFeedback(recipients: string[], deviceId: string): Promise<ProcessedRecipient[]> {
+async function processRecipientsForFeedback(
+    recipients: string[],
+    deviceId: string,
+): Promise<ProcessedRecipient[]> {
     const processedRecipients: ProcessedRecipient[] = [];
 
     for (const recipient of recipients) {
@@ -3621,14 +3656,16 @@ async function processRecipientsForFeedback(recipients: string[], deviceId: stri
 
     // Remove duplicates by phone, keeping first occurrence
     const seen = new Set<string>();
-    const uniqueRecipients = processedRecipients.filter(r => {
+    const uniqueRecipients = processedRecipients.filter((r) => {
         if (seen.has(r.phone)) return false;
         seen.add(r.phone);
         return true;
     });
-    
-    logger.info(`Processed recipients: ${recipients.length} input -> ${uniqueRecipients.length} unique recipients`);
-    
+
+    logger.info(
+        `Processed recipients: ${recipients.length} input -> ${uniqueRecipients.length} unique recipients`,
+    );
+
     return uniqueRecipients;
 }
 
@@ -3637,13 +3674,13 @@ async function processRecipientsForFeedback(recipients: string[], deviceId: stri
 export const sendMonthlyFeedbackDevice: RequestHandler = async (req, res) => {
     try {
         logger.info('=== Starting monthly feedback send (deviceApi) ===');
-        
+
         // Get device from authenticated token (NOT from body)
         // deviceId is INT (pkId), deviceUuid is string (UUID) - added by middleware
         const devicePkId = req.authenticatedDevice.deviceId;
         const deviceUuid = (req.authenticatedDevice as any).deviceUuid as string;
         const user = req.authenticatedUser; // User is set separately by middleware
-        
+
         const {
             studentName, // Legacy: single studentName (backward compatibility)
             courseName,
@@ -3661,22 +3698,22 @@ export const sendMonthlyFeedbackDevice: RequestHandler = async (req, res) => {
             recipientPhone,
             recipients, // 🆕 Now array of { phone, studentName }
             rating,
-            reportBy
+            reportBy,
         } = req.body;
 
-        logger.info('Request:', { 
-            courseName, 
-            month, 
-            deviceId: deviceUuid, 
+        logger.info('Request:', {
+            courseName,
+            month,
+            deviceId: deviceUuid,
             recipientCount: recipients?.length || (recipientPhone ? 1 : 0),
             hasCommentCategories: !!commentCategories,
-            tutorCommentType: Array.isArray(tutorComment) ? 'array' : typeof tutorComment
+            tutorCommentType: Array.isArray(tutorComment) ? 'array' : typeof tutorComment,
         });
 
         // 🆕 Handle new format: recipients is array of {phone, studentName}
         // or legacy format: recipients is array of phone strings
         let recipientDataList: Array<{ phone: string; studentName: string }> = [];
-        
+
         if (recipients && Array.isArray(recipients) && recipients.length > 0) {
             if (typeof recipients[0] === 'object' && recipients[0].phone) {
                 // New format: [{phone, studentName}, ...]
@@ -3685,7 +3722,7 @@ export const sendMonthlyFeedbackDevice: RequestHandler = async (req, res) => {
                 // Legacy format: ['phone1', 'phone2', ...] - use single studentName
                 recipientDataList = recipients.map((phone: string) => ({
                     phone,
-                    studentName: studentName || 'Siswa'
+                    studentName: studentName || 'Siswa',
                 }));
             }
         } else if (recipientPhone) {
@@ -3695,30 +3732,34 @@ export const sendMonthlyFeedbackDevice: RequestHandler = async (req, res) => {
 
         if (!courseName || !month || recipientDataList.length === 0) {
             logger.warn('Missing required fields');
-            return res.status(400).json({ 
+            return res.status(400).json({
                 message: 'Missing required fields',
                 details: {
                     courseName: !courseName ? 'required' : 'ok',
                     month: !month ? 'required' : 'ok',
-                    recipients: recipientDataList.length === 0 ? 'required (at least 1)' : 'ok'
-                }
+                    recipients: recipientDataList.length === 0 ? 'required (at least 1)' : 'ok',
+                },
             });
         }
 
         // 🆕 Function to build tutor comment from selected IDs and categories
-        const buildTutorComment = (selectedIds: string[], categories: any, recipientStudentName: string): string => {
+        const buildTutorComment = (
+            selectedIds: string[],
+            categories: any,
+            recipientStudentName: string,
+        ): string => {
             if (!selectedIds || !Array.isArray(selectedIds) || !categories) {
                 // Fallback: tutorComment might be a plain string (legacy)
                 return typeof tutorComment === 'string' ? tutorComment : '';
             }
-            
+
             const comments: string[] = [];
             const allCategories = ['kehadiran', 'keterlibatan', 'penyelesaian', 'custom'];
-            
+
             for (const categoryKey of allCategories) {
                 const category = categories[categoryKey];
                 if (!category || !Array.isArray(category)) continue;
-                
+
                 for (const comment of category) {
                     if (selectedIds.includes(comment.id)) {
                         let text = comment.text || '';
@@ -3732,7 +3773,7 @@ export const sendMonthlyFeedbackDevice: RequestHandler = async (req, res) => {
                     }
                 }
             }
-            
+
             return comments.join('\n\n');
         };
 
@@ -3766,15 +3807,15 @@ export const sendMonthlyFeedbackDevice: RequestHandler = async (req, res) => {
         for (const rd of recipientDataList) {
             phoneToNameMap[rd.phone] = rd.studentName;
         }
-        
-        const rawPhones = recipientDataList.map(rd => rd.phone);
+
+        const rawPhones = recipientDataList.map((rd) => rd.phone);
         const processedRecipients = await processRecipientsForFeedback(rawPhones, deviceUuid);
 
         if (processedRecipients.length === 0) {
             logger.warn('No valid recipients after processing labels');
-            return res.status(400).json({ 
+            return res.status(400).json({
                 message: 'No valid recipients found. Labels may be empty or contacts not found.',
-                originalRecipients: rawPhones
+                originalRecipients: rawPhones,
             });
         }
 
@@ -3783,29 +3824,43 @@ export const sendMonthlyFeedbackDevice: RequestHandler = async (req, res) => {
         const finalRecipientList: Array<{ phone: string; studentName: string }> = [];
         for (const processed of processedRecipients) {
             const { phone, firstName } = processed;
-            
+
             // Priority 1: Use firstName from label expansion (kontak's actual name)
             if (firstName && firstName.trim()) {
                 finalRecipientList.push({ phone, studentName: firstName });
-                logger.info(`[Recipient] ${phone.substring(0,5)}*** using firstName from contact: "${firstName}"`);
+                logger.info(
+                    `[Recipient] ${phone.substring(
+                        0,
+                        5,
+                    )}*** using firstName from contact: "${firstName}"`,
+                );
             }
             // Priority 2: Use studentName from frontend (for direct phone numbers)
             else if (phoneToNameMap[phone] && phoneToNameMap[phone] !== 'Tidak ada nama') {
                 finalRecipientList.push({ phone, studentName: phoneToNameMap[phone] });
-                logger.info(`[Recipient] ${phone.substring(0,5)}*** using studentName from frontend: "${phoneToNameMap[phone]}"`);
+                logger.info(
+                    `[Recipient] ${phone.substring(0, 5)}*** using studentName from frontend: "${
+                        phoneToNameMap[phone]
+                    }"`,
+                );
             }
             // Priority 3: Fallback to default studentName from first recipient
             else {
                 const fallbackName = recipientDataList[0]?.studentName || 'Siswa';
                 finalRecipientList.push({ phone, studentName: fallbackName });
-                logger.info(`[Recipient] ${phone.substring(0,5)}*** using fallback name: "${fallbackName}"`);
+                logger.info(
+                    `[Recipient] ${phone.substring(
+                        0,
+                        5,
+                    )}*** using fallback name: "${fallbackName}"`,
+                );
             }
         }
 
         logger.info(`Processing ${finalRecipientList.length} recipient(s) with individual names`);
-        
+
         const tutorName = reportBy || 'Tutor';
-        
+
         // PDF generation remains parallel (up to three at once); sending is sequential.
 
         // 🚀 OPTIMIZED: Parallel PDF generation with concurrency limit
@@ -3815,37 +3870,44 @@ export const sendMonthlyFeedbackDevice: RequestHandler = async (req, res) => {
         }) => {
             const { phone: recipient, studentName: recipientStudentName } = recipientData;
             logger.info(
-                `Generating PDF for: ${recipientStudentName?.substring(0, 2)}*** -> ${redactPhone(recipient)}`,
+                `Generating PDF for: ${recipientStudentName?.substring(0, 2)}*** -> ${redactPhone(
+                    recipient,
+                )}`,
             );
-                
-                // Build tutor comment for this recipient
-                const finalTutorComment = Array.isArray(tutorComment) 
-                    ? buildTutorComment(tutorComment, commentCategories, recipientStudentName)
-                    : (typeof tutorComment === 'string' 
-                        ? tutorComment.replace(/M\. Alghifari Setyawan/g, recipientStudentName).replace(/\{\{firstname\}\}/gi, recipientStudentName)
-                        : '');
-                
-                // Generate PDF for this specific recipient
-                const pdfBuffer = await generateMonthlyFeedbackPDFWithPuppeteer({
-                    studentName: recipientStudentName,
-                    courseName,
-                    month: Number(month),
-                    duration: duration || `Bulan ke-${month}`,
-                    level: level || '',
-                    code: code || '',
-                    topicModule: topicModule || '',
-                    result: result || '',
-                    skillsAcquired: skillsAcquired || '',
-                    youtubeLink: youtubeLink || '',
-                    referralLink: referralLink || '',
-                    tutorComment: finalTutorComment,
-                    rating: rating || 5,
-                    reportBy: reportBy || 'Tutor'
-                });
-                
-                const fileName = `Feedback_${recipientStudentName.replace(/\s+/g, '_')}_${courseName.replace(/\s+/g, '_')}_Bulan${month}.pdf`;
-                
-                const caption = `Halo, Ayah/Bunda dari ${recipientStudentName}! 👋
+
+            // Build tutor comment for this recipient
+            const finalTutorComment = Array.isArray(tutorComment)
+                ? buildTutorComment(tutorComment, commentCategories, recipientStudentName)
+                : typeof tutorComment === 'string'
+                ? tutorComment
+                      .replace(/M\. Alghifari Setyawan/g, recipientStudentName)
+                      .replace(/\{\{firstname\}\}/gi, recipientStudentName)
+                : '';
+
+            // Generate PDF for this specific recipient
+            const pdfBuffer = await generateMonthlyFeedbackPDFWithPuppeteer({
+                studentName: recipientStudentName,
+                courseName,
+                month: Number(month),
+                duration: duration || `Bulan ke-${month}`,
+                level: level || '',
+                code: code || '',
+                topicModule: topicModule || '',
+                result: result || '',
+                skillsAcquired: skillsAcquired || '',
+                youtubeLink: youtubeLink || '',
+                referralLink: referralLink || '',
+                tutorComment: finalTutorComment,
+                rating: rating || 5,
+                reportBy: reportBy || 'Tutor',
+            });
+
+            const fileName = `Feedback_${recipientStudentName.replace(
+                /\s+/g,
+                '_',
+            )}_${courseName.replace(/\s+/g, '_')}_Bulan${month}.pdf`;
+
+            const caption = `Halo, Ayah/Bunda dari ${recipientStudentName}! 👋
 
 Saya ${tutorName}, tutor ${recipientStudentName} di Sekolah Pemrograman Internasional Algorithmics.
 
@@ -3854,13 +3916,12 @@ Saya ingin berbagi kabar tentang perkembangan ${recipientStudentName} selama sat
 Penilaian ini meliputi bintang dan poin yang diperoleh ${recipientStudentName} atas kinerja dalam berbagai keterampilan utama yang diajarkan di kelas. Bintang tersebut merefleksikan seberapa baik ${recipientStudentName} menguasai materi dan menerapkan keterampilannya, baik dalam tugas rumah maupun tugas kelas. Poin tambahan juga diberikan sebagai penghargaan atas kerja keras dan ketekunan yang ditunjukkan oleh ${recipientStudentName}.
 
 Jika ada hal yang ingin ditanyakan mengenai hasil ini atau tentang perkembangan ${recipientStudentName}, saya siap membantu menjelaskan lebih lanjut. Terima kasih atas dukungan Anda dalam proses belajar ${recipientStudentName}, dan mari kita terus bekerja sama untuk mencapai hasil yang lebih baik ke depannya! 💜`;
-                
-                return {
-                    buffer: pdfBuffer,
-                    fileName,
-                    caption,
-                };
-                
+
+            return {
+                buffer: pdfBuffer,
+                fileName,
+                caption,
+            };
         };
 
         // 🚀 Process recipients in parallel batches
@@ -3892,22 +3953,22 @@ Jika ada hal yang ingin ditanyakan mengenai hasil ini atau tentang perkembangan 
         try {
             const userId = (user as any)?.id;
             if (userId) {
-                const successResults = sendResults.filter(r => r.status === 'success');
-                
+                const successResults = sendResults.filter((r) => r.status === 'success');
+
                 if (successResults.length > 0) {
-                    const logsToCreate = successResults.map(result => ({
+                    const logsToCreate = successResults.map((result) => ({
                         studentName: result.studentName,
                         courseName,
                         month: Number(month),
                         recipientPhone: result.normalizedRecipient || result.recipient,
                         sentBy: userId,
-                        sentAt: new Date()
+                        sentAt: new Date(),
                     }));
-                    
+
                     await prisma.monthlyFeedbackLog.createMany({
-                        data: logsToCreate
+                        data: logsToCreate,
                     });
-                    
+
                     logger.info(`✅ Batch inserted ${logsToCreate.length} feedback logs`);
                 }
             }
@@ -3915,15 +3976,15 @@ Jika ada hal yang ingin ditanyakan mengenai hasil ini atau tentang perkembangan 
             logger.error('Error logging to database:', err);
         }
 
-        const successCount = sendResults.filter(r => r.status === 'success').length;
-        const failedCount = sendResults.filter(r => r.status === 'failed').length;
-        const pausedCount = sendResults.filter(r => r.status === 'paused').length;
+        const successCount = sendResults.filter((r) => r.status === 'success').length;
+        const failedCount = sendResults.filter((r) => r.status === 'failed').length;
+        const pausedCount = sendResults.filter((r) => r.status === 'paused').length;
 
         logger.info(
             `=== Monthly feedback sent: ${successCount} success, ${failedCount} failed, ${pausedCount} paused ===`,
         );
-        
-        res.status(200).json({ 
+
+        res.status(200).json({
             message: batchResult.stoppedReason
                 ? `Monthly feedback paused: ${batchResult.stoppedReason}`
                 : `Monthly feedback sent to ${successCount} recipient(s)`,
@@ -3941,10 +4002,10 @@ Jika ada hal yang ingin ditanyakan mengenai hasil ini atau tentang perkembangan 
     } catch (error) {
         logger.error('=== Error sending monthly feedback ===');
         logger.error('Error:', error instanceof Error ? error.message : 'Unknown error');
-        
-        res.status(500).json({ 
+
+        res.status(500).json({
             message: 'Failed to send monthly feedback',
-            error: error instanceof Error ? error.message : 'Unknown error'
+            error: error instanceof Error ? error.message : 'Unknown error',
         });
     }
 };

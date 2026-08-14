@@ -43,20 +43,60 @@ const ALLOWED_MIME_TYPES = [
 ];
 
 const ALLOWED_FILE_EXTENSIONS = new Set([
-    '.jpg', '.jpeg', '.png', '.gif', '.webp',
-    '.mp4', '.mov', '.webm',
-    '.mp3', '.ogg', '.wav',
-    '.pdf', '.doc', '.docx', '.xls', '.xlsx', '.csv', '.txt',
-    '.ppt', '.pptx', '.odt', '.ods', '.odp', '.rtf', '.json',
-    '.zip', '.rar', '.7z',
+    '.jpg',
+    '.jpeg',
+    '.png',
+    '.gif',
+    '.webp',
+    '.mp4',
+    '.mov',
+    '.webm',
+    '.mp3',
+    '.ogg',
+    '.wav',
+    '.pdf',
+    '.doc',
+    '.docx',
+    '.xls',
+    '.xlsx',
+    '.csv',
+    '.txt',
+    '.ppt',
+    '.pptx',
+    '.odt',
+    '.ods',
+    '.odp',
+    '.rtf',
+    '.json',
+    '.zip',
+    '.rar',
+    '.7z',
 ]);
 
 // 🔒 File size limits
-const MAX_FILE_SIZE = 25 * 1024 * 1024; // 25MB per file
+export const MAX_MEDIA_FILE_SIZE = 25 * 1024 * 1024; // 25MB per file
 const MAX_FILES = 10; // Max 10 files per request
 
+export function getMediaUploadErrorMessage(error: unknown): string {
+    const uploadError = error as { code?: unknown; message?: unknown };
+    if (uploadError?.code === 'LIMIT_FILE_SIZE') {
+        return 'Ukuran file terlalu besar. Maksimal 25 MB';
+    }
+    if (uploadError?.code === 'LIMIT_UNEXPECTED_FILE') {
+        return 'Field file media tidak dikenali';
+    }
+    if (typeof uploadError?.message === 'string' && uploadError.message.trim()) {
+        return uploadError.message;
+    }
+    return 'Upload media gagal';
+}
+
 // 🔒 File filter to validate MIME types
-const fileFilter = (req: Express.Request, file: Express.Multer.File, cb: multer.FileFilterCallback) => {
+const fileFilter = (
+    req: Express.Request,
+    file: Express.Multer.File,
+    cb: multer.FileFilterCallback,
+) => {
     const extension = path.extname(file.originalname || '').toLowerCase();
     const hasAllowedMimeType = ALLOWED_MIME_TYPES.includes(file.mimetype.toLowerCase());
     const hasAllowedExtension = ALLOWED_FILE_EXTENSIONS.has(extension);
@@ -64,10 +104,12 @@ const fileFilter = (req: Express.Request, file: Express.Multer.File, cb: multer.
     if (hasAllowedMimeType && hasAllowedExtension) {
         cb(null, true); // Accept file
     } else {
-        cb(new Error(
-            `File type '${extension || 'unknown'}' (${file.mimetype}) is not allowed. ` +
-            'Allowed types: images, videos, audio, documents, presentations, OpenDocument, ZIP, RAR, 7Z, RTF, JSON, CSV, TXT',
-        ));
+        cb(
+            new Error(
+                `File type '${extension || 'unknown'}' (${file.mimetype}) is not allowed. ` +
+                    'Allowed types: images, videos, audio, documents, presentations, OpenDocument, ZIP, RAR, 7Z, RTF, JSON, CSV, TXT',
+            ),
+        );
     }
 };
 
@@ -124,22 +166,22 @@ const diskStorage = multer.diskStorage({
     },
 });
 
-const memoryUpload = multer({ 
+const memoryUpload = multer({
     storage: memoryStorage,
     fileFilter,
     limits: {
-        fileSize: MAX_FILE_SIZE,
+        fileSize: MAX_MEDIA_FILE_SIZE,
         files: MAX_FILES,
-    }
+    },
 });
 
-const diskUpload = multer({ 
+const diskUpload = multer({
     storage: diskStorage,
     fileFilter,
     limits: {
-        fileSize: MAX_FILE_SIZE,
+        fileSize: MAX_MEDIA_FILE_SIZE,
         files: MAX_FILES,
-    }
+    },
 });
 
 export { memoryUpload, diskUpload };
