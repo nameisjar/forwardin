@@ -1,5 +1,6 @@
 import { expect } from 'chai';
 import {
+    resolveInboxMediaType,
     serializeInboxMediaPath,
     verifyInboxMediaToken,
 } from '../utils/inboxMedia';
@@ -27,5 +28,19 @@ describe('Inbox media URLs', () => {
     it('preserves empty media values', () => {
         expect(serializeInboxMediaPath(null, 'device', 'message')).to.equal(null);
         expect(serializeInboxMediaPath(undefined, 'device', 'message')).to.equal(undefined);
+    });
+
+    it('preserves the media kind before paths become extensionless signed URLs', () => {
+        expect(resolveInboxMediaType('media/session/message.png')).to.equal('image');
+        expect(resolveInboxMediaType('media/session/message.mp4')).to.equal('video');
+        expect(resolveInboxMediaType('media/session/message.ogg')).to.equal('audio');
+        expect(resolveInboxMediaType('media/session/message.bin', 'laporan.pdf')).to.equal('document');
+    });
+
+    it('recognizes database media and placeholders used by legacy messages', () => {
+        expect(resolveInboxMediaType('data:image/webp;base64,AAAA')).to.equal('image');
+        expect(resolveInboxMediaType('/inbox-media/device/message?token=abc', null, '[Gambar]'))
+            .to.equal('image');
+        expect(resolveInboxMediaType(null, null, '[Gambar]')).to.equal(null);
     });
 });

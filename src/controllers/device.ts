@@ -27,6 +27,7 @@ import {
 } from '../utils/deviceAccess';
 import {
     createInboxProfileUrl,
+    resolveInboxMediaType,
     serializeInboxMediaPath,
     verifyInboxMediaToken,
     verifyInboxProfileToken,
@@ -1321,6 +1322,11 @@ export const getDeviceOutbox: RequestHandler = async (req, res) => {
         const { decryptOutgoingMessages } = await import('../utils/messageEncryption');
         const decryptedMessages = decryptOutgoingMessages(messages).map((message) => ({
             ...message,
+            mediaType: resolveInboxMediaType(
+                message.mediaPath,
+                message.fileName,
+                message.message,
+            ),
             mediaPath: serializeInboxMediaPath(message.mediaPath, deviceUuid, message.id),
         }));
 
@@ -1491,11 +1497,19 @@ export const getDeviceConversationTimeline: RequestHandler = async (req, res) =>
         const nextCursor = hasMore && page.length > 0
             ? encodeConversationTimelineCursor(page[page.length - 1])
             : null;
-        const serialized = page.reverse().map((row) => ({
-            ...serializePrisma(row),
-            message: decryptMessage(row.message),
-            mediaPath: serializeInboxMediaPath(row.mediaPath, deviceUuid, row.id),
-        }));
+        const serialized = page.reverse().map((row) => {
+            const decryptedMessage = decryptMessage(row.message);
+            return {
+                ...serializePrisma(row),
+                message: decryptedMessage,
+                mediaType: resolveInboxMediaType(
+                    row.mediaPath,
+                    row.fileName,
+                    decryptedMessage,
+                ),
+                mediaPath: serializeInboxMediaPath(row.mediaPath, deviceUuid, row.id),
+            };
+        });
 
         res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
         res.setHeader('Pragma', 'no-cache');
@@ -1583,6 +1597,11 @@ export const getDeviceOutboxConversations: RequestHandler = async (req, res) => 
         const { decryptOutgoingMessages } = await import('../utils/messageEncryption');
         const decryptedMessages = decryptOutgoingMessages(latestMessages).map((message) => ({
             ...message,
+            mediaType: resolveInboxMediaType(
+                message.mediaPath,
+                message.fileName,
+                message.message,
+            ),
             mediaPath: serializeInboxMediaPath(message.mediaPath, deviceUuid, message.id),
         }));
         const recipientJids = [...new Set(decryptedMessages.map((message) => message.to))];
@@ -2282,6 +2301,11 @@ export const getDeviceInbox: RequestHandler = async (req, res) => {
             if (message.from.endsWith('@g.us') && !item.groupName) {
                 item.groupName = inboxGroupNameByJid.get(message.from) || null;
             }
+            item.mediaType = resolveInboxMediaType(
+                message.mediaPath,
+                message.fileName,
+                item.message,
+            );
             item.mediaPath = serializeInboxMediaPath(
                 message.mediaPath,
                 deviceUuid,

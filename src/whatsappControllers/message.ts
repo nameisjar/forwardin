@@ -33,7 +33,11 @@ import sharp from 'sharp';
 import axios from 'axios';
 import https from 'https';
 import { createDecipheriv } from 'crypto';
-import { createInboxProfileUrl, serializeInboxMediaPath } from '../utils/inboxMedia';
+import {
+    createInboxProfileUrl,
+    resolveInboxMediaType,
+    serializeInboxMediaPath,
+} from '../utils/inboxMedia';
 import { refreshInboxProfileCache } from '../services/inboxProfileCache';
 import {
     deleteReactionPlaceholder,
@@ -867,6 +871,11 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                                                 const recoveredDeviceUuid = await getDeviceUuid();
                                                 io.to(`session:${sessionId}`).emit(`incoming:${sessionId}:media-updated`, {
                                                     ...recoveredMessage,
+                                                    mediaType: resolveInboxMediaType(
+                                                        recoveredMessage.mediaPath,
+                                                        recoveredMessage.fileName,
+                                                        messageText,
+                                                    ),
                                                     mediaPath: recoveredDeviceUuid
                                                         ? serializeInboxMediaPath(
                                                               recoveredMessage.mediaPath,
@@ -948,6 +957,11 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                                     const publicDeviceUuid = await getDeviceUuid();
                                     const emitPayload = {
                                         ...decryptIncomingMessage(incomingMessage),
+                                        mediaType: resolveInboxMediaType(
+                                            incomingMessage.mediaPath,
+                                            incomingMessage.fileName,
+                                            messageText,
+                                        ),
                                         mediaPath: publicDeviceUuid
                                             ? serializeInboxMediaPath(
                                                   incomingMessage.mediaPath,
