@@ -1,0 +1,8 @@
+-- Historical compatibility migration.
+--
+-- The experimental WhatsApp-provider field represented by this migration
+-- was not retained in the current Prisma schema or database structure. Keep
+-- this migration as an intentional no-op so fresh databases and existing
+-- installations share one complete, ordered migration history.
+-- The missing local source was previously recorded with checksum:
+-- 5236cadc3a8fed637557429cb999e514cf742f665798e971fe34183d80f95381

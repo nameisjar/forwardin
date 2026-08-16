@@ -179,6 +179,15 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
         }
         return devicePkIdPromise;
     };
+    const emitOutgoingStatus = async (payload: Record<string, unknown>) => {
+        const publicDeviceUuid = await getDeviceUuid();
+        if (!publicDeviceUuid) return false;
+
+        getSocketIO()
+            .to(`session:${sessionId}`)
+            .emit(`device:${publicDeviceUuid}:message-status`, payload);
+        return true;
+    };
 
     const persistReaction = async (
         targetKey: WAMessageKey,
@@ -1207,7 +1216,8 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                                 if (!updatedMessage) return;
                                 
                                 // ✅ EMIT socket event for real-time status update (ONLY on upgrade)
-                                if (deviceId) {
+                                const statusDeviceUuid = await getDeviceUuid();
+                                if (statusDeviceUuid) {
                                     const io = getSocketIO();
                                     const eventPayload: any = {
                                         waMessageId: updatedMessage.waMessageId || key.id!,
@@ -1239,17 +1249,21 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                                         eventPayload.readBy = updateData.readBy;
                                     }
                                     
-                                    io.to(`session:${sessionId}`).emit(`device:${deviceId}:message-status`, eventPayload);
+                                    io.to(`session:${sessionId}`).emit(
+                                        `device:${statusDeviceUuid}:message-status`,
+                                        eventPayload,
+                                    );
                                     
                                     logger.info(
                                         {
                                             sessionId,
                                             deviceId,
+                                            deviceUuid: statusDeviceUuid,
                                             waMessageId: updatedMessage.waMessageId,
                                             status: updatedMessage.status,
                                             readCount: eventPayload.readCount,
                                             isGroup: outgoingMessage.isGroup,
-                                            eventEmitted: `device:${deviceId}:message-status`
+                                            eventEmitted: `device:${statusDeviceUuid}:message-status`
                                         },
                                         '📤 Status update emitted to frontend (UPGRADE)'
                                     );
@@ -1260,7 +1274,7 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                                             waMessageId: updatedMessage.waMessageId,
                                             status: updatedMessage.status
                                         },
-                                        'Cannot emit status update - deviceId is undefined'
+                                        'Cannot emit status update - public device UUID is unavailable'
                                     );
                                 }
                             } else {
@@ -1468,7 +1482,17 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                             },
                             data: updateData,
                         });
-                        if (statusUpdate.count > 0) return;
+                        if (statusUpdate.count > 0) {
+                            await emitOutgoingStatus({
+                                waMessageId: outgoing.waMessageId || key.id,
+                                status: nextStatus,
+                                timestamp: new Date().toISOString(),
+                                ...(set.size > 0
+                                    ? { readCount: set.size, readBy: Array.from(set) }
+                                    : {}),
+                            });
+                            return;
+                        }
 
                         // The status changed after our read. Preserve receipt
                         // metadata, but never write the stale status decision.
@@ -1476,9 +1500,20 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                         if (Object.keys(updateData).length <= 2) return;
                     }
 
-                    await tx.outgoingMessage.update({
+                    const updatedOutgoing = await tx.outgoingMessage.update({
                         where: { pkId: outgoing.pkId },
                         data: updateData,
+                    });
+                    await emitOutgoingStatus({
+                        waMessageId: updatedOutgoing.waMessageId || key.id,
+                        status: updatedOutgoing.status,
+                        timestamp: new Date().toISOString(),
+                        ...(Array.isArray(updatedOutgoing.readBy)
+                            ? {
+                                  readCount: updatedOutgoing.readBy.length,
+                                  readBy: updatedOutgoing.readBy,
+                              }
+                            : {}),
                     });
                 });
             } catch (e) {
