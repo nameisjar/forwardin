@@ -60,6 +60,15 @@ async function markPendingMessageAsFailed(messageId: string, clearMedia = false)
     });
 }
 
+async function markPendingMessageAsSubmitted(messageId: string): Promise<void> {
+    // ACK/NACK can arrive before the HTTP send resolves. Only replace pending
+    // so a faster authoritative WhatsApp status is never downgraded.
+    await prisma.outgoingMessage.updateMany({
+        where: { id: messageId, status: 'pending' },
+        data: { status: 'submitted', updatedAt: new Date() },
+    });
+}
+
 function createMessageIdConflictError(): Error & { code: string; statusCode: number } {
     const error = new Error(
         'ID pesan sudah digunakan untuk permintaan pengiriman yang berbeda.',
@@ -371,8 +380,11 @@ export const sendMessages: RequestHandler = async (req, res) => {
                     );
                 }
 
+                await markPendingMessageAsSubmitted(messageId);
+
                 // A fast NACK may already have changed pending to error. Re-read
-                // and return that truth; never promote based on the HTTP result.
+                // and return that truth. `submitted` confirms only local stanza
+                // handoff; server_ack still requires a WhatsApp status event.
                 const savedMessage = await prisma.outgoingMessage.findUnique({
                     where: { id: messageId },
                     include: { contact: true },
@@ -795,6 +807,8 @@ export const sendInboxMediaMessage: RequestHandler = async (req, res) => {
                     'WhatsApp returned a different media message ID than the reserved ID',
                 );
             }
+
+            await markPendingMessageAsSubmitted(messageId);
 
             const savedMessage = await prisma.outgoingMessage.findUnique({
                 where: { id: messageId },

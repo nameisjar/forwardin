@@ -1630,7 +1630,7 @@ async function createInstanceInternal(
 
                         // The database filter makes transitions atomic: a
                         // delayed ACK cannot revive error/failed, while NACK is
-                        // still allowed to replace pending/server_ack.
+                        // still allowed to replace pending/submitted/server_ack.
                         const eligibleStatuses = eligibleOutgoingMessageStatuses(newStatus);
 
                         if (newStatus === 'error') {

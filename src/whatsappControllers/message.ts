@@ -44,6 +44,7 @@ import {
     canApplyOutgoingMessageStatus,
     eligibleOutgoingMessageStatuses,
     outgoingMessageStatusLevel,
+    resolveParticipantReceiptStatus,
 } from '../utils/outgoingMessageStatus';
 
 const whatsappMediaHttpsAgent = new https.Agent({
@@ -1437,9 +1438,11 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                         }
                     }
 
-                    let nextStatus = outgoing.status;
-                    if (hasRead) nextStatus = 'read';
-                    else if (hasDeliver) nextStatus = 'delivery_ack';
+                    const nextStatus = resolveParticipantReceiptStatus(outgoing.status, {
+                        isGroup: Boolean(outgoing.isGroup),
+                        hasRead,
+                        hasDeliver,
+                    });
 
                     if (hasRead || hasDeliver) {
                         logger.debug(

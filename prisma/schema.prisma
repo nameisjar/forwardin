@@ -370,7 +370,7 @@ model OutgoingMessage {
   mediaPath     String?
   fileName      String?   @map("file_name")
   schedule      DateTime
-  status        String    @db.VarChar(20)
+  status        String    @db.VarChar(20) // pending, submitted, server_ack, delivery_ack, read, played, error
   createdAt     DateTime  @default(now()) @map("created_at")
   updatedAt     DateTime  @default(now()) @map("updated_at")
   inboxHiddenAt DateTime? @map("inbox_hidden_at")
