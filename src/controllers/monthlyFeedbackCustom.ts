@@ -3,7 +3,7 @@ import JSZip from 'jszip';
 import logger from '../config/logger';
 import { generateMonthlyFeedbackPDFWithPuppeteer } from '../services/pdfGenerator';
 
-interface CustomFeedbackStudent {
+export interface CustomFeedbackStudent {
     studentName: string;
     courseName: string;
     month: number;
@@ -51,7 +51,10 @@ const safeFilePart = (value: string): string => {
     return cleaned || 'Siswa';
 };
 
-const normalizeStudent = (raw: unknown, index: number): CustomFeedbackStudent => {
+export const normalizeCustomFeedbackStudent = (
+    raw: unknown,
+    index: number,
+): CustomFeedbackStudent => {
     const input = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
     const month = Number(input.month);
     const rating = Number(input.rating ?? 5);
@@ -79,7 +82,6 @@ const normalizeStudent = (raw: unknown, index: number): CustomFeedbackStudent =>
     if (!Number.isInteger(student.month) || student.month < 1 || student.month > 120) {
         missing.push('bulan');
     }
-    if (!student.tutorComment) missing.push('komentar');
     if (!isHttpUrl(student.youtubeLink)) missing.push('link YouTube');
     if (!isHttpUrl(student.referralLink)) missing.push('link referral');
     if (!Number.isInteger(rating) || rating < 1 || rating > 5) missing.push('rating');
@@ -113,7 +115,7 @@ export const downloadCustomMonthlyFeedback: RequestHandler = async (req, res) =>
             });
         }
 
-        const students = rawStudents.map(normalizeStudent);
+        const students = rawStudents.map(normalizeCustomFeedbackStudent);
 
         if (format === 'pdf') {
             if (students.length !== 1) {
