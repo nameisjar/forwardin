@@ -69,6 +69,27 @@ const inboxContactSelect = {
     },
 } as const;
 
+const inboxConversationSummarySelect = {
+    jid: true,
+    lastMessageAt: true,
+    incomingCount: true,
+    outgoingCount: true,
+    unreadCount: true,
+    isGroup: true,
+    pushName: true,
+    groupName: true,
+    lastMessageId: true,
+    lastMessageDirection: true,
+    lastMessagePreview: true,
+    lastMediaPath: true,
+    lastFileName: true,
+    contact: { select: inboxContactSelect },
+} satisfies Prisma.ConversationSelect;
+
+type InboxConversationSummary = Prisma.ConversationGetPayload<{
+    select: typeof inboxConversationSummarySelect;
+}>;
+
 function getRuntimeDeviceStatus(device: RuntimeDevice) {
     const sessionId = device.sessions[0]?.sessionId;
     return deriveDeviceRuntimeStatus({
@@ -2071,6 +2092,7 @@ export const getDeviceInbox: RequestHandler = async (req, res) => {
             message,
             contactName,
             conversationJid,
+            summary,
         } = req.query;
         const requestedPage = Math.max(1, Number(page) || 1);
         const requestedPageSize = Math.min(50, Math.max(1, Number(pageSize) || 25));
@@ -2106,6 +2128,7 @@ export const getDeviceInbox: RequestHandler = async (req, res) => {
         }
 
         const hasSearchFilter = Boolean(phoneNumber || message || contactName);
+        const useConversationSummaries = String(summary || '').toLowerCase() === 'true';
         const todayStart = new Date();
         todayStart.setHours(0, 0, 0, 0);
         let conversationIndex = new Map<
@@ -2119,6 +2142,7 @@ export const getDeviceInbox: RequestHandler = async (req, res) => {
         let currentPage = requestedPage;
         let conversationKeys: string[] = [];
         let todayIncomingCount = 0;
+        let summaryRows: InboxConversationSummary[] = [];
 
         if (!directConversationJid && !hasSearchFilter) {
             // The common Inbox path reads the denormalized summary table. This
@@ -2148,14 +2172,9 @@ export const getDeviceInbox: RequestHandler = async (req, res) => {
                 orderBy: [{ lastMessageAt: 'desc' }, { pkId: 'desc' }],
                 skip: (currentPage - 1) * requestedPageSize,
                 take: requestedPageSize,
-                select: {
-                    jid: true,
-                    lastMessageAt: true,
-                    incomingCount: true,
-                    outgoingCount: true,
-                    unreadCount: true,
-                },
+                select: inboxConversationSummarySelect,
             });
+            summaryRows = summaries;
             summaries.forEach((summary) => {
                 if (!summary.lastMessageAt) return;
                 conversationIndex.set(summary.jid, {
@@ -2241,6 +2260,81 @@ export const getDeviceInbox: RequestHandler = async (req, res) => {
             const offset = (currentPage - 1) * requestedPageSize;
             conversationKeys = orderedConversationKeys.slice(offset, offset + requestedPageSize);
             todayIncomingCount = todayCount;
+        }
+
+        if (useConversationSummaries && !directConversationJid && !hasSearchFilter) {
+            const summaryJids = summaryRows.map((summary) => summary.jid);
+            const groupJids = summaryJids.filter((jid) => jid.endsWith('@g.us'));
+            const [profileCacheByJid, inboxGroups] = await Promise.all([
+                getInboxProfileCacheSummaries(device.pkId, summaryJids),
+                groupJids.length > 0
+                    ? prisma.whatsAppGroup.findMany({
+                          where: { deviceId: device.pkId, groupId: { in: groupJids } },
+                          select: { groupId: true, groupName: true },
+                      })
+                    : Promise.resolve([]),
+            ]);
+            const groupNameByJid = new Map(
+                inboxGroups.map((group) => [group.groupId, group.groupName]),
+            );
+            const serializedSummaries = summaryRows.map((summary) => {
+                const isGroup = summary.isGroup || summary.jid.endsWith('@g.us');
+                const message = decryptMessage(summary.lastMessagePreview || '');
+                const profileCache = profileCacheByJid.get(summary.jid);
+                const profileUrl = profileCache?.hasImage
+                    ? createInboxProfileUrl(deviceUuid, summary.jid)
+                    : null;
+                return {
+                    id: summary.lastMessageId || `conversation:${summary.jid}`,
+                    from: summary.jid,
+                    message,
+                    mediaPath: serializeInboxMediaPath(
+                        summary.lastMediaPath,
+                        deviceUuid,
+                        summary.lastMessageId || `conversation:${summary.jid}`,
+                    ),
+                    mediaType: resolveInboxMediaType(
+                        summary.lastMediaPath,
+                        summary.lastFileName,
+                        message,
+                    ),
+                    fileName: summary.lastFileName || null,
+                    receivedAt: summary.lastMessageAt,
+                    isOutgoing: summary.lastMessageDirection === 'outgoing',
+                    isGroup,
+                    contact: summary.contact,
+                    pushName: summary.pushName,
+                    groupName: summary.groupName || groupNameByJid.get(summary.jid) || null,
+                    profilePicUrl: !isGroup ? profileUrl : null,
+                    groupPicUrl: isGroup ? profileUrl : null,
+                    profilePictureStatus: profileCache?.status || 'unknown',
+                    conversationIncomingCount: summary.incomingCount,
+                    conversationOutgoingCount: summary.outgoingCount,
+                    conversationMessageCount: summary.incomingCount + summary.outgoingCount,
+                    conversationUnreadCount: summary.unreadCount,
+                };
+            });
+
+            res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+            res.setHeader('Pragma', 'no-cache');
+            res.setHeader('Expires', '0');
+            res.removeHeader('ETag');
+            return res.status(200).json({
+                data: serializedSummaries,
+                total: totalMessages,
+                metadata: {
+                    totalMessages,
+                    totalConversations,
+                    currentPage,
+                    totalPages,
+                    hasMore: currentPage < totalPages,
+                    conversationKeys,
+                    conversationHasMore: false,
+                    conversationNextCursor: null,
+                    todayIncomingCount,
+                    summaryBacked: true,
+                },
+            });
         }
 
         // Keep enough history for the detail modal while bounding the response.

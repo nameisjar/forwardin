@@ -52,7 +52,7 @@ export const getActiveGroups = async (req: Request, res: Response) => {
     }
 
     // 🆕 Use pagination and search from service
-    const { groups, total } = await WhatsAppGroupService.getActiveGroupsPaginated(
+    const { groups, total, totalMembers } = await WhatsAppGroupService.getActiveGroupsPaginated(
       device.pkId,
       {
         skip,
@@ -127,6 +127,7 @@ export const getActiveGroups = async (req: Request, res: Response) => {
       data: transformedGroups,
       metadata: {
         totalGroups: total,
+        totalMembers,
         currentPage: pageNum,
         totalPages,
         hasMore: pageNum < totalPages,

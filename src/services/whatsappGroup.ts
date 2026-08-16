@@ -149,7 +149,7 @@ export class WhatsAppGroupService {
         };
       }
 
-      const [groups, total] = await Promise.all([
+      const [groups, total, participantAggregate] = await Promise.all([
         prisma.whatsAppGroup.findMany({
           where: whereClause,
           orderBy: {
@@ -159,12 +159,20 @@ export class WhatsAppGroupService {
           take,
         }),
         prisma.whatsAppGroup.count({ where: whereClause }),
+        prisma.whatsAppGroup.aggregate({
+          where: whereClause,
+          _sum: { participants: true },
+        }),
       ]);
 
-      return { groups, total };
+      return {
+        groups,
+        total,
+        totalMembers: Number(participantAggregate._sum.participants || 0),
+      };
     } catch (error) {
       // console.error('Error fetching paginated groups:', error);
-      return { groups: [], total: 0 };
+      return { groups: [], total: 0, totalMembers: 0 };
     }
   }
 
