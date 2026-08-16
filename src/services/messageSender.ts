@@ -52,6 +52,26 @@ async function getDevicePkId(deviceId: string): Promise<number | null> {
     return (await getDeviceContext(deviceId))?.pkId || null;
 }
 
+async function trackSuccessfulSend(
+    deviceId: string,
+    idempotent: boolean | undefined,
+    enabled = true,
+): Promise<void> {
+    if (!enabled || idempotent) return;
+
+    try {
+        const devicePkId = await getDevicePkId(deviceId);
+        if (devicePkId) await incrementMessageCount(devicePkId);
+    } catch (error) {
+        // Health telemetry happens after WhatsApp accepted the stanza. A
+        // telemetry failure must not turn a successful delivery into a retry.
+        logger.error(
+            { error, deviceId },
+            '[MessageSender] Failed to track successful send',
+        );
+    }
+}
+
 async function assertDeviceCanSend(deviceId: string): Promise<void> {
     const devicePkId = await getDevicePkId(deviceId);
     if (!devicePkId) throw new Error('Device tidak ditemukan');
@@ -70,6 +90,7 @@ async function persistPendingOutgoingMessage(params: {
     mediaPath?: string | null;
     fileName?: string | null;
     session?: any;
+    retryFailedReservation?: boolean;
 }): Promise<boolean> {
     if (!params.messageId) return true;
 
@@ -112,7 +133,28 @@ async function persistPendingOutgoingMessage(params: {
         return existing;
     };
 
-    if (await findExistingReservation()) {
+    const existingReservation = await findExistingReservation();
+    if (existingReservation) {
+        if (
+            params.retryFailedReservation &&
+            ['error', 'failed'].includes(existingReservation.status)
+        ) {
+            const reactivated = await prisma.outgoingMessage.updateMany({
+                where: {
+                    id: params.messageId,
+                    status: { in: ['error', 'failed'] },
+                },
+                data: { status: 'pending', updatedAt: new Date() },
+            });
+            if (reactivated.count === 1) {
+                logger.info(
+                    { deviceId: params.deviceId, messageId: params.messageId },
+                    '[MessageSender] Reactivated failed reservation for safe pre-delivery retry',
+                );
+                return true;
+            }
+        }
+
         logger.info(
             { deviceId: params.deviceId, messageId: params.messageId },
             '[MessageSender] Reusing idempotent outgoing-message reservation',
@@ -260,6 +302,8 @@ export interface SendMessageOptions {
     messageId?: string;
     persist?: boolean;
     trackHealth?: boolean;
+    /** Reuse a failed reservation only after a confirmed pre-delivery failure. */
+    retryFailedReservation?: boolean;
     /**
      * Resolve a personal phone-number JID to its canonical LID before delivery.
      * Disable this for operations that must keep the exact addressing of an
@@ -282,7 +326,16 @@ export interface SendResult {
     error?: string;
     errorCode?: string;
     statusCode?: number;
+    deliveryAttempted?: boolean;
+    retryable?: boolean;
     rateLimitInfo?: RateLimitResult;
+}
+
+export function getBroadcastRecipientFailureStatus(
+    result: Pick<SendResult, 'deliveryAttempted' | 'retryable'>,
+): 'failed' | 'uncertain' | 'terminal_failed' {
+    if (result.deliveryAttempted === true) return 'uncertain';
+    return result.retryable === true ? 'failed' : 'terminal_failed';
 }
 
 type TrackedSendExecution = {
@@ -330,9 +383,19 @@ async function sendTrackedMessage(
     sendOptions: any,
     messageId: string,
 ): Promise<any> {
-    const result = await session.sendMessage(jid, content, sendOptions);
-    assertReturnedMessageId(result, messageId);
-    return result;
+    try {
+        const result = await session.sendMessage(jid, content, sendOptions);
+        assertReturnedMessageId(result, messageId);
+        return result;
+    } catch (error) {
+        // Once sendMessage has been invoked, the outcome is ambiguous: the
+        // stanza may already have reached WhatsApp even if the local promise
+        // rejects. Callers must never automatically retry this failure.
+        if (error && typeof error === 'object') {
+            (error as { deliveryAttempted?: boolean }).deliveryAttempted = true;
+        }
+        throw error;
+    }
 }
 
 function isPersonalPhoneJid(jid: string): boolean {
@@ -479,13 +542,41 @@ export async function resolveCanonicalOutboundJid(
     return jid;
 }
 
+export function isSafePreDeliveryRetry(error: any, deliveryAttempted = false): boolean {
+    if (deliveryAttempted) return false;
+
+    const statusCode = [
+        error?.statusCode,
+        error?.data,
+        error?.output?.statusCode,
+    ].find((value) => typeof value === 'number') as number | undefined;
+    const errorCode = typeof error?.code === 'string' ? error.code : '';
+    const terminalCodes = new Set([
+        'MESSAGE_ID_CONFLICT',
+        'WHATSAPP_REACHOUT_TIMELOCK',
+        'WHATSAPP_RECIPIENT_COOLDOWN',
+    ]);
+
+    if (terminalCodes.has(errorCode)) return false;
+    if (statusCode && statusCode >= 400 && statusCode < 500) return false;
+    return true;
+}
+
 function createSendFailure(error: any, fallback: string, messageId?: string): SendResult {
+    const deliveryAttempted = error?.deliveryAttempted === true;
+    const statusCode = [
+        error?.statusCode,
+        error?.data,
+        error?.output?.statusCode,
+    ].find((value) => typeof value === 'number') as number | undefined;
     return {
         success: false,
         messageId,
         error: error?.message || fallback,
         errorCode: typeof error?.code === 'string' ? error.code : undefined,
-        statusCode: typeof error?.statusCode === 'number' ? error.statusCode : undefined,
+        statusCode,
+        deliveryAttempted,
+        retryable: isSafePreDeliveryRetry(error, deliveryAttempted),
     };
 }
 
@@ -532,6 +623,7 @@ export async function sendTextMessage(
                 messageId,
                 text,
                 session,
+                retryFailedReservation: options?.retryFailedReservation,
             }),
             markFailed: () => markPendingOutgoingMessageAsFailed(messageId),
             onDuplicate: () => createIdempotentExecution(messageId, jid),
@@ -560,10 +652,7 @@ export async function sendTextMessage(
         });
         
         // 🔥 Increment message count for health tracking
-        const devicePkId = await getDevicePkId(deviceId);
-        if (devicePkId && !idempotent) {
-            await incrementMessageCount(devicePkId);
-        }
+        await trackSuccessfulSend(deviceId, idempotent);
         
         logger.info(
             { deviceId, jid, messageId, delayed: rateLimitInfo.delayed },
@@ -611,6 +700,7 @@ export async function sendImageMessage(
                 mediaPath: !Buffer.isBuffer(image) ? image.url : null,
                 fileName: options?.fileName || null,
                 session,
+                retryFailedReservation: options?.retryFailedReservation,
             }),
             markFailed: () => markPendingOutgoingMessageAsFailed(messageId),
             onDuplicate: () => createIdempotentExecution(messageId, jid),
@@ -644,10 +734,7 @@ export async function sendImageMessage(
         });
         
         // 🔥 Increment message count for health tracking
-        const devicePkId = await getDevicePkId(deviceId);
-        if (devicePkId && !idempotent) {
-            await incrementMessageCount(devicePkId);
-        }
+        await trackSuccessfulSend(deviceId, idempotent);
         
         logger.info(
             { deviceId, jid, messageId, delayed: rateLimitInfo.delayed },
@@ -695,6 +782,7 @@ export async function sendDocumentMessage(
                 mediaPath: !Buffer.isBuffer(document) ? document.url : null,
                 fileName: options?.fileName || null,
                 session,
+                retryFailedReservation: options?.retryFailedReservation,
             }),
             markFailed: () => markPendingOutgoingMessageAsFailed(messageId),
             onDuplicate: () => createIdempotentExecution(messageId, jid),
@@ -731,10 +819,7 @@ export async function sendDocumentMessage(
         });
         
         // 🔥 Increment message count for health tracking
-        const devicePkId = await getDevicePkId(deviceId);
-        if (devicePkId && !idempotent) {
-            await incrementMessageCount(devicePkId);
-        }
+        await trackSuccessfulSend(deviceId, idempotent);
         
         logger.info(
             { deviceId, jid, messageId, delayed: rateLimitInfo.delayed },
@@ -782,6 +867,7 @@ export async function sendVideoMessage(
                 mediaPath: !Buffer.isBuffer(video) ? video.url : null,
                 fileName: options?.fileName || null,
                 session,
+                retryFailedReservation: options?.retryFailedReservation,
             }),
             markFailed: () => markPendingOutgoingMessageAsFailed(messageId),
             onDuplicate: () => createIdempotentExecution(messageId, jid),
@@ -815,10 +901,7 @@ export async function sendVideoMessage(
         });
         
         // 🔥 Increment message count for health tracking
-        const devicePkId = await getDevicePkId(deviceId);
-        if (devicePkId && !idempotent) {
-            await incrementMessageCount(devicePkId);
-        }
+        await trackSuccessfulSend(deviceId, idempotent);
         
         logger.info(
             { deviceId, jid, messageId, delayed: rateLimitInfo.delayed },
@@ -866,6 +949,7 @@ export async function sendAudioMessage(
                 mediaPath: !Buffer.isBuffer(audio) ? audio.url : null,
                 fileName: options?.fileName || null,
                 session,
+                retryFailedReservation: options?.retryFailedReservation,
             }),
             markFailed: () => markPendingOutgoingMessageAsFailed(messageId),
             onDuplicate: () => createIdempotentExecution(messageId, jid),
@@ -901,10 +985,7 @@ export async function sendAudioMessage(
         });
         
         // 🔥 Increment message count for health tracking
-        const devicePkId = await getDevicePkId(deviceId);
-        if (devicePkId && !idempotent) {
-            await incrementMessageCount(devicePkId);
-        }
+        await trackSuccessfulSend(deviceId, idempotent);
         
         logger.info(
             { deviceId, jid, messageId, delayed: rateLimitInfo.delayed },
@@ -989,6 +1070,7 @@ export async function sendGenericMessage(
                 mediaPath: genericMedia,
                 fileName: content?.fileName || null,
                 session,
+                retryFailedReservation: options?.retryFailedReservation,
             }),
             markFailed: () => markPendingOutgoingMessageAsFailed(messageId),
             onDuplicate: () => createIdempotentExecution(messageId, jid),
@@ -1018,12 +1100,7 @@ export async function sendGenericMessage(
         });
         
         // 🔥 Increment message count for health tracking
-        if (options?.trackHealth !== false && !idempotent) {
-            const devicePkId = await getDevicePkId(deviceId);
-            if (devicePkId) {
-                await incrementMessageCount(devicePkId);
-            }
-        }
+        await trackSuccessfulSend(deviceId, idempotent, options?.trackHealth !== false);
         
         logger.info(
             { deviceId, jid, messageId, delayed: rateLimitInfo.delayed },

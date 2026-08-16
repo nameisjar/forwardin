@@ -2,10 +2,10 @@
 import { RequestHandler } from 'express';
 import prisma from '../utils/db';
 import schedule from 'node-schedule';
-import { getInstance, getJid, sendMediaFile } from '../whatsapp';
+import { getInstance, sendMediaFile, verifyJid } from '../whatsapp';
 import logger from '../config/logger';
 import { delay as delayMs } from '../utils/delay';
-import { getRecipients } from '../utils/recipients';
+import { getRecipients, normalizeBroadcastRecipient } from '../utils/recipients';
 import { replaceVariables } from '../utils/variableHelper';
 import { diskUpload, getMediaUploadErrorMessage } from '../config/multer';
 import {
@@ -24,8 +24,11 @@ import {
     sendTextMessage,
     sendMediaMessage,
     detectMediaType,
+    getBroadcastRecipientFailureStatus,
+    isSafePreDeliveryRetry,
     SendResult,
 } from '../services/messageSender';
+import { createTrackedMessageId } from '../utils/outgoingMessageId';
 import {
     calculateNaturalDelay,
     showTypingIndicator,
@@ -125,8 +128,17 @@ async function sendMessageWithRetry(
     textPayload: string,
     mediaPath: string | null,
     mediaFileName: string | null,
+    messageId: string,
+    retryExistingReservation = false,
     maxRetries = 3,
-): Promise<{ success: boolean; messageId?: string; error?: any; isRateLimit?: boolean }> {
+): Promise<{
+    success: boolean;
+    messageId?: string;
+    error?: any;
+    isRateLimit?: boolean;
+    deliveryAttempted?: boolean;
+    retryable?: boolean;
+}> {
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
         try {
             let result: SendResult;
@@ -143,11 +155,16 @@ async function sendMessageWithRetry(
                     {
                         caption: textPayload,
                         fileName: resolveMediaFileName(mediaFileName, mediaPath),
+                        messageId,
+                        retryFailedReservation: retryExistingReservation || attempt > 1,
                     },
                 );
             } else {
                 // Kirim teks menggunakan rate limiter
-                result = await sendTextMessage(session, deviceId, jid, textPayload);
+                result = await sendTextMessage(session, deviceId, jid, textPayload, {
+                    messageId,
+                    retryFailedReservation: retryExistingReservation || attempt > 1,
+                });
             }
 
             if (!result.success) {
@@ -158,9 +175,15 @@ async function sendMessageWithRetry(
 
                 // Check if it's a rate limit error
                 const errorStr = String(result.error || '').toLowerCase();
-                const isRateLimit = errorStr.includes('rate') || errorStr.includes('limit');
+                const isRateLimit =
+                    result.statusCode === 429 ||
+                    errorStr.includes('rate') ||
+                    errorStr.includes('limit');
 
-                if (attempt < maxRetries) {
+                const canRetry =
+                    result.retryable === true && result.deliveryAttempted === false;
+
+                if (attempt < maxRetries && canRetry) {
                     const waitTime = getRetryDelay(attempt, BASE_RETRY_DELAY);
                     logger.warn(
                         { jid: redactPhone(jid), attempt, waitTime },
@@ -170,13 +193,36 @@ async function sendMessageWithRetry(
                     continue;
                 }
 
-                return { success: false, error: result.error, isRateLimit };
+                if (!canRetry) {
+                    logger.warn(
+                        {
+                            jid: redactPhone(jid),
+                            attempt,
+                            messageId,
+                            deliveryAttempted: result.deliveryAttempted,
+                            errorCode: result.errorCode,
+                            statusCode: result.statusCode,
+                        },
+                        'Not retrying ambiguous or terminal send failure',
+                    );
+                }
+
+                return {
+                    success: false,
+                    messageId,
+                    error: result.error,
+                    isRateLimit,
+                    deliveryAttempted: result.deliveryAttempted,
+                    retryable: result.retryable,
+                };
             }
 
             return { success: true, messageId: result.messageId };
         } catch (error: any) {
             const isRateLimit = isRateLimitError(error);
             const isTransient = isTransientError(error);
+            const deliveryAttempted = error?.deliveryAttempted === true;
+            const canRetry = isSafePreDeliveryRetry(error, deliveryAttempted);
             const isLastAttempt = attempt === maxRetries;
 
             logger.error(
@@ -186,6 +232,8 @@ async function sendMessageWithRetry(
                     maxRetries,
                     isRateLimit,
                     isTransient,
+                    deliveryAttempted,
+                    canRetry,
                     errorMessage: error?.message,
                     errorData: error?.data,
                 },
@@ -193,7 +241,7 @@ async function sendMessageWithRetry(
             );
 
             // Retry logic
-            if (!isLastAttempt && (isRateLimit || isTransient)) {
+            if (!isLastAttempt && canRetry && (isRateLimit || isTransient)) {
                 const waitTime = getRetryDelay(attempt, BASE_RETRY_DELAY);
                 logger.warn(
                     { jid: redactPhone(jid), attempt, waitTime, isRateLimit, isTransient },
@@ -206,13 +254,22 @@ async function sendMessageWithRetry(
             // Final failure
             return {
                 success: false,
+                messageId,
                 error,
                 isRateLimit,
+                deliveryAttempted,
+                retryable: canRetry,
             };
         }
     }
 
-    return { success: false, error: 'Max retries exceeded' };
+    return {
+        success: false,
+        messageId,
+        error: 'Max retries exceeded',
+        deliveryAttempted: false,
+        retryable: false,
+    };
 }
 
 // ============================================================================
@@ -1836,7 +1893,6 @@ schedule.scheduleJob('* * * * *', async () => {
                 const recipientRecord = pendingRecipients[i];
                 const recipient = recipientRecord.phone;
                 const isLastRecipient = i === pendingRecipients.length - 1;
-                const jid = getJid(recipient);
 
                 // 🔒 DOUBLE-CHECK: Pastikan recipient belum terkirim (race condition protection)
                 const currentStatus = await prisma.broadcastRecipient.findUnique({
@@ -1856,11 +1912,67 @@ schedule.scheduleJob('* * * * *', async () => {
                     continue;
                 }
 
+                // Normalize and verify before changing the recipient to
+                // "sending". Invalid/non-existent recipients are terminal and
+                // must never enter the automatic retry pool.
+                let jid: string;
+                try {
+                    const normalizedRecipient = normalizeBroadcastRecipient(recipient);
+                    jid = normalizedRecipient.jid;
+                    await verifyJid(session, jid, normalizedRecipient.type);
+                } catch (validationError: any) {
+                    const validationMessage =
+                        validationError?.message || 'Recipient verification failed';
+                    failCount++;
+
+                    errors.push(`Invalid recipient: ${recipient} - ${validationMessage}`);
+
+                    await prisma.broadcastRecipient.update({
+                        where: { pkId: recipientRecord.pkId },
+                        data: {
+                            status: 'invalid',
+                            jid: null,
+                            errorMsg: validationMessage,
+                            updatedAt: new Date(),
+                        },
+                    });
+                    logger.warn(
+                        {
+                            broadcastId: broadcast.id,
+                            recipient: redactPhone(recipient),
+                            error: validationMessage,
+                        },
+                        'Broadcast recipient rejected before send',
+                    );
+                    continue;
+                }
+
                 // 🔥 Mark as 'sending' before attempting (crash protection)
-                await prisma.broadcastRecipient.update({
-                    where: { pkId: recipientRecord.pkId },
-                    data: { status: 'sending', jid, updatedAt: new Date() },
+                // Persist one stable stanza ID before the first send attempt.
+                // Crash recovery and safe pre-delivery retries must reuse it.
+                const trackedMessageId =
+                    recipientRecord.messageId ||
+                    createTrackedMessageId(undefined, session?.user?.id);
+
+                const claim = await prisma.broadcastRecipient.updateMany({
+                    where: {
+                        pkId: recipientRecord.pkId,
+                        status: { in: ['pending', 'failed'] },
+                    },
+                    data: {
+                        status: 'sending',
+                        jid,
+                        messageId: trackedMessageId,
+                        updatedAt: new Date(),
+                    },
                 });
+                if (claim.count !== 1) {
+                    logger.debug(
+                        { broadcastId: broadcast.id, recipient: redactPhone(recipient) },
+                        'Recipient was claimed by another scheduler worker',
+                    );
+                    continue;
+                }
 
                 const variables = {
                     firstName:
@@ -1923,6 +2035,8 @@ schedule.scheduleJob('* * * * *', async () => {
                     textPayload,
                     broadcast.mediaPath,
                     broadcast.mediaFileName,
+                    trackedMessageId,
+                    recipientRecord.status === 'failed',
                     3, // max retries per message
                 );
 
@@ -1944,6 +2058,22 @@ schedule.scheduleJob('* * * * *', async () => {
                     }
 
                     failCount++;
+
+                    // Only confirmed pre-delivery failures remain eligible for a
+                    // later scheduler retry. Once sendMessage was invoked, the
+                    // outcome is ambiguous and automatic resend risks duplicates.
+                    const failureStatus = getBroadcastRecipientFailureStatus(result);
+
+                    await prisma.broadcastRecipient.update({
+                        where: { pkId: recipientRecord.pkId },
+                        data: {
+                            status: failureStatus,
+                            messageId: trackedMessageId,
+                            errorMsg: result.error?.message || 'Send failed',
+                            retryCount: { increment: 1 },
+                            updatedAt: new Date(),
+                        },
+                    });
 
                     // 🔥 QUICK WIN: Stop broadcast jika 5x gagal berturut-turut
                     if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
@@ -1973,17 +2103,6 @@ schedule.scheduleJob('* * * * *', async () => {
                         broadcastStopped = true;
                         break; // EXIT LOOP
                     }
-
-                    // 🔥 ATOMIC: Update recipient status to 'failed'
-                    await prisma.broadcastRecipient.update({
-                        where: { pkId: recipientRecord.pkId },
-                        data: {
-                            status: 'failed',
-                            errorMsg: result.error?.message || 'Send failed',
-                            retryCount: { increment: 1 },
-                            updatedAt: new Date(),
-                        },
-                    });
 
                     // 🔥 Gunakan natural delay meskipun gagal
                     if (!isLastRecipient) {

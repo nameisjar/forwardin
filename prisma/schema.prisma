@@ -578,7 +578,7 @@ model BroadcastRecipient {
   broadcast   Broadcast @relation(fields: [broadcastId], references: [pkId], onDelete: Cascade)
   phone       String    @db.VarChar(30)
   jid         String?   @db.VarChar(50) // Resolved JID (e.g., 628xxx@s.whatsapp.net)
-  status      String    @default("pending") @db.VarChar(20) // pending, sending, sent, failed
+  status      String    @default("pending") @db.VarChar(20) // pending, sending, sent, failed, invalid, uncertain, terminal_failed
   sentAt      DateTime? @map("sent_at")
   errorMsg    String?   @map("error_msg") @db.Text
   messageId   String?   @map("message_id") @db.VarChar(128)

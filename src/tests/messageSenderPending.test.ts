@@ -2,6 +2,8 @@ import { expect } from 'chai';
 import {
     assertOutboundSessionReady,
     assertReturnedMessageId,
+    getBroadcastRecipientFailureStatus,
+    isSafePreDeliveryRetry,
     resolveTrackedOutboundMessageId,
     runWithPendingOutgoingMessage,
 } from '../services/messageSender';
@@ -205,5 +207,42 @@ describe('Message sender pending reservation', () => {
             .to.throw('ID pesan yang berbeda');
         expect(() => assertReturnedMessageId({}, 'EXPECTED'))
             .to.throw('tidak mengembalikan ID pesan');
+    });
+
+    it('retries only failures confirmed before WhatsApp delivery', () => {
+        expect(isSafePreDeliveryRetry({ statusCode: 503 }, false)).to.equal(true);
+        expect(isSafePreDeliveryRetry({ code: 'P1001' }, false)).to.equal(true);
+
+        expect(isSafePreDeliveryRetry({ statusCode: 423 }, false)).to.equal(false);
+        expect(isSafePreDeliveryRetry({ statusCode: 429 }, false)).to.equal(false);
+        expect(isSafePreDeliveryRetry({ data: 429 }, false)).to.equal(false);
+        expect(isSafePreDeliveryRetry({ output: { statusCode: 429 } }, false)).to.equal(
+            false,
+        );
+        expect(
+            isSafePreDeliveryRetry({ code: 'WHATSAPP_RECIPIENT_COOLDOWN' }, false),
+        ).to.equal(false);
+        expect(isSafePreDeliveryRetry(new Error('socket timeout'), true)).to.equal(false);
+    });
+
+    it('keeps ambiguous and terminal failures out of scheduler retries', () => {
+        expect(
+            getBroadcastRecipientFailureStatus({
+                deliveryAttempted: false,
+                retryable: true,
+            }),
+        ).to.equal('failed');
+        expect(
+            getBroadcastRecipientFailureStatus({
+                deliveryAttempted: true,
+                retryable: false,
+            }),
+        ).to.equal('uncertain');
+        expect(
+            getBroadcastRecipientFailureStatus({
+                deliveryAttempted: false,
+                retryable: false,
+            }),
+        ).to.equal('terminal_failed');
     });
 });
