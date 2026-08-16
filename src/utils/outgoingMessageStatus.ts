@@ -4,8 +4,8 @@ export const OUTGOING_MESSAGE_STATUS_LEVELS = {
     delivery_ack: 3,
     read: 4,
     played: 5,
-    // A rejected send is terminal. Its large level prevents a delayed ACK or
-    // receipt from making a failed message appear successful again.
+    // A rejection outranks optimistic/server ACK states. Delivery and read
+    // receipts are handled explicitly because they are stronger evidence.
     error: Number.MAX_SAFE_INTEGER,
     failed: Number.MAX_SAFE_INTEGER,
 } as const;
@@ -21,6 +21,11 @@ const PROGRESS_STATUSES: KnownOutgoingMessageStatus[] = [
 ];
 
 const TERMINAL_STATUSES = new Set<KnownOutgoingMessageStatus>(['error', 'failed']);
+const DELIVERY_EVIDENCE_STATUSES = new Set<KnownOutgoingMessageStatus>([
+    'delivery_ack',
+    'read',
+    'played',
+]);
 
 function asKnownStatus(status: unknown): KnownOutgoingMessageStatus | null {
     const value = String(status || '') as KnownOutgoingMessageStatus;
@@ -43,13 +48,16 @@ export function isTerminalOutgoingMessageStatus(status: unknown): boolean {
  * Return whether an existing row may move to the incoming status.
  *
  * WhatsApp NACK/error may replace only pending or server_ack. Successful ACKs
- * move monotonically, and neither error nor failed may be revived afterwards.
+ * move monotonically. A delivery/read receipt may repair an earlier rejection
+ * because receipt evidence cannot exist unless the message reached WhatsApp.
  */
 export function canApplyOutgoingMessageStatus(current: unknown, next: unknown): boolean {
     const currentStatus = asKnownStatus(current);
     const nextStatus = asKnownStatus(next);
     if (!nextStatus || currentStatus === nextStatus) return false;
-    if (currentStatus && TERMINAL_STATUSES.has(currentStatus)) return false;
+    if (currentStatus && TERMINAL_STATUSES.has(currentStatus)) {
+        return DELIVERY_EVIDENCE_STATUSES.has(nextStatus);
+    }
 
     if (TERMINAL_STATUSES.has(nextStatus)) {
         return currentStatus === 'pending' || currentStatus === 'server_ack';
@@ -70,7 +78,11 @@ export function eligibleOutgoingMessageStatuses(next: unknown): KnownOutgoingMes
     }
 
     const nextLevel = outgoingMessageStatusLevel(nextStatus);
-    return PROGRESS_STATUSES.filter(
-        status => outgoingMessageStatusLevel(status) < nextLevel,
+    const eligible = PROGRESS_STATUSES.filter(
+        (status) => outgoingMessageStatusLevel(status) < nextLevel,
     );
+    if (DELIVERY_EVIDENCE_STATUSES.has(nextStatus)) {
+        eligible.push('error', 'failed');
+    }
+    return eligible;
 }

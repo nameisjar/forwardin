@@ -17,11 +17,14 @@ describe('Outgoing message status transitions', () => {
         expect(canApplyOutgoingMessageStatus('server_ack', 'server_ack')).to.equal(false);
     });
 
-    it('treats error and failed as terminal', () => {
+    it('keeps error and failed terminal until delivery evidence arrives', () => {
         for (const terminal of ['error', 'failed']) {
             expect(isTerminalOutgoingMessageStatus(terminal)).to.equal(true);
-            for (const later of ['pending', 'server_ack', 'delivery_ack', 'read', 'played']) {
+            for (const later of ['pending', 'server_ack']) {
                 expect(canApplyOutgoingMessageStatus(terminal, later)).to.equal(false);
+            }
+            for (const evidence of ['delivery_ack', 'read', 'played']) {
+                expect(canApplyOutgoingMessageStatus(terminal, evidence)).to.equal(true);
             }
         }
     });
@@ -34,20 +37,21 @@ describe('Outgoing message status transitions', () => {
         expect(canApplyOutgoingMessageStatus('played', 'error')).to.equal(false);
     });
 
-    it('builds atomic filters that never include terminal states', () => {
+    it('builds atomic filters that only recover failures from delivery evidence', () => {
         expect(eligibleOutgoingMessageStatuses('server_ack')).to.deep.equal(['pending']);
         expect(eligibleOutgoingMessageStatuses('delivery_ack')).to.deep.equal([
             'pending',
             'server_ack',
+            'error',
+            'failed',
         ]);
         expect(eligibleOutgoingMessageStatuses('read')).to.deep.equal([
             'pending',
             'server_ack',
             'delivery_ack',
+            'error',
+            'failed',
         ]);
-        expect(eligibleOutgoingMessageStatuses('error')).to.deep.equal([
-            'pending',
-            'server_ack',
-        ]);
+        expect(eligibleOutgoingMessageStatuses('error')).to.deep.equal(['pending', 'server_ack']);
     });
 });
