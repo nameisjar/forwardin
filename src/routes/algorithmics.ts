@@ -9,6 +9,7 @@ import {
     deleteMonthlyTemplate
 } from '../controllers/monthlyTemplate';
 import { sendMonthlyFeedback, getMonthlyFeedbackLogs } from '../controllers/monthlyFeedback';
+import { downloadCustomMonthlyFeedback } from '../controllers/monthlyFeedbackCustom';
 import { authMiddleware } from '../middleware/auth';
 
 const router = express.Router();
@@ -25,5 +26,6 @@ router.delete('/monthly-templates/:id', authMiddleware, deleteMonthlyTemplate);
 // Monthly Feedback Routes
 router.post('/monthly-feedback/send', authMiddleware, sendMonthlyFeedback);
 router.get('/monthly-feedback/logs', authMiddleware, getMonthlyFeedbackLogs);
+router.post('/monthly-feedback/custom/download', authMiddleware, downloadCustomMonthlyFeedback);
 
 export default router;
