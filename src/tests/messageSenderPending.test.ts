@@ -145,6 +145,8 @@ describe('Message sender pending reservation', () => {
             code?: string;
             statusCode?: number;
             retryAt?: string;
+            enforcementType?: string;
+            restrictionScope?: 'recipient' | 'companion' | 'account';
         }) | undefined;
         try {
             assertOutboundSessionReady({
@@ -171,6 +173,7 @@ describe('Message sender pending reservation', () => {
             code?: string;
             statusCode?: number;
             retryAt?: string;
+            restrictionScope?: 'recipient' | 'companion' | 'account';
         }) | undefined;
         try {
             assertOutboundSessionReady(
@@ -180,6 +183,7 @@ describe('Message sender pending reservation', () => {
                         code: 'WHATSAPP_RECIPIENT_COOLDOWN',
                         statusCode: 423,
                         retryAt: '2026-08-13T10:00:00.000Z',
+                        restrictionScope: 'recipient',
                     }),
                 },
                 '123@lid',
@@ -192,6 +196,31 @@ describe('Message sender pending reservation', () => {
         expect(captured.code).to.equal('WHATSAPP_RECIPIENT_COOLDOWN');
         expect(captured.statusCode).to.equal(423);
         expect(captured.retryAt).to.equal('2026-08-13T10:00:00.000Z');
+        expect(captured.restrictionScope).to.equal('recipient');
+    });
+
+    it('propagates companion restriction details to API callers', () => {
+        let captured: (Error & {
+            enforcementType?: string;
+            restrictionScope?: 'recipient' | 'companion' | 'account';
+        }) | undefined;
+        try {
+            assertOutboundSessionReady({
+                getSendReadiness: () => ({
+                    ready: false,
+                    code: 'WHATSAPP_REACHOUT_TIMELOCK',
+                    statusCode: 423,
+                    enforcementType: 'WEB_COMPANION_ONLY',
+                    restrictionScope: 'companion',
+                }),
+            });
+        } catch (error) {
+            captured = error as typeof captured;
+        }
+
+        if (!captured) throw new Error('Expected companion restriction failure');
+        expect(captured.enforcementType).to.equal('WEB_COMPANION_ONLY');
+        expect(captured.restrictionScope).to.equal('companion');
     });
 
     it('allows a current open socket to continue', () => {

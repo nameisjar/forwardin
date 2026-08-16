@@ -326,6 +326,9 @@ export interface SendResult {
     error?: string;
     errorCode?: string;
     statusCode?: number;
+    retryAt?: string;
+    enforcementType?: string;
+    restrictionScope?: 'recipient' | 'companion' | 'account';
     deliveryAttempted?: boolean;
     retryable?: boolean;
     rateLimitInfo?: RateLimitResult;
@@ -431,6 +434,8 @@ type SessionSendReadiness = {
     message?: string;
     statusCode?: number;
     retryAt?: string;
+    enforcementType?: string;
+    restrictionScope?: 'recipient' | 'companion' | 'account';
 };
 
 export function assertOutboundSessionReady(session: any, jid?: string): void {
@@ -442,10 +447,18 @@ export function assertOutboundSessionReady(session: any, jid?: string): void {
     if (readiness?.ready === false) {
         const error = new Error(
             readiness.message || 'Sesi WhatsApp belum siap mengirim pesan',
-        ) as Error & { code?: string; statusCode?: number; retryAt?: string };
+        ) as Error & {
+            code?: string;
+            statusCode?: number;
+            retryAt?: string;
+            enforcementType?: string;
+            restrictionScope?: 'recipient' | 'companion' | 'account';
+        };
         error.code = readiness.code || 'WHATSAPP_SESSION_NOT_READY';
         error.statusCode = readiness.statusCode || 503;
         error.retryAt = readiness.retryAt;
+        error.enforcementType = readiness.enforcementType;
+        error.restrictionScope = readiness.restrictionScope;
         throw error;
     }
 
@@ -575,6 +588,13 @@ function createSendFailure(error: any, fallback: string, messageId?: string): Se
         error: error?.message || fallback,
         errorCode: typeof error?.code === 'string' ? error.code : undefined,
         statusCode,
+        retryAt: typeof error?.retryAt === 'string' ? error.retryAt : undefined,
+        enforcementType:
+            typeof error?.enforcementType === 'string' ? error.enforcementType : undefined,
+        restrictionScope:
+            ['recipient', 'companion', 'account'].includes(error?.restrictionScope)
+                ? error.restrictionScope
+                : undefined,
         deliveryAttempted,
         retryable: isSafePreDeliveryRetry(error, deliveryAttempted),
     };

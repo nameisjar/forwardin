@@ -207,6 +207,9 @@ export const sendMessages: RequestHandler = async (req, res) => {
             error: string;
             code?: string;
             statusCode?: number;
+            retryAt?: string;
+            enforcementType?: string;
+            restrictionScope?: 'recipient' | 'companion' | 'account';
         }[] = [];
 
         // helper: tunggu ms
@@ -380,9 +383,18 @@ export const sendMessages: RequestHandler = async (req, res) => {
                     await markPendingMessageAsFailed(messageId);
                     const sendError = new Error(
                         queuedResult.error || 'Failed to send message',
-                    ) as Error & { code?: string; statusCode?: number };
+                    ) as Error & {
+                        code?: string;
+                        statusCode?: number;
+                        retryAt?: string;
+                        enforcementType?: string;
+                        restrictionScope?: 'recipient' | 'companion' | 'account';
+                    };
                     sendError.code = queuedResult.errorCode;
                     sendError.statusCode = queuedResult.statusCode;
+                    sendError.retryAt = queuedResult.retryAt;
+                    sendError.enforcementType = queuedResult.enforcementType;
+                    sendError.restrictionScope = queuedResult.restrictionScope;
                     throw sendError;
                 }
 
@@ -420,7 +432,13 @@ export const sendMessages: RequestHandler = async (req, res) => {
             } catch (e) {
                 const msg = e instanceof Error ? e.message : String(e);
                 logger.error(e, `Failed to send message at index ${index}: ${msg}`);
-                const typedError = e as { code?: unknown; statusCode?: unknown };
+                const typedError = e as {
+                    code?: unknown;
+                    statusCode?: unknown;
+                    retryAt?: unknown;
+                    enforcementType?: unknown;
+                    restrictionScope?: unknown;
+                };
                 errors.push({
                     index,
                     error: msg,
@@ -428,6 +446,18 @@ export const sendMessages: RequestHandler = async (req, res) => {
                     statusCode:
                         typeof typedError.statusCode === 'number'
                             ? typedError.statusCode
+                            : undefined,
+                    retryAt:
+                        typeof typedError.retryAt === 'string' ? typedError.retryAt : undefined,
+                    enforcementType:
+                        typeof typedError.enforcementType === 'string'
+                            ? typedError.enforcementType
+                            : undefined,
+                    restrictionScope:
+                        ['recipient', 'companion', 'account'].includes(
+                            String(typedError.restrictionScope || ''),
+                        )
+                            ? typedError.restrictionScope as 'recipient' | 'companion' | 'account'
                             : undefined,
                 });
             }
@@ -442,7 +472,15 @@ export const sendMessages: RequestHandler = async (req, res) => {
         res.status(
             errors.length > 0 ? (allErrorsShareControlledStatus ? controlledStatus : 500) : 200,
         ).json({
-            ...(errors.length > 0 ? { message: errors[0].error } : {}),
+            ...(errors.length > 0
+                ? {
+                    message: errors[0].error,
+                    code: errors[0].code,
+                    retryAt: errors[0].retryAt,
+                    enforcementType: errors[0].enforcementType,
+                    restrictionScope: errors[0].restrictionScope,
+                }
+                : {}),
             results,
             errors,
         });
@@ -808,9 +846,18 @@ export const sendInboxMediaMessage: RequestHandler = async (req, res) => {
                 await markPendingMessageAsFailed(messageId, true);
                 const sendError = new Error(
                     queuedResult.error || 'Pengiriman media gagal',
-                ) as Error & { code?: string; statusCode?: number };
+                ) as Error & {
+                    code?: string;
+                    statusCode?: number;
+                    retryAt?: string;
+                    enforcementType?: string;
+                    restrictionScope?: 'recipient' | 'companion' | 'account';
+                };
                 sendError.code = queuedResult.errorCode;
                 sendError.statusCode = queuedResult.statusCode;
+                sendError.retryAt = queuedResult.retryAt;
+                sendError.enforcementType = queuedResult.enforcementType;
+                sendError.restrictionScope = queuedResult.restrictionScope;
                 throw sendError;
             }
             sendAccepted = true;
@@ -854,12 +901,29 @@ export const sendInboxMediaMessage: RequestHandler = async (req, res) => {
                 fs.promises.unlink(uploadedPath).catch(() => {});
             }
             logger.error({ error }, 'Failed to send Inbox media message');
-            const typedError = error as { code?: unknown; statusCode?: unknown };
+            const typedError = error as {
+                code?: unknown;
+                statusCode?: unknown;
+                retryAt?: unknown;
+                enforcementType?: unknown;
+                restrictionScope?: unknown;
+            };
             const statusCode =
                 typeof typedError.statusCode === 'number' ? typedError.statusCode : 500;
             return res.status(statusCode).json({
                 message: error instanceof Error ? error.message : 'Gagal mengirim media',
                 ...(typeof typedError.code === 'string' ? { code: typedError.code } : {}),
+                ...(typeof typedError.retryAt === 'string'
+                    ? { retryAt: typedError.retryAt }
+                    : {}),
+                ...(typeof typedError.enforcementType === 'string'
+                    ? { enforcementType: typedError.enforcementType }
+                    : {}),
+                ...(['recipient', 'companion', 'account'].includes(
+                    String(typedError.restrictionScope || ''),
+                )
+                    ? { restrictionScope: typedError.restrictionScope }
+                    : {}),
             });
         }
     });
