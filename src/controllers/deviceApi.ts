@@ -25,6 +25,10 @@ import https from 'https';
 import { sendGenericMessage } from '../services/messageSender';
 import { createTrackedMessageId } from '../utils/outgoingMessageId';
 import { sanitizeMediaFileName } from '../utils/mediaFileName';
+import {
+    BroadcastRecipientLimitError,
+    prepareBroadcastRecipients,
+} from '../services/broadcastSafety';
 
 const PROFILE_PICTURE_CACHE_TTL_MS = 5 * 60 * 1000;
 const PROFILE_PICTURE_MAX_BYTES = 5 * 1024 * 1024;
@@ -2081,7 +2085,10 @@ export const createBroadcast: RequestHandler = async (req, res) => {
                     : typeof bodyRecipients === 'string' && bodyRecipients.length
                     ? [bodyRecipients]
                     : [];
-                const delay = Number((req.body as any).delay) ?? 5000;
+                const requestedDelay = Number((req.body as any).delay);
+                const delay = Number.isFinite(requestedDelay) && requestedDelay > 0
+                    ? requestedDelay
+                    : 5000;
                 // Normalize schedule: default to now if missing/invalid
                 const rawSchedule = (req.body as any).schedule as string | undefined;
                 const schedule =
@@ -2119,8 +2126,28 @@ export const createBroadcast: RequestHandler = async (req, res) => {
                 if (!device.sessions[0]) {
                     return res.status(404).json({ message: 'Session not found' });
                 }
+
+                let preparedRecipients: Awaited<ReturnType<typeof prepareBroadcastRecipients>>;
+                try {
+                    preparedRecipients = await prepareBroadcastRecipients({
+                        recipients,
+                        deviceId: device.pkId,
+                    });
+                } catch (error) {
+                    if (error instanceof BroadcastRecipientLimitError) {
+                        return res.status(error.statusCode).json({ message: error.message });
+                    }
+                    throw error;
+                }
+                if (preparedRecipients.recipients.length === 0) {
+                    return res.status(400).json({
+                        message:
+                            'Tidak ada penerima yang dapat dikirimi setelah daftar opt-out diterapkan.',
+                    });
+                }
+
                 await prisma.$transaction(async (transaction) => {
-                    await transaction.broadcast.create({
+                    const broadcast = await transaction.broadcast.create({
                         data: {
                             name: name.includes('[Broadcast]') ? name : `${name} [Broadcast]`,
                             message: encryptMessage(message),
@@ -2135,9 +2162,21 @@ export const createBroadcast: RequestHandler = async (req, res) => {
                                 : null,
                         },
                     });
+                    await transaction.broadcastRecipient.createMany({
+                        data: preparedRecipients.recipients.map((phone) => ({
+                            broadcastId: broadcast.pkId,
+                            phone,
+                            status: 'pending',
+                        })),
+                        skipDuplicates: true,
+                    });
                 });
                 mediaPersisted = true;
-                return res.status(201).json({ message: 'Broadcast created successfully' });
+                return res.status(201).json({
+                    message: 'Broadcast created successfully',
+                    recipientCount: preparedRecipients.recipients.length,
+                    suppressedCount: preparedRecipients.suppressedCount,
+                });
             } catch (error) {
                 logger.error(error);
                 if (!res.headersSent) {

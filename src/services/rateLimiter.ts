@@ -1,5 +1,6 @@
 import logger from '../config/logger';
 import type { RequestHandler } from 'express';
+import prisma from '../utils/db';
 
 // ============================================
 // 🔥 SMART RATE LIMITER PER DEVICE
@@ -14,6 +15,7 @@ import type { RequestHandler } from 'express';
 interface RateLimitConfig {
     maxPerMinute: number;      // Max pesan per menit
     maxPerHour: number;        // Max pesan per jam
+    maxPerDay: number;         // Max pesan per 24 jam
     minDelayMs: number;        // Minimum delay antar pesan (ms)
 }
 
@@ -45,18 +47,121 @@ export interface RateLimitResult {
 }
 
 // Default config untuk shared device (konservatif)
+function positiveInteger(value: string | undefined, fallback: number): number {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : fallback;
+}
+
 const DEFAULT_CONFIG: RateLimitConfig = {
-    maxPerMinute: 20,          // 20 pesan/menit
-    maxPerHour: 500,           // 500 pesan/jam
-    minDelayMs: 3000,          // Minimum 3 detik antar pesan
+    maxPerMinute: positiveInteger(process.env.OUTBOUND_MAX_PER_MINUTE, 10),
+    maxPerHour: positiveInteger(process.env.OUTBOUND_MAX_PER_HOUR, 100),
+    maxPerDay: positiveInteger(process.env.OUTBOUND_MAX_PER_DAY, 300),
+    minDelayMs: positiveInteger(process.env.OUTBOUND_MIN_DELAY_MS, 5000),
 };
 
 // Config untuk personal device (lebih longgar)
 const PERSONAL_DEVICE_CONFIG: RateLimitConfig = {
     maxPerMinute: 10,
     maxPerHour: 100,
-    minDelayMs: 2000,
+    maxPerDay: 300,
+    minDelayMs: 5000,
 };
+
+export class OutboundDailyLimitError extends Error {
+    readonly code = 'OUTBOUND_DAILY_LIMIT';
+    readonly statusCode = 429;
+
+    constructor(readonly retryAt: Date) {
+        super(`Batas pengiriman harian device tercapai. Coba lagi setelah ${retryAt.toISOString()}.`);
+        this.name = 'OutboundDailyLimitError';
+    }
+}
+
+type PersistentReservation = { delayMs: number; reason: string; retryAt?: Date };
+
+function utcDayStart(now: Date): Date {
+    return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+}
+
+async function reservePersistentSlot(
+    deviceUuid: string,
+    config: RateLimitConfig,
+): Promise<PersistentReservation> {
+    return prisma.$transaction(async (tx) => {
+        const device = await tx.device.findUnique({
+            where: { id: deviceUuid },
+            select: { pkId: true },
+        });
+        if (!device) throw new Error('Device tidak ditemukan');
+
+        // A transaction-scoped PostgreSQL advisory lock serializes reservations
+        // for this device across all Node processes.
+        await tx.$queryRaw`SELECT pg_advisory_xact_lock(${device.pkId})`;
+
+        const now = new Date();
+        const dayStart = utcDayStart(now);
+        const state = await tx.deviceOutboundRateState.upsert({
+            where: { deviceId: device.pkId },
+            create: {
+                deviceId: device.pkId,
+                minuteWindowStartedAt: now,
+                hourWindowStartedAt: now,
+                dayWindowStartedAt: dayStart,
+            },
+            update: {},
+        });
+
+        const minuteExpired = now.getTime() - state.minuteWindowStartedAt.getTime() >= 60_000;
+        const hourExpired = now.getTime() - state.hourWindowStartedAt.getTime() >= 3_600_000;
+        const dayExpired = state.dayWindowStartedAt.getTime() !== dayStart.getTime();
+        const minuteStartedAt = minuteExpired ? now : state.minuteWindowStartedAt;
+        const hourStartedAt = hourExpired ? now : state.hourWindowStartedAt;
+        const minuteCount = minuteExpired ? 0 : state.minuteCount;
+        const hourCount = hourExpired ? 0 : state.hourCount;
+        const dayCount = dayExpired ? 0 : state.dayCount;
+
+        if (dayCount >= config.maxPerDay) {
+            const retryAt = new Date(dayStart.getTime() + 24 * 60 * 60 * 1000);
+            throw new OutboundDailyLimitError(retryAt);
+        }
+
+        const waits: PersistentReservation[] = [];
+        if (state.lastReservedAt) {
+            const minDelayWait =
+                config.minDelayMs - (now.getTime() - state.lastReservedAt.getTime());
+            if (minDelayWait > 0) waits.push({ delayMs: minDelayWait, reason: 'min_delay' });
+        }
+        if (minuteCount >= config.maxPerMinute) {
+            waits.push({
+                delayMs: Math.max(0, minuteStartedAt.getTime() + 60_000 - now.getTime()),
+                reason: 'minute_limit',
+            });
+        }
+        if (hourCount >= config.maxPerHour) {
+            waits.push({
+                delayMs: Math.max(0, hourStartedAt.getTime() + 3_600_000 - now.getTime()),
+                reason: 'hour_limit',
+            });
+        }
+
+        const wait = waits.sort((a, b) => b.delayMs - a.delayMs)[0];
+        if (wait?.delayMs) return wait;
+
+        await tx.deviceOutboundRateState.update({
+            where: { deviceId: device.pkId },
+            data: {
+                minuteWindowStartedAt: minuteStartedAt,
+                minuteCount: minuteCount + 1,
+                hourWindowStartedAt: hourStartedAt,
+                hourCount: hourCount + 1,
+                dayWindowStartedAt: dayStart,
+                dayCount: dayCount + 1,
+                lastReservedAt: now,
+            },
+        });
+        return { delayMs: 0, reason: 'none' };
+    });
+}
 
 class DeviceRateLimiter {
     private deviceStats: Map<string, DeviceStats> = new Map();
@@ -230,6 +335,26 @@ class DeviceRateLimiter {
                         const currentDelay = this.calculateDelay(deviceId);
                         if (currentDelay.delayMs > 0) {
                             await this.sleep(currentDelay.delayMs);
+                        }
+
+                        let persistentDelayMs = 0;
+                        while (!this.isShuttingDown) {
+                            const reservation = await reservePersistentSlot(deviceId, config);
+                            if (reservation.delayMs <= 0) break;
+                            persistentDelayMs += reservation.delayMs;
+                            await this.sleep(reservation.delayMs);
+                        }
+                        if (this.isShuttingDown) {
+                            throw new Error('Server sedang restart, silakan coba lagi');
+                        }
+
+                        if (persistentDelayMs > 0) {
+                            rateLimitInfo.allowed = true;
+                            rateLimitInfo.delayed = true;
+                            rateLimitInfo.delayMs += persistentDelayMs;
+                            rateLimitInfo.estimatedSendTime = new Date(
+                                Date.now() + persistentDelayMs,
+                            );
                         }
 
                         // Execute function

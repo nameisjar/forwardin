@@ -2,7 +2,7 @@
 import { RequestHandler } from 'express';
 import prisma from '../utils/db';
 import schedule from 'node-schedule';
-import { getInstance, getJid, sendMediaFile } from '../whatsapp';
+import { getInstance, getJid } from '../whatsapp';
 import logger from '../config/logger';
 import { delay as delayMs } from '../utils/delay';
 import { getRecipients } from '../utils/recipients';
@@ -19,11 +19,11 @@ import {
 import { useBroadcast } from '../utils/quota';
 import { isUUID } from '../utils/uuidChecker';
 import fs from 'fs';
-import { Prisma } from '@prisma/client';
 import {
     sendTextMessage,
     sendMediaMessage,
     detectMediaType,
+    resolveTrackedOutboundMessageId,
     SendResult,
 } from '../services/messageSender';
 import {
@@ -31,49 +31,39 @@ import {
     showTypingIndicator,
     resetClusterState,
     loadNaturalDelayConfig,
-    NaturalDelayResult,
 } from '../services/naturalDelay';
 import { redactPhone } from '../utils/logRedaction';
 import {
     canDeviceSend,
-    incrementMessageCount,
+    pauseDevice,
     recordRateLimitWithError,
 } from '../services/signalDetector';
 import { accessibleDeviceWhere } from '../utils/deviceAccess';
 import { cleanupMediaFilesIfUnreferenced } from '../services/mediaCleanup';
 import { resolveMediaFileName, sanitizeMediaFileName } from '../utils/mediaFileName';
+import {
+    acquireDeviceBroadcastLease,
+    BroadcastRecipientLimitError,
+    getSuppressedRecipientKeys,
+    MAX_BROADCAST_RECIPIENTS,
+    normalizeRecipientKey,
+    prepareBroadcastRecipients,
+    refreshDeviceBroadcastLease,
+    releaseDeviceBroadcastLease,
+} from '../services/broadcastSafety';
 
 // Constants untuk retry mechanism
 const MAX_ATTEMPTS = 5;
 const COOLDOWN_SECONDS = 60;
 const BASE_RETRY_DELAY = 2000; // 2 seconds
 const MAX_RETRY_DELAY = 16000; // 16 seconds
-
-// Helper: Extract messageId dari berbagai bentuk response WhatsApp
-function extractMessageId(sentMessage: any): string | undefined {
-    try {
-        // Format 1: sentMessage.key.id
-        if (sentMessage?.key?.id) return sentMessage.key.id;
-
-        // Format 2: sentMessage.message.key.id
-        if (sentMessage?.message?.key?.id) return sentMessage.message.key.id;
-
-        // Format 3: Array response dari sendMediaFile
-        if (Array.isArray(sentMessage)) {
-            const first = sentMessage[0];
-            if (first?.key?.id) return first.key.id;
-            if (first?.result?.key?.id) return first.result.key.id;
-        }
-
-        // Format 4: Wrapped result
-        if (sentMessage?.result?.key?.id) return sentMessage.result.key.id;
-
-        return undefined;
-    } catch (e) {
-        logger.error({ error: e }, 'Failed to extract messageId');
-        return undefined;
-    }
-}
+const parsedConsecutiveFailureLimit = Number(
+    process.env.BROADCAST_MAX_CONSECUTIVE_FAILURES || 3,
+);
+const MAX_CONSECUTIVE_FAILURES =
+    Number.isFinite(parsedConsecutiveFailureLimit) && parsedConsecutiveFailureLimit > 0
+        ? Math.floor(parsedConsecutiveFailureLimit)
+        : 3;
 
 // Helper: Check if error is transient (bisa di-retry)
 function isTransientError(error: any): boolean {
@@ -99,7 +89,9 @@ function isRateLimitError(error: any): boolean {
 
     return (
         error?.data === 429 ||
+        error?.statusCode === 429 ||
         error?.output?.statusCode === 429 ||
+        error?.errorCode === 'RATE_LIMITED' ||
         String(error.message || '')
             .toLowerCase()
             .includes('rate-overlimit') ||
@@ -125,8 +117,15 @@ async function sendMessageWithRetry(
     textPayload: string,
     mediaPath: string | null,
     mediaFileName: string | null,
+    messageId: string,
     maxRetries = 3,
-): Promise<{ success: boolean; messageId?: string; error?: any; isRateLimit?: boolean }> {
+): Promise<{
+    success: boolean;
+    messageId?: string;
+    error?: any;
+    isRateLimit?: boolean;
+    isSafetyLimit?: boolean;
+}> {
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
         try {
             let result: SendResult;
@@ -143,11 +142,14 @@ async function sendMessageWithRetry(
                     {
                         caption: textPayload,
                         fileName: resolveMediaFileName(mediaFileName, mediaPath),
+                        messageId,
                     },
                 );
             } else {
                 // Kirim teks menggunakan rate limiter
-                result = await sendTextMessage(session, deviceId, jid, textPayload);
+                result = await sendTextMessage(session, deviceId, jid, textPayload, {
+                    messageId,
+                });
             }
 
             if (!result.success) {
@@ -157,10 +159,21 @@ async function sendMessageWithRetry(
                 );
 
                 // Check if it's a rate limit error
-                const errorStr = String(result.error || '').toLowerCase();
-                const isRateLimit = errorStr.includes('rate') || errorStr.includes('limit');
+                const isSafetyLimit = result.errorCode === 'OUTBOUND_DAILY_LIMIT';
+                const isRateLimit = !isSafetyLimit && isRateLimitError(result);
+                const isTransient = isTransientError(result.error);
 
-                if (attempt < maxRetries) {
+                if (isSafetyLimit) {
+                    return { success: false, error: result, isSafetyLimit: true };
+                }
+
+                // Retrying a rate-limit response increases the risk. The caller
+                // records the signal and stops the entire device broadcast.
+                if (isRateLimit) {
+                    return { success: false, error: result, isRateLimit: true };
+                }
+
+                if (attempt < maxRetries && isTransient) {
                     const waitTime = getRetryDelay(attempt, BASE_RETRY_DELAY);
                     logger.warn(
                         { jid: redactPhone(jid), attempt, waitTime },
@@ -175,7 +188,8 @@ async function sendMessageWithRetry(
 
             return { success: true, messageId: result.messageId };
         } catch (error: any) {
-            const isRateLimit = isRateLimitError(error);
+            const isSafetyLimit = error?.code === 'OUTBOUND_DAILY_LIMIT';
+            const isRateLimit = !isSafetyLimit && isRateLimitError(error);
             const isTransient = isTransientError(error);
             const isLastAttempt = attempt === maxRetries;
 
@@ -193,7 +207,7 @@ async function sendMessageWithRetry(
             );
 
             // Retry logic
-            if (!isLastAttempt && (isRateLimit || isTransient)) {
+            if (!isLastAttempt && isTransient && !isRateLimit) {
                 const waitTime = getRetryDelay(attempt, BASE_RETRY_DELAY);
                 logger.warn(
                     { jid: redactPhone(jid), attempt, waitTime, isRateLimit, isTransient },
@@ -208,6 +222,7 @@ async function sendMessageWithRetry(
                 success: false,
                 error,
                 isRateLimit,
+                isSafetyLimit,
             };
         }
     }
@@ -265,6 +280,24 @@ export const createBroadcast: RequestHandler = async (req, res) => {
                 return res.status(404).json({ message: 'Session not found' });
             }
 
+            let preparedRecipients: Awaited<ReturnType<typeof prepareBroadcastRecipients>>;
+            try {
+                preparedRecipients = await prepareBroadcastRecipients({
+                    recipients,
+                    deviceId: device.pkId,
+                });
+            } catch (error) {
+                if (error instanceof BroadcastRecipientLimitError) {
+                    return res.status(error.statusCode).json({ message: error.message });
+                }
+                throw error;
+            }
+            if (preparedRecipients.recipients.length === 0) {
+                return res.status(400).json({
+                    message: 'Tidak ada penerima yang dapat dikirimi setelah daftar opt-out diterapkan.',
+                });
+            }
+
             await prisma.$transaction(async (transaction) => {
                 // Create broadcast with encrypted message
                 const broadcast = await transaction.broadcast.create({
@@ -285,17 +318,9 @@ export const createBroadcast: RequestHandler = async (req, res) => {
                 });
 
                 // Resolve recipients and create BroadcastRecipient records
-                const resolvedRecipients = await getRecipients({
-                    recipients,
-                    deviceId: device.pkId,
-                });
-
-                // De-duplicate recipients
-                const uniqueRecipients = Array.from(new Set(resolvedRecipients));
-
-                if (uniqueRecipients.length > 0) {
+                if (preparedRecipients.recipients.length > 0) {
                     await transaction.broadcastRecipient.createMany({
-                        data: uniqueRecipients.map((phone) => ({
+                        data: preparedRecipients.recipients.map((phone) => ({
                             broadcastId: broadcast.pkId,
                             phone: String(phone),
                             status: 'pending',
@@ -305,7 +330,11 @@ export const createBroadcast: RequestHandler = async (req, res) => {
                 }
 
                 await useBroadcast(transaction, subscription);
-                res.status(201).json({ message: 'Broadcast created successfully' });
+                res.status(201).json({
+                    message: 'Broadcast created successfully',
+                    recipientCount: preparedRecipients.recipients.length,
+                    suppressedCount: preparedRecipients.suppressedCount,
+                });
             });
         });
     } catch (error) {
@@ -1736,6 +1765,18 @@ schedule.scheduleJob('* * * * *', async () => {
                 continue;
             }
 
+            const deviceLeaseAcquired = await acquireDeviceBroadcastLease(
+                broadcast.device.pkId,
+                broadcast.pkId,
+            );
+            if (!deviceLeaseAcquired) {
+                logger.info(
+                    { broadcastId: broadcast.id, deviceId: broadcast.device.id },
+                    'Another broadcast is active for this device, deferring this broadcast',
+                );
+                continue;
+            }
+
             // 🔥 Reset cluster state untuk broadcast baru
             resetClusterState(broadcast.device.id);
 
@@ -1752,7 +1793,6 @@ schedule.scheduleJob('* * * * *', async () => {
 
             // 🔥 QUICK WIN: Consecutive failure detection untuk early ban detection
             let consecutiveFailures = 0;
-            const MAX_CONSECUTIVE_FAILURES = 5;
             let broadcastStopped = false;
 
             // 🔥 ATOMIC PROCESSING: Query pending recipients from BroadcastRecipient table
@@ -1809,9 +1849,69 @@ schedule.scheduleJob('* * * * *', async () => {
                             where: { id: broadcast.id },
                             data: { isSent: true, updatedAt: new Date() },
                         });
+                        await releaseDeviceBroadcastLease(
+                            broadcast.device.pkId,
+                            broadcast.pkId,
+                        );
                         continue;
                     }
                 }
+            }
+
+            const totalRecipientCount = await prisma.broadcastRecipient.count({
+                where: { broadcastId: broadcast.pkId },
+            });
+            if (totalRecipientCount > MAX_BROADCAST_RECIPIENTS) {
+                const limitMessage = `BLOCKED: ${totalRecipientCount} recipients exceed the safety limit of ${MAX_BROADCAST_RECIPIENTS}`;
+                await prisma.$transaction([
+                    prisma.broadcastRecipient.updateMany({
+                        where: {
+                            broadcastId: broadcast.pkId,
+                            status: { in: ['pending', 'failed'] },
+                        },
+                        data: { status: 'blocked', errorMsg: limitMessage },
+                    }),
+                    prisma.broadcast.update({
+                        where: { id: broadcast.id },
+                        data: {
+                            isSent: true,
+                            failedCount: totalRecipientCount,
+                            lastError: limitMessage,
+                            updatedAt: new Date(),
+                        },
+                    }),
+                ]);
+                await releaseDeviceBroadcastLease(broadcast.device.pkId, broadcast.pkId);
+                logger.error(
+                    { broadcastId: broadcast.id, recipientCount: totalRecipientCount },
+                    'Legacy broadcast blocked because it exceeds the recipient safety limit',
+                );
+                continue;
+            }
+
+            const suppressedKeys = await getSuppressedRecipientKeys(
+                broadcast.device.pkId,
+                pendingRecipients.map((recipient) => recipient.phone),
+            );
+            const suppressedRecipientIds = pendingRecipients
+                .filter((recipient) => {
+                    const key = normalizeRecipientKey(recipient.phone);
+                    return Boolean(key && suppressedKeys.has(key));
+                })
+                .map((recipient) => recipient.pkId);
+            if (suppressedRecipientIds.length > 0) {
+                await prisma.broadcastRecipient.updateMany({
+                    where: { pkId: { in: suppressedRecipientIds } },
+                    data: {
+                        status: 'suppressed',
+                        errorMsg: 'Recipient opted out of WhatsApp messages',
+                    },
+                });
+                const suppressedIdSet = new Set(suppressedRecipientIds);
+                const eligibleRecipients = pendingRecipients.filter(
+                    (recipient) => !suppressedIdSet.has(recipient.pkId),
+                );
+                pendingRecipients.splice(0, pendingRecipients.length, ...eligibleRecipients);
             }
 
             logger.info(
@@ -1829,6 +1929,7 @@ schedule.scheduleJob('* * * * *', async () => {
                     where: { id: broadcast.id },
                     data: { isSent: true, updatedAt: new Date() },
                 });
+                await releaseDeviceBroadcastLease(broadcast.device.pkId, broadcast.pkId);
                 continue;
             }
 
@@ -1837,6 +1938,17 @@ schedule.scheduleJob('* * * * *', async () => {
                 const recipient = recipientRecord.phone;
                 const isLastRecipient = i === pendingRecipients.length - 1;
                 const jid = getJid(recipient);
+
+                if (
+                    !(await refreshDeviceBroadcastLease(
+                        broadcast.device.pkId,
+                        broadcast.pkId,
+                    ))
+                ) {
+                    errors.push('STOPPED: device broadcast lease was lost');
+                    broadcastStopped = true;
+                    break;
+                }
 
                 // 🔒 DOUBLE-CHECK: Pastikan recipient belum terkirim (race condition protection)
                 const currentStatus = await prisma.broadcastRecipient.findUnique({
@@ -1857,9 +1969,16 @@ schedule.scheduleJob('* * * * *', async () => {
                 }
 
                 // 🔥 Mark as 'sending' before attempting (crash protection)
+                const trackedMessageId =
+                    recipientRecord.messageId || resolveTrackedOutboundMessageId(session);
                 await prisma.broadcastRecipient.update({
                     where: { pkId: recipientRecord.pkId },
-                    data: { status: 'sending', jid, updatedAt: new Date() },
+                    data: {
+                        status: 'sending',
+                        jid,
+                        messageId: trackedMessageId,
+                        updatedAt: new Date(),
+                    },
                 });
 
                 const variables = {
@@ -1923,49 +2042,79 @@ schedule.scheduleJob('* * * * *', async () => {
                     textPayload,
                     broadcast.mediaPath,
                     broadcast.mediaFileName,
+                    trackedMessageId,
                     3, // max retries per message
                 );
 
                 if (!result.success) {
                     consecutiveFailures++;
+                    const failureMessage = String(
+                        result.error?.error ||
+                            result.error?.message ||
+                            result.error ||
+                            'Unknown send failure',
+                    );
 
                     if (result.isRateLimit) {
                         rateLimitCount++;
                         errors.push(`Rate limit: ${jid}`);
 
-                        // 🔥 Record rate limit signal with error details for better classification
-                        recordRateLimitWithError(broadcast.device.pkId, result.error).catch(
-                            (err) => {
-                                logger.error({ err }, 'Failed to record rate limit signal');
-                            },
-                        );
                     } else {
-                        errors.push(`Failed: ${jid} - ${result.error?.message || 'Unknown'}`);
+                        errors.push(`Failed: ${jid} - ${failureMessage}`);
                     }
 
                     failCount++;
 
-                    // 🔥 QUICK WIN: Stop broadcast jika 5x gagal berturut-turut
+                    await prisma.broadcastRecipient.update({
+                        where: { pkId: recipientRecord.pkId },
+                        data: {
+                            status: 'failed',
+                            errorMsg: failureMessage,
+                            retryCount: { increment: 1 },
+                            updatedAt: new Date(),
+                        },
+                    });
+
+                    if (result.isSafetyLimit) {
+                        broadcastStopped = true;
+                        errors.push('STOPPED: daily outbound safety limit reached');
+                        logger.warn(
+                            { broadcastId: broadcast.id, deviceId: broadcast.device.id },
+                            'Broadcast stopped at the configured daily outbound limit',
+                        );
+                        break;
+                    }
+
+                    if (result.isRateLimit) {
+                        await recordRateLimitWithError(broadcast.device.pkId, result.error);
+                        broadcastStopped = true;
+                        errors.push('STOPPED: explicit rate limit detected');
+                        logger.error(
+                            { broadcastId: broadcast.id, deviceId: broadcast.device.id },
+                            'Broadcast stopped immediately after an explicit rate-limit response',
+                        );
+                        break;
+                    }
+
+                    // Stop the batch before a device-wide failure cascades to every recipient.
                     if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
                         logger.error(
                             {
                                 broadcastId: broadcast.id,
                                 deviceId: broadcast.device.id,
                                 consecutiveFailures,
-                                lastError: result.error?.message,
+                                lastError: failureMessage,
                                 processedCount: i + 1,
                                 totalCount: pendingRecipients.length,
                             },
-                            '🛑 BROADCAST STOPPED: 5 consecutive failures detected - likely device issue or ban',
+                            `Broadcast stopped: ${MAX_CONSECUTIVE_FAILURES} consecutive failures detected`,
                         );
 
-                        // Record sebagai critical signal untuk tracking
-                        recordRateLimitWithError(broadcast.device.pkId, {
-                            message: `Broadcast stopped: ${consecutiveFailures} consecutive failures - possible ban`,
-                            data: 500,
-                        }).catch((err) => {
-                            logger.error({ err }, 'Failed to record consecutive failure signal');
-                        });
+                        await pauseDevice(
+                            broadcast.device.pkId,
+                            `Broadcast dihentikan setelah ${consecutiveFailures} kegagalan berturut-turut`,
+                            30 * 60 * 1000,
+                        );
 
                         errors.push(
                             `STOPPED: ${consecutiveFailures} consecutive failures detected`,
@@ -1973,17 +2122,6 @@ schedule.scheduleJob('* * * * *', async () => {
                         broadcastStopped = true;
                         break; // EXIT LOOP
                     }
-
-                    // 🔥 ATOMIC: Update recipient status to 'failed'
-                    await prisma.broadcastRecipient.update({
-                        where: { pkId: recipientRecord.pkId },
-                        data: {
-                            status: 'failed',
-                            errorMsg: result.error?.message || 'Send failed',
-                            retryCount: { increment: 1 },
-                            updatedAt: new Date(),
-                        },
-                    });
 
                     // 🔥 Gunakan natural delay meskipun gagal
                     if (!isLastRecipient) {
@@ -2147,11 +2285,14 @@ schedule.scheduleJob('* * * * *', async () => {
                     data: {
                         sentCount: successCount,
                         failedCount: failCount,
-                        lastError: `STOPPED: ${MAX_CONSECUTIVE_FAILURES} consecutive failures - possible device issue or ban`,
+                        lastError:
+                            errors.slice(0, 5).join('; ') ||
+                            'STOPPED: broadcast safety circuit opened',
                         isSent: true, // Mark as processed (not pending)
                         updatedAt: new Date(),
                     },
                 });
+                await releaseDeviceBroadcastLease(broadcast.device.pkId, broadcast.pkId);
                 continue; // Skip to next broadcast
             }
 
@@ -2193,6 +2334,7 @@ schedule.scheduleJob('* * * * *', async () => {
                 where: { id: broadcast.id },
                 data: updateData,
             });
+            await releaseDeviceBroadcastLease(broadcast.device.pkId, broadcast.pkId);
         }
 
         logger.debug('Broadcast job cycle completed');
