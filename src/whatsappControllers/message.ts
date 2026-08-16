@@ -933,16 +933,18 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                                                 if (!updatedMessage || !publicDeviceUuid) return;
 
                                                 const profileUrl = createInboxProfileUrl(publicDeviceUuid, jid);
-                                                io.to(`session:${sessionId}`).emit(
-                                                    `incoming:${sessionId}:profile-updated`,
-                                                    {
-                                                        ...decryptIncomingMessage(updatedMessage),
-                                                        profilePicUrl: jid.includes('@g.us') ? null : profileUrl,
-                                                        groupPicUrl: jid.includes('@g.us') ? profileUrl : null,
-                                                        profilePictureStatus: result.status,
-                                                        isGroup: jid.includes('@g.us'),
-                                                    },
-                                                );
+                                                io.to(`session:${sessionId}`)
+                                                    .to(`device:${publicDeviceUuid}`)
+                                                    .emit(
+                                                        `incoming:${sessionId}:profile-updated`,
+                                                        {
+                                                            ...decryptIncomingMessage(updatedMessage),
+                                                            profilePicUrl: jid.includes('@g.us') ? null : profileUrl,
+                                                            groupPicUrl: jid.includes('@g.us') ? profileUrl : null,
+                                                            profilePictureStatus: result.status,
+                                                            isGroup: jid.includes('@g.us'),
+                                                        },
+                                                    );
                                             })
                                             .catch((picError) => {
                                                 logger.debug(

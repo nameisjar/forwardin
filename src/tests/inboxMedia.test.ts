@@ -1,8 +1,10 @@
 import { expect } from 'chai';
 import {
+    createInboxProfileUrl,
     resolveInboxMediaType,
     serializeInboxMediaPath,
     verifyInboxMediaToken,
+    verifyInboxProfileToken,
 } from '../utils/inboxMedia';
 
 describe('Inbox media URLs', () => {
@@ -42,5 +44,32 @@ describe('Inbox media URLs', () => {
         expect(resolveInboxMediaType('/inbox-media/device/message?token=abc', null, '[Gambar]'))
             .to.equal('image');
         expect(resolveInboxMediaType(null, null, '[Gambar]')).to.equal(null);
+    });
+
+    it('keeps profile URLs stable within an hour while retaining a valid signature', () => {
+        const originalNow = Date.now;
+        const deviceId = '8fd8b7de-91a5-4ead-9750-5f9d3034e55a';
+        const jid = '628123456789@s.whatsapp.net';
+        const hourStart = 1_786_910_400_000;
+        try {
+            Date.now = () => hourStart + 1_000;
+            const first = createInboxProfileUrl(deviceId, jid);
+            Date.now = () => hourStart + 30 * 60 * 1000;
+            const second = createInboxProfileUrl(deviceId, jid);
+
+            expect(second).to.equal(first);
+            const parsed = new URL(first, 'https://example.test');
+            const expires = Number(parsed.searchParams.get('expires'));
+            expect(
+                verifyInboxProfileToken(
+                    deviceId,
+                    jid,
+                    expires,
+                    parsed.searchParams.get('token') || '',
+                ),
+            ).to.equal(true);
+        } finally {
+            Date.now = originalNow;
+        }
     });
 });

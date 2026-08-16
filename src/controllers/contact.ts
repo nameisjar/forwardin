@@ -17,6 +17,7 @@ import {
     refreshInboxProfileCache,
 } from '../services/inboxProfileCache';
 import { getInstance, verifyInstance } from '../whatsapp';
+import { getSocketIO } from '../socket';
 
 // Helper to format phone number (08 -> 628)
 const formatPhoneNumber = (phone: any): string => {
@@ -877,11 +878,24 @@ export const getContacts: RequestHandler = async (req, res) => {
                     while (refreshQueue.length > 0) {
                         const jid = refreshQueue.shift();
                         if (!jid) return;
-                        await refreshInboxProfileCache({
+                        const result = await refreshInboxProfileCache({
                             deviceId: selectedDevice.pkId,
                             jid,
                             session: profileSession!,
                         });
+                        if (result.hasImage && sessionId) {
+                            const profileUrl = createInboxProfileUrl(selectedDevice.id, jid);
+                            getSocketIO().to(`device:${selectedDevice.id}`).emit(
+                                `incoming:${sessionId}:profile-updated`,
+                                {
+                                    from: jid,
+                                    profilePicUrl: profileUrl,
+                                    groupPicUrl: null,
+                                    profilePictureStatus: result.status,
+                                    isGroup: false,
+                                },
+                            );
+                        }
                         await new Promise((resolve) => setTimeout(resolve, 150));
                     }
                 };

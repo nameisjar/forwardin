@@ -7,6 +7,7 @@ import {
   getInboxProfileCacheSummaries,
   refreshInboxProfileCache,
 } from '../services/inboxProfileCache';
+import { getSocketIO } from '../socket';
 
 export const getActiveGroups = async (req: Request, res: Response) => {
   try {
@@ -64,8 +65,8 @@ export const getActiveGroups = async (req: Request, res: Response) => {
 
     // Get WhatsApp instance to fetch profile pictures (optional)
     let instance: any = null;
+    const sessionId = device.sessions[0]?.sessionId;
     try {
-      const sessionId = device.sessions[0]?.sessionId;
       if (sessionId) {
         const { getInstance, verifyInstance } = require('../whatsapp');
         if (verifyInstance(sessionId)) {
@@ -108,11 +109,24 @@ export const getActiveGroups = async (req: Request, res: Response) => {
           while (refreshQueue.length > 0) {
             const jid = refreshQueue.shift();
             if (!jid) return;
-            await refreshInboxProfileCache({
+            const result = await refreshInboxProfileCache({
               deviceId: device.pkId,
               jid,
               session: instance,
             });
+            if (result.hasImage && sessionId) {
+              const profileUrl = createInboxProfileUrl(device.id, jid);
+              getSocketIO().to(`device:${device.id}`).emit(
+                `incoming:${sessionId}:profile-updated`,
+                {
+                  from: jid,
+                  profilePicUrl: null,
+                  groupPicUrl: profileUrl,
+                  profilePictureStatus: result.status,
+                  isGroup: true,
+                },
+              );
+            }
             await new Promise((resolve) => setTimeout(resolve, 150));
           }
         };

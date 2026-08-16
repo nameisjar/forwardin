@@ -53,7 +53,11 @@ const signatureFor = (deviceId: string, messageId: string) =>
         .update(`${deviceId}:${messageId}`)
         .digest('hex');
 
-const PROFILE_URL_TTL_SECONDS = 60 * 60;
+const PROFILE_URL_BUCKET_SECONDS = 60 * 60;
+// A bucket URL created just before the hour changes still needs enough time
+// for the browser to request it. Two hours gives every bucket at least one
+// full hour of validity without changing the one-hour browser cache policy.
+const PROFILE_URL_TTL_SECONDS = 2 * 60 * 60;
 
 const profileSignatureFor = (deviceId: string, jid: string, expires: number) =>
     createHmac('sha256', jwtSecretKey)
@@ -89,7 +93,12 @@ export function serializeInboxMediaPath(
 }
 
 export function createInboxProfileUrl(deviceId: string, jid: string): string {
-    const expires = Math.floor(Date.now() / 1000) + PROFILE_URL_TTL_SECONDS;
+    // Keep the URL stable inside the current one-hour bucket. A fresh
+    // `now + TTL` value made an otherwise identical image look unique to the
+    // browser on every list request, preventing its HTTP cache from helping.
+    const now = Math.floor(Date.now() / 1000);
+    const expires = (Math.floor(now / PROFILE_URL_BUCKET_SECONDS) + 2)
+        * PROFILE_URL_BUCKET_SECONDS;
     const token = profileSignatureFor(deviceId, jid, expires);
     return `/inbox-profile/${encodeURIComponent(deviceId)}/${encodeURIComponent(jid)}?expires=${expires}&token=${token}`;
 }

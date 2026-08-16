@@ -231,16 +231,19 @@ async function persistPendingOutgoingMessage(params: {
         }).then((result) => {
             if (!result.hasImage) return;
             const profileUrl = createInboxProfileUrl(params.deviceId, params.jid);
-            getSocketIO().to(`session:${context.sessionId}`).emit(
-                `incoming:${context.sessionId}:profile-updated`,
-                {
-                    from: params.jid,
-                    profilePicUrl: params.jid.includes('@g.us') ? null : profileUrl,
-                    groupPicUrl: params.jid.includes('@g.us') ? profileUrl : null,
-                    profilePictureStatus: result.status,
-                    isGroup: params.jid.includes('@g.us'),
-                },
-            );
+            getSocketIO()
+                .to(`session:${context.sessionId}`)
+                .to(`device:${params.deviceId}`)
+                .emit(
+                    `incoming:${context.sessionId}:profile-updated`,
+                    {
+                        from: params.jid,
+                        profilePicUrl: params.jid.includes('@g.us') ? null : profileUrl,
+                        groupPicUrl: params.jid.includes('@g.us') ? profileUrl : null,
+                        profilePictureStatus: result.status,
+                        isGroup: params.jid.includes('@g.us'),
+                    },
+                );
         }).catch(() => undefined);
     }
 
