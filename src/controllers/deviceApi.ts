@@ -40,6 +40,21 @@ const profilePictureCache = new Map<
 
 type QueuedMediaType = 'image' | 'document' | 'audio' | 'video';
 
+const inboxMessageContactSelect = {
+    id: true,
+    firstName: true,
+    lastName: true,
+    phone: true,
+    colorCode: true,
+    ContactLabel: {
+        select: {
+            label: {
+                select: { name: true },
+            },
+        },
+    },
+} as const;
+
 async function cleanupUnpersistedUpload(
     mediaPath: string | undefined,
     persisted: boolean,
@@ -90,7 +105,7 @@ async function reserveInboxOutgoingMessage(params: {
     try {
         const message = await prisma.outgoingMessage.create({
             data: params.data,
-            include: { contact: true },
+            include: { contact: { select: inboxMessageContactSelect } },
         });
         return { created: true, message };
     } catch (error) {
@@ -101,7 +116,7 @@ async function reserveInboxOutgoingMessage(params: {
         // request observes the first result and must never send another stanza.
         const existing = await prisma.outgoingMessage.findUnique({
             where: { id: params.messageId },
-            include: { contact: true },
+            include: { contact: { select: inboxMessageContactSelect } },
         });
         if (!existing) throw error;
 
@@ -387,7 +402,7 @@ export const sendMessages: RequestHandler = async (req, res) => {
                 // handoff; server_ack still requires a WhatsApp status event.
                 const savedMessage = await prisma.outgoingMessage.findUnique({
                     where: { id: messageId },
-                    include: { contact: true },
+                    include: { contact: { select: inboxMessageContactSelect } },
                 });
                 if (!savedMessage) {
                     throw new Error('Pesan keluar tidak ditemukan setelah dikirim');
@@ -812,7 +827,7 @@ export const sendInboxMediaMessage: RequestHandler = async (req, res) => {
 
             const savedMessage = await prisma.outgoingMessage.findUnique({
                 where: { id: messageId },
-                include: { contact: true },
+                include: { contact: { select: inboxMessageContactSelect } },
             });
             if (!savedMessage) {
                 throw new Error('Pesan media keluar tidak ditemukan setelah dikirim');

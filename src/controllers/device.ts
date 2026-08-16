@@ -56,6 +56,18 @@ type RuntimeDevice = {
     sessions: Array<{ sessionId: string }>;
 };
 
+const inboxContactSelect = {
+    firstName: true,
+    lastName: true,
+    phone: true,
+    colorCode: true,
+    ContactLabel: {
+        select: {
+            label: { select: { name: true } },
+        },
+    },
+} as const;
+
 function getRuntimeDeviceStatus(device: RuntimeDevice) {
     const sessionId = device.sessions[0]?.sessionId;
     return deriveDeviceRuntimeStatus({
@@ -1562,7 +1574,7 @@ export const getDeviceOutboxConversations: RequestHandler = async (req, res) => 
                 isGroup: true,
                 broadcastType: true,
                 contact: {
-                    select: { firstName: true, lastName: true, phone: true, colorCode: true },
+                    select: inboxContactSelect,
                 },
             },
             orderBy: { createdAt: 'desc' },
@@ -1595,12 +1607,7 @@ export const getDeviceOutboxConversations: RequestHandler = async (req, res) => 
                           },
                           contactDevices: { some: { deviceId: device.pkId } },
                       },
-                      select: {
-                          firstName: true,
-                          lastName: true,
-                          phone: true,
-                          colorCode: true,
-                      },
+                      select: inboxContactSelect,
                   })
                 : Promise.resolve([]),
             recipientJids.length > 0
@@ -1617,12 +1624,7 @@ export const getDeviceOutboxConversations: RequestHandler = async (req, res) => 
                           groupPicUrl: true,
                           profilePicUrl: true,
                           contact: {
-                              select: {
-                                  firstName: true,
-                                  lastName: true,
-                                  phone: true,
-                                  colorCode: true,
-                              },
+                              select: inboxContactSelect,
                           },
                       },
                   })
@@ -2240,12 +2242,7 @@ export const getDeviceInbox: RequestHandler = async (req, res) => {
                     },
                     include: {
                         contact: {
-                            select: {
-                                firstName: true,
-                                lastName: true,
-                                phone: true,
-                                colorCode: true,
-                            },
+                            select: inboxContactSelect,
                         },
                     },
                     orderBy: { receivedAt: 'desc' },

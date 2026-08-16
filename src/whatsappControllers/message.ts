@@ -53,6 +53,16 @@ const whatsappMediaHttpsAgent = new https.Agent({
     maxSockets: 20,
 });
 
+const inboxContactLabelInclude = {
+    ContactLabel: {
+        select: {
+            label: {
+                select: { name: true },
+            },
+        },
+    },
+} as const;
+
 // Baileys can replay the same messages.upsert item during reconnects or emit it
 // through more than one upsert batch. Persistence is already idempotent, but a
 // repeated socket emission would still create duplicate browser notifications.
@@ -430,7 +440,9 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                                             const outgoingMessage =
                                                 await prisma.outgoingMessage.findUnique({
                                                     where: { pkId: currentMessage.pkId },
-                                                    include: { contact: true },
+                                                    include: {
+                                                        contact: { include: inboxContactLabelInclude },
+                                                    },
                                                 });
                                             if (outgoingMessage) {
                                                 io.to(`session:${sessionId}`).emit(
@@ -472,7 +484,11 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                                                 const updatedMessage = statusUpdate.count > 0
                                                     ? await prisma.outgoingMessage.findUnique({
                                                           where: { pkId: existingMessage.pkId },
-                                                          include: { contact: true },
+                                                          include: {
+                                                              contact: {
+                                                                  include: inboxContactLabelInclude,
+                                                              },
+                                                          },
                                                       })
                                                     : null;
                                                 
@@ -498,7 +514,9 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                                                     deviceId: messageDevicePkId,
                                                     contactId: contact?.pkId || null,
                                                 },
-                                                include: { contact: true },
+                                                include: {
+                                                    contact: { include: inboxContactLabelInclude },
+                                                },
                                             });
                                             io.to(`session:${sessionId}`).emit(`message:${sessionId}`, outgoingMessage);
                                             io.to(`session:${sessionId}`).emit(
@@ -820,7 +838,9 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                                             ...(incomingMediaPath ? { mediaPath: incomingMediaPath } : {}),
                                             ...(incomingFileName ? { fileName: incomingFileName } : {}),
                                         },
-                                        include: { contact: true },
+                                        include: {
+                                            contact: { include: inboxContactLabelInclude },
+                                        },
                                     });
 
                                     // WhatsApp CDN access can be intermittent in production. If the
@@ -838,7 +858,11 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                                                     await prisma.incomingMessage.update({
                                                         where: { id: message.key.id! },
                                                         data: { mediaPath: recoveredMediaPath },
-                                                        include: { contact: true },
+                                                        include: {
+                                                            contact: {
+                                                                include: inboxContactLabelInclude,
+                                                            },
+                                                        },
                                                     });
                                                 const recoveredDeviceUuid = await getDeviceUuid();
                                                 io.to(`session:${sessionId}`).emit(`incoming:${sessionId}:media-updated`, {
@@ -889,7 +913,11 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                                                 const [updatedMessage, publicDeviceUuid] = await Promise.all([
                                                     prisma.incomingMessage.findUnique({
                                                         where: { id: message.key.id! },
-                                                        include: { contact: true },
+                                                        include: {
+                                                            contact: {
+                                                                include: inboxContactLabelInclude,
+                                                            },
+                                                        },
                                                     }),
                                                     getDeviceUuid(),
                                                 ]);
