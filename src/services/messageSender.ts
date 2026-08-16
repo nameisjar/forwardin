@@ -112,22 +112,7 @@ async function persistPendingOutgoingMessage(params: {
         return existing;
     };
 
-    const existingReservation = await findExistingReservation();
-    if (existingReservation) {
-        if (existingReservation.status === 'error') {
-            const reclaimed = await prisma.outgoingMessage.updateMany({
-                where: { pkId: existingReservation.pkId, status: 'error' },
-                data: { status: 'pending', updatedAt: new Date() },
-            });
-            if (reclaimed.count === 1) {
-                logger.info(
-                    { deviceId: params.deviceId, messageId: params.messageId },
-                    '[MessageSender] Reclaimed failed idempotent reservation for retry',
-                );
-                return true;
-            }
-        }
-
+    if (await findExistingReservation()) {
         logger.info(
             { deviceId: params.deviceId, messageId: params.messageId },
             '[MessageSender] Reusing idempotent outgoing-message reservation',

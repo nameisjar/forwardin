@@ -408,16 +408,11 @@ export async function recordSignal(data: SignalData): Promise<void> {
             }
             rateLimitCounts.set(deviceId, tracking);
 
-            // Explicit/high-confidence rate-limit responses stop sending at once.
-            // Ambiguous signals still require repeated observations to avoid a
-            // false-positive pause caused by a generic network error.
-            if (confidence === 'high' || tracking.count >= RATE_LIMIT_THRESHOLD) {
+            // Check if threshold exceeded
+            if (tracking.count >= RATE_LIMIT_THRESHOLD) {
                 shouldPause = true;
                 pauseDuration = PAUSE_DURATION_RATE_LIMIT;
-                pauseReason =
-                    confidence === 'high'
-                        ? 'Rate limit eksplisit terdeteksi dari WhatsApp'
-                        : `Rate limit terdeteksi ${tracking.count}x dalam 1 jam`;
+                pauseReason = `Rate limit terdeteksi ${tracking.count}x dalam 1 jam`;
                 action = 'auto_paused';
                 
                 // Reset counter after pause

@@ -45,7 +45,6 @@ import {
     eligibleOutgoingMessageStatuses,
     outgoingMessageStatusLevel,
 } from '../utils/outgoingMessageStatus';
-import { applyInboundConsent } from '../services/broadcastSafety';
 
 const whatsappMediaHttpsAgent = new https.Agent({
     family: 4,
@@ -525,53 +524,24 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                                     }),
                                     'incoming message event'
                                 );
-                                let consentIntent: 'opt_out' | 'opt_in' | null = null;
-                                if (messageDevicePkId && !jid.includes('@g.us')) {
-                                    try {
-                                        consentIntent = await applyInboundConsent({
-                                            deviceId: messageDevicePkId,
-                                            jid,
-                                            text: messageText,
-                                        });
-                                        if (consentIntent) {
-                                            logger.info(
-                                                {
-                                                    deviceId: messageDevicePkId,
-                                                    jid: redactPhone(jid),
-                                                    consentIntent,
-                                                },
-                                                'Updated WhatsApp recipient consent from incoming keyword',
-                                            );
-                                        }
-                                    } catch (consentError) {
-                                        logger.error(
-                                            { consentError, deviceId: messageDevicePkId },
-                                            'Failed to update WhatsApp recipient consent',
-                                        );
-                                    }
-                                }
-
                                 if (!jid.includes('@g.us')) {
-                                    if (consentIntent !== 'opt_out') {
-                                        // Run both replies but don't block the main flow; catch rejections
-                                        Promise.allSettled([
-                                            sendOutsideBusinessHourMessage(sessionId, message),
-                                            sendCampaignReply(sessionId, message),
-                                        ]).then((results) => {
-                                            results.forEach((r, idx) => {
-                                                if (r.status === 'rejected') {
-                                                    logger.error(
-                                                        {
-                                                            idx,
-                                                            reason: (r as PromiseRejectedResult)
-                                                                .reason,
-                                                        },
-                                                        'Aux handler failed',
-                                                    );
-                                                }
-                                            });
+                                    // Run both replies but don't block the main flow; catch rejections
+                                    Promise.allSettled([
+                                        sendOutsideBusinessHourMessage(sessionId, message),
+                                        sendCampaignReply(sessionId, message),
+                                    ]).then((results) => {
+                                        results.forEach((r, idx) => {
+                                            if (r.status === 'rejected') {
+                                                logger.error(
+                                                    {
+                                                        idx,
+                                                        reason: (r as PromiseRejectedResult).reason,
+                                                    },
+                                                    'Aux handler failed',
+                                                );
+                                            }
                                         });
-                                    }
+                                    });
                                 } else {
                                     // For group messages, still trigger campaign reply (if desired)
                                     Promise.allSettled([
