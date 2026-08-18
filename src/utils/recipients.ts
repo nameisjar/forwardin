@@ -7,6 +7,14 @@ export type NormalizedBroadcastRecipient = {
     type: 'number' | 'group';
 };
 
+export type StoredWhatsAppGroup = {
+    groupId: string;
+    groupName: string;
+    isActive: boolean;
+    sessionId: string | null;
+    updatedAt?: Date;
+};
+
 function normalizePersonalNumber(value: string): string {
     if (!/^\+?[\d\s().-]+$/.test(value)) {
         throw new Error('Nomor penerima tidak valid');
@@ -63,6 +71,53 @@ export function normalizeBroadcastRecipient(recipient: unknown): NormalizedBroad
         jid: `${normalizePersonalNumber(raw)}@s.whatsapp.net`,
         type: 'number',
     };
+}
+
+function normalizeGroupJid(value: string): string {
+    const raw = String(value || '').trim();
+    return raw.toLowerCase().endsWith('@g.us') ? raw : `${raw}@g.us`;
+}
+
+/**
+ * Rebind a stored group recipient after a QR relink/WhatsApp number change.
+ * The replacement is deliberately conservative: it is only used when there
+ * is exactly one active group with the same name on the current live session.
+ */
+export function resolveScheduledGroupRecipient(
+    originalJid: string,
+    activeSessionId: string,
+    groups: StoredWhatsAppGroup[],
+): string {
+    const normalizedOriginal = normalizeGroupJid(originalJid);
+    const originalGroupId = normalizedOriginal.replace(/@g\.us$/i, '');
+    const storedGroup = groups.find(
+        (group) => String(group.groupId).replace(/@g\.us$/i, '') === originalGroupId,
+    );
+
+    if (!storedGroup) return normalizedOriginal;
+    if (
+        storedGroup.isActive &&
+        (!storedGroup.sessionId || storedGroup.sessionId === activeSessionId)
+    ) {
+        return normalizedOriginal;
+    }
+
+    const currentSessionMatches = groups.filter(
+        (group) =>
+            group.isActive &&
+            group.sessionId === activeSessionId &&
+            group.groupName === storedGroup.groupName,
+    );
+
+    if (currentSessionMatches.length !== 1) return normalizedOriginal;
+    return normalizeGroupJid(currentSessionMatches[0].groupId);
+}
+
+/** Group metadata lookup happens before send, so it is safe to retry. */
+export function getRecipientVerificationFailureStatus(
+    normalizedRecipient?: NormalizedBroadcastRecipient,
+): 'failed' | 'invalid' {
+    return normalizedRecipient?.type === 'group' ? 'failed' : 'invalid';
 }
 
 export async function getRecipients(broadcast: any) {

@@ -1811,6 +1811,31 @@ export function getInstance(sessionId: string) {
     return session;
 }
 
+/**
+ * Resolve the live WhatsApp owner for a device.
+ *
+ * A device can retain many Session rows because the table also stores auth
+ * keys. After a QR relink or WhatsApp number change, reading `sessions[0]`
+ * can therefore select a superseded session. `deviceSessionOwners` is the
+ * runtime source of truth enforced by createInstance().
+ */
+export function getConnectedDeviceInstance(deviceId: number) {
+    const sessionId = deviceSessionOwners.get(deviceId);
+    if (!sessionId) return null;
+
+    const session = instances.get(sessionId);
+    if (
+        !session ||
+        !isSessionConnected(sessionId) ||
+        !session.user ||
+        !session.ws.isOpen
+    ) {
+        return null;
+    }
+
+    return { sessionId, session };
+}
+
 export function getInstanceStatus(session: Instance) {
     const state = ['CONNECTING', 'CONNECTED', 'DISCONNECTING', 'DISCONNECTED'];
     let status = 'DISCONNECTED';

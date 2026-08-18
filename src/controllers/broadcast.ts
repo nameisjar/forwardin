@@ -2,10 +2,16 @@
 import { RequestHandler } from 'express';
 import prisma from '../utils/db';
 import schedule from 'node-schedule';
-import { getInstance, sendMediaFile, verifyJid } from '../whatsapp';
+import { getConnectedDeviceInstance, sendMediaFile, verifyJid } from '../whatsapp';
 import logger from '../config/logger';
 import { delay as delayMs } from '../utils/delay';
-import { getRecipients, normalizeBroadcastRecipient } from '../utils/recipients';
+import {
+    getRecipientVerificationFailureStatus,
+    getRecipients,
+    normalizeBroadcastRecipient,
+    resolveScheduledGroupRecipient,
+    StoredWhatsAppGroup,
+} from '../utils/recipients';
 import { replaceVariables } from '../utils/variableHelper';
 import { diskUpload, getMediaUploadErrorMessage } from '../config/multer';
 import {
@@ -1713,16 +1719,38 @@ schedule.scheduleJob('* * * * *', async () => {
             where: {
                 schedule: { lte: now },
                 status: true,
-                isSent: false,
                 attemptCount: { lt: MAX_ATTEMPTS },
-                OR: [{ lastAttemptAt: null }, { lastAttemptAt: { lt: cooldownThreshold } }],
+                OR: [
+                    { isSent: false },
+                    {
+                        // Safe recovery for old scheduled group failures. These
+                        // recipients failed verification before send, so there
+                        // is no duplicate-delivery risk.
+                        isSent: true,
+                        sentCount: 0,
+                        broadcastRecipients: {
+                            some: {
+                                status: 'invalid',
+                                messageId: null,
+                                phone: { endsWith: '@g.us' },
+                            },
+                        },
+                    },
+                ],
+                AND: [
+                    {
+                        OR: [
+                            { lastAttemptAt: null },
+                            { lastAttemptAt: { lt: cooldownThreshold } },
+                        ],
+                    },
+                ],
             },
             include: {
                 device: {
                     select: {
                         pkId: true,
                         id: true,
-                        sessions: { select: { sessionId: true } },
                         contactDevices: { select: { contact: true } },
                     },
                 },
@@ -1738,19 +1766,20 @@ schedule.scheduleJob('* * * * *', async () => {
 
         // Load natural delay config sekali untuk semua broadcasts
         const naturalDelayConfig = loadNaturalDelayConfig();
+        const storedGroupsByDevice = new Map<number, StoredWhatsAppGroup[]>();
 
         for (const broadcast of pendingBroadcasts) {
-            const sessionId = broadcast.device.sessions[0]?.sessionId;
-            const session = sessionId ? getInstance(sessionId) : null;
+            const connectedDevice = getConnectedDeviceInstance(broadcast.device.pkId);
 
             // CRITICAL: Jangan proses jika session tidak ada
-            if (!session) {
+            if (!connectedDevice) {
                 logger.warn(
                     { broadcastId: broadcast.id, attemptCount: broadcast.attemptCount },
-                    'Session not found, skipping (will NOT increment attempt or mark sent)',
+                    'Connected device session not found, skipping (will NOT increment attempt or mark sent)',
                 );
                 continue;
             }
+            const { sessionId, session } = connectedDevice;
 
             // 🔥 Check if device is healthy enough to send messages
             const deviceCanSend = await canDeviceSend(broadcast.device.pkId);
@@ -1771,16 +1800,40 @@ schedule.scheduleJob('* * * * *', async () => {
             const lockAcquired = await prisma.broadcast.updateMany({
                 where: {
                     id: broadcast.id,
-                    isSent: false,
-                    // Hanya lock jika belum diproses dalam 2 menit terakhir
-                    OR: [
-                        { lastAttemptAt: null },
-                        { lastAttemptAt: { lt: new Date(Date.now() - 2 * 60 * 1000) } },
+                    AND: [
+                        {
+                            OR: [
+                                { isSent: false },
+                                {
+                                    isSent: true,
+                                    sentCount: 0,
+                                    broadcastRecipients: {
+                                        some: {
+                                            status: 'invalid',
+                                            messageId: null,
+                                            phone: { endsWith: '@g.us' },
+                                        },
+                                    },
+                                },
+                            ],
+                        },
+                        {
+                            // Hanya lock jika belum diproses dalam 2 menit terakhir
+                            OR: [
+                                { lastAttemptAt: null },
+                                {
+                                    lastAttemptAt: {
+                                        lt: new Date(Date.now() - 2 * 60 * 1000),
+                                    },
+                                },
+                            ],
+                        },
                     ],
                 },
                 data: {
                     attemptCount: { increment: 1 },
                     lastAttemptAt: new Date(),
+                    isSent: false,
                 },
             });
 
@@ -1817,10 +1870,34 @@ schedule.scheduleJob('* * * * *', async () => {
             const pendingRecipients = await prisma.broadcastRecipient.findMany({
                 where: {
                     broadcastId: broadcast.pkId,
-                    status: { in: ['pending', 'failed'] }, // Retry failed ones too
+                    OR: [
+                        { status: { in: ['pending', 'failed'] } },
+                        {
+                            // Recover group recipients previously classified as
+                            // invalid when metadata was temporarily unavailable.
+                            status: 'invalid',
+                            messageId: null,
+                            phone: { endsWith: '@g.us' },
+                        },
+                    ],
                 },
                 orderBy: { pkId: 'asc' },
             });
+
+            let storedWhatsAppGroups = storedGroupsByDevice.get(broadcast.device.pkId);
+            if (!storedWhatsAppGroups) {
+                storedWhatsAppGroups = await prisma.whatsAppGroup.findMany({
+                    where: { deviceId: broadcast.device.pkId },
+                    select: {
+                        groupId: true,
+                        groupName: true,
+                        isActive: true,
+                        sessionId: true,
+                        updatedAt: true,
+                    },
+                });
+                storedGroupsByDevice.set(broadcast.device.pkId, storedWhatsAppGroups);
+            }
 
             // Fallback: If no BroadcastRecipient records exist (old broadcasts), create them
             if (pendingRecipients.length === 0) {
@@ -1913,26 +1990,56 @@ schedule.scheduleJob('* * * * *', async () => {
                 }
 
                 // Normalize and verify before changing the recipient to
-                // "sending". Invalid/non-existent recipients are terminal and
-                // must never enter the automatic retry pool.
-                let jid: string;
+                // "sending". Malformed/non-existent personal recipients are
+                // terminal; group metadata failures remain safely retryable.
+                let jid: string | undefined;
+                let normalizedRecipient: ReturnType<typeof normalizeBroadcastRecipient> | undefined;
                 try {
-                    const normalizedRecipient = normalizeBroadcastRecipient(recipient);
-                    jid = normalizedRecipient.jid;
+                    normalizedRecipient = normalizeBroadcastRecipient(recipient);
+                    jid =
+                        normalizedRecipient.type === 'group'
+                            ? resolveScheduledGroupRecipient(
+                                  normalizedRecipient.jid,
+                                  sessionId,
+                                  storedWhatsAppGroups,
+                              )
+                            : normalizedRecipient.jid;
+                    if (jid !== normalizedRecipient.jid) {
+                        logger.info(
+                            {
+                                broadcastId: broadcast.id,
+                                previousRecipient: redactPhone(normalizedRecipient.jid),
+                                resolvedRecipient: redactPhone(jid),
+                                sessionId,
+                            },
+                            'Rebound scheduled group recipient to the active WhatsApp session',
+                        );
+                    }
                     await verifyJid(session, jid, normalizedRecipient.type);
                 } catch (validationError: any) {
                     const validationMessage =
                         validationError?.message || 'Recipient verification failed';
+                    const failureStatus =
+                        getRecipientVerificationFailureStatus(normalizedRecipient);
                     failCount++;
 
-                    errors.push(`Invalid recipient: ${recipient} - ${validationMessage}`);
+                    errors.push(
+                        `${
+                            failureStatus === 'failed'
+                                ? 'Group verification failed'
+                                : 'Invalid recipient'
+                        }: ${recipient} - ${validationMessage}`,
+                    );
 
                     await prisma.broadcastRecipient.update({
                         where: { pkId: recipientRecord.pkId },
                         data: {
-                            status: 'invalid',
-                            jid: null,
+                            status: failureStatus,
+                            jid: jid || null,
                             errorMsg: validationMessage,
+                            ...(failureStatus === 'failed'
+                                ? { retryCount: { increment: 1 } }
+                                : {}),
                             updatedAt: new Date(),
                         },
                     });
@@ -1942,7 +2049,9 @@ schedule.scheduleJob('* * * * *', async () => {
                             recipient: redactPhone(recipient),
                             error: validationMessage,
                         },
-                        'Broadcast recipient rejected before send',
+                        failureStatus === 'failed'
+                            ? 'Broadcast group verification failed before send; scheduled for safe retry'
+                            : 'Broadcast recipient rejected before send',
                     );
                     continue;
                 }
@@ -1957,7 +2066,7 @@ schedule.scheduleJob('* * * * *', async () => {
                 const claim = await prisma.broadcastRecipient.updateMany({
                     where: {
                         pkId: recipientRecord.pkId,
-                        status: { in: ['pending', 'failed'] },
+                        status: { in: ['pending', 'failed', 'invalid'] },
                     },
                     data: {
                         status: 'sending',
