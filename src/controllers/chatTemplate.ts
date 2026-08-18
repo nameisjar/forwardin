@@ -2,6 +2,10 @@ import { Prisma } from '@prisma/client';
 import { RequestHandler } from 'express';
 import logger from '../config/logger';
 import prisma from '../utils/db';
+import {
+    ExistingChatTemplate,
+    planChatTemplateImport,
+} from '../utils/chatTemplateImport';
 
 const MAX_TITLE_LENGTH = 128;
 const MAX_MESSAGE_LENGTH = 10_000;
@@ -111,5 +115,82 @@ export const deleteChatTemplate: RequestHandler = async (req, res) => {
     } catch (error) {
         logger.error(error, 'Failed to delete chat template');
         res.status(500).json({ message: 'Gagal menghapus template chat' });
+    }
+};
+
+export const importChatTemplates: RequestHandler = async (req, res) => {
+    const dryRun = req.body?.dryRun === true;
+
+    try {
+        const existingTemplates: ExistingChatTemplate[] = await prisma.chatTemplate.findMany({
+            where: { userId: req.authenticatedUser.pkId },
+            select: { pkId: true, id: true, title: true, message: true },
+        });
+        const plan = planChatTemplateImport(req.body?.rows, existingTemplates);
+
+        if (dryRun) {
+            return res.status(200).json({
+                valid: plan.errors.length === 0,
+                summary: plan.summary,
+                errors: plan.errors,
+            });
+        }
+        if (plan.errors.length > 0) {
+            return res.status(400).json({
+                message: 'Data import belum valid',
+                valid: false,
+                summary: plan.summary,
+                errors: plan.errors,
+            });
+        }
+
+        const updateRows = plan.rows.filter(
+            (row): row is typeof row & { pkId: number } => row.action === 'update' && row.pkId !== undefined,
+        );
+        const createRows = plan.rows.filter((row) => row.action === 'create');
+        const importMarker = Date.now();
+
+        await prisma.$transaction(async (tx) => {
+            // Gunakan judul sementara agar pertukaran judul antar-template tetap
+            // dapat dilakukan tanpa melanggar unique constraint di tengah proses.
+            for (const [index, row] of updateRows.entries()) {
+                await tx.chatTemplate.update({
+                    where: { pkId: row.pkId },
+                    data: { title: `__import_${importMarker}_${index}_${row.pkId}` },
+                });
+            }
+            for (const row of updateRows) {
+                await tx.chatTemplate.update({
+                    where: { pkId: row.pkId },
+                    data: { title: row.title, message: row.message },
+                });
+            }
+            for (const row of createRows) {
+                await tx.chatTemplate.create({
+                    data: {
+                        title: row.title,
+                        message: row.message,
+                        userId: req.authenticatedUser.pkId,
+                    },
+                });
+            }
+        });
+
+        const templates = await prisma.chatTemplate.findMany({
+            where: { userId: req.authenticatedUser.pkId },
+            select: templateSelect,
+            orderBy: [{ updatedAt: 'desc' }, { title: 'asc' }],
+        });
+        return res.status(200).json({
+            message: 'Template chat berhasil diimport',
+            valid: true,
+            summary: plan.summary,
+            errors: [],
+            data: templates,
+        });
+    } catch (error) {
+        if (sendKnownError(error, res)) return;
+        logger.error(error, 'Failed to import chat templates');
+        return res.status(500).json({ message: 'Gagal mengimport template chat' });
     }
 };
