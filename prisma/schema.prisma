@@ -35,6 +35,7 @@ model User {
   Group                    Group[]
   Subscription             Subscription[]
   Template                 Template[]
+  chatTemplates            ChatTemplate[]
   notifications            Notification[]
   codeSnippets             CodeSnippet[]
 }
@@ -433,8 +434,8 @@ model Conversation {
   jid                  String    @db.VarChar(128)
   isGroup              Boolean   @default(false) @map("is_group")
   contactId            Int?      @map("contact_id")
-  pushName              String?   @map("push_name") @db.VarChar(255)
-  groupName             String?   @map("group_name") @db.VarChar(255)
+  pushName             String?   @map("push_name") @db.VarChar(255)
+  groupName            String?   @map("group_name") @db.VarChar(255)
   lastMessageId        String?   @map("last_message_id") @db.VarChar(255)
   lastMessageDirection String?   @map("last_message_direction") @db.VarChar(10)
   lastMessageAt        DateTime? @map("last_message_at")
@@ -706,6 +707,20 @@ model Template {
   user      User     @relation(fields: [userId], references: [pkId], onDelete: Cascade)
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @default(now()) @map("updated_at")
+}
+
+model ChatTemplate {
+  pkId      Int      @id @default(autoincrement()) @map("pk_id")
+  id        String   @unique @default(uuid()) @db.Uuid
+  title     String   @db.VarChar(128)
+  message   String
+  userId    Int      @map("user_id")
+  user      User     @relation(fields: [userId], references: [pkId], onDelete: Cascade)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@unique([userId, title])
+  @@index([userId, updatedAt])
 }
 
 model PasswordReset {

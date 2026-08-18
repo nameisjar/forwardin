@@ -29,6 +29,7 @@ import algorithmicsRoutes from './algorithmics';
 import deviceApiExternal from './deviceApiExternal';
 import healthRoutes from './health';
 import codeSnippetRoutes from './codeSnippets';
+import chatTemplateRoutes from './chatTemplates';
 import inboxRetentionRoutes from './inboxRetention';
 import { getSnippetByShareToken } from '../controllers/codeSnippet';
 
@@ -72,6 +73,7 @@ router.use('/course', authMiddleware, courseRoutes); // 🔥 Tambahkan ini!
 router.use('/tutors', tutorsRoutes);
 router.use('/whatsapp-groups', whatsappGroupRoutes);
 router.use('/code-snippets', authMiddleware, codeSnippetRoutes);
+router.use('/chat-templates', authMiddleware, chatTemplateRoutes);
 // Public route for viewing shared snippets (no auth required)
 router.get('/snippets/share/:token', getSnippetByShareToken);
 // Media static files - allow cross-origin access for frontend with caching
