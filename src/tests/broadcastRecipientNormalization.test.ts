@@ -26,6 +26,14 @@ describe('Broadcast recipient normalization', () => {
             jid: '120363012345678901-1234567890@g.us',
             type: 'group',
         });
+        expect(normalizeBroadcastRecipient('120363012345678901@g.us')).to.deep.equal({
+            jid: '120363012345678901@g.us',
+            type: 'group',
+        });
+        expect(normalizeBroadcastRecipient('120363012345678901-1234567890@G.US')).to.deep.equal({
+            jid: '120363012345678901-1234567890@g.us',
+            type: 'group',
+        });
         expect(normalizeBroadcastRecipient('987654321@LID')).to.deep.equal({
             jid: '987654321@lid',
             type: 'number',
@@ -39,6 +47,9 @@ describe('Broadcast recipient normalization', () => {
             'not-a-number',
             'phone628123456789',
             '123@example.com',
+            '120363abc123456789@g.us',
+            '120363012345678901--1234567890@g.us',
+            '120363012345678901-abc@g.us',
         ]) {
             expect(() => normalizeBroadcastRecipient(recipient)).to.throw();
         }
@@ -46,24 +57,20 @@ describe('Broadcast recipient normalization', () => {
 
     it('rebinds an inactive group JID to the unique active group on the live session', () => {
         expect(
-            resolveScheduledGroupRecipient(
-                '120363012345678901-1111111111@g.us',
-                'session-new',
-                [
-                    {
-                        groupId: '120363012345678901-1111111111@g.us',
-                        groupName: 'Kelas ABC',
-                        isActive: false,
-                        sessionId: 'session-old',
-                    },
-                    {
-                        groupId: '120363099999999999-2222222222@g.us',
-                        groupName: 'Kelas ABC',
-                        isActive: true,
-                        sessionId: 'session-new',
-                    },
-                ],
-            ),
+            resolveScheduledGroupRecipient('120363012345678901-1111111111@g.us', 'session-new', [
+                {
+                    groupId: '120363012345678901-1111111111@g.us',
+                    groupName: 'Kelas ABC',
+                    isActive: false,
+                    sessionId: 'session-old',
+                },
+                {
+                    groupId: '120363099999999999-2222222222@g.us',
+                    groupName: 'Kelas ABC',
+                    isActive: true,
+                    sessionId: 'session-new',
+                },
+            ]),
         ).to.equal('120363099999999999-2222222222@g.us');
     });
 

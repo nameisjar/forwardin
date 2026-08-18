@@ -15,6 +15,16 @@ export type StoredWhatsAppGroup = {
     updatedAt?: Date;
 };
 
+// WhatsApp currently uses both modern numeric group IDs (120363...@g.us)
+// and legacy creator/timestamp IDs (12345-67890@g.us). Keep this stricter
+// than Baileys' suffix-only isJidGroup check so malformed stored recipients
+// are still rejected before a send is attempted.
+const GROUP_JID_LOCAL_PART_PATTERN = /^\d{10,30}(?:-\d{5,20})?$/;
+
+function isValidGroupJidLocalPart(value: string): boolean {
+    return GROUP_JID_LOCAL_PART_PATTERN.test(value);
+}
+
 function normalizePersonalNumber(value: string): string {
     if (!/^\+?[\d\s().-]+$/.test(value)) {
         throw new Error('Nomor penerima tidak valid');
@@ -39,10 +49,13 @@ export function normalizeBroadcastRecipient(recipient: unknown): NormalizedBroad
     const atIndex = raw.lastIndexOf('@');
     if (atIndex >= 0) {
         const localPart = raw.slice(0, atIndex).trim();
-        const domain = raw.slice(atIndex + 1).trim().toLowerCase();
+        const domain = raw
+            .slice(atIndex + 1)
+            .trim()
+            .toLowerCase();
 
         if (domain === 'g.us') {
-            if (!/^\d{10,20}-\d{5,20}$/.test(localPart)) {
+            if (!isValidGroupJidLocalPart(localPart)) {
                 throw new Error('JID grup tidak valid');
             }
             return { jid: `${localPart}@g.us`, type: 'group' };
@@ -63,7 +76,10 @@ export function normalizeBroadcastRecipient(recipient: unknown): NormalizedBroad
         throw new Error('Domain JID penerima tidak didukung');
     }
 
-    if (/^\d{10,20}-\d{5,20}$/.test(raw)) {
+    // A suffix-less numeric token is ambiguous with a phone number. Only the
+    // unambiguous legacy group form is inferred here; modern group IDs must
+    // retain their @g.us suffix when stored.
+    if (/^\d{10,30}-\d{5,20}$/.test(raw)) {
         return { jid: `${raw}@g.us`, type: 'group' };
     }
 
