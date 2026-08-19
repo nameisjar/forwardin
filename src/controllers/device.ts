@@ -1375,6 +1375,7 @@ type ConversationTimelineRow = {
     mediaPath: string | null;
     fileName: string | null;
     timestamp: Date;
+    editedAt: Date | null;
     status: string | null;
     isRead: boolean | null;
     isGroup: boolean;
@@ -1470,6 +1471,7 @@ export const getDeviceConversationTimeline: RequestHandler = async (req, res) =>
                     incoming."mediaPath" AS "mediaPath",
                     incoming."file_name" AS "fileName",
                     incoming."received_at" AS "timestamp",
+                    incoming."edited_at" AS "editedAt",
                     NULL::TEXT AS "status",
                     incoming."is_read" AS "isRead",
                     (incoming."from" LIKE '%@g.us') AS "isGroup",
@@ -1495,6 +1497,7 @@ export const getDeviceConversationTimeline: RequestHandler = async (req, res) =>
                     outgoing."mediaPath" AS "mediaPath",
                     outgoing."file_name" AS "fileName",
                     outgoing."created_at" AS "timestamp",
+                    NULL::TIMESTAMP(3) AS "editedAt",
                     outgoing."status" AS "status",
                     NULL::BOOLEAN AS "isRead",
                     COALESCE(outgoing."isGroup", false) OR (outgoing."to" LIKE '%@g.us') AS "isGroup",

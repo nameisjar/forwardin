@@ -409,6 +409,7 @@ model IncomingMessage {
   fileName      String?   @map("file_name")
   isRead        Boolean   @default(false) @map("is_read") // Status pesan sudah dibaca user
   receivedAt    DateTime  @map("received_at")
+  editedAt      DateTime? @map("edited_at")
   createdAt     DateTime  @default(now()) @map("created_at")
   updatedAt     DateTime  @default(now()) @map("updated_at")
   inboxHiddenAt DateTime? @map("inbox_hidden_at")
@@ -417,12 +418,31 @@ model IncomingMessage {
   device        Device?   @relation(fields: [deviceId], references: [pkId], onDelete: Cascade)
   contactId     Int?
   contact       Contact?  @relation(fields: [contactId], references: [pkId], onDelete: Cascade)
+  editSecret    IncomingMessageSecret?
 
   @@index([deviceId], map: "idx_incoming_message_device")
   @@index([deviceId, isRead], map: "idx_incoming_message_device_read")
   @@index([deviceId, inboxHiddenAt, receivedAt], map: "idx_incoming_message_inbox_retention")
   @@index([deviceId, inboxHiddenAt, from, receivedAt], map: "idx_incoming_message_inbox_conversation")
   @@index([deviceId, from, isRead], map: "idx_incoming_message_conversation_read")
+}
+
+/// Encrypted WhatsApp message secret used to decrypt later edit events.
+/// Kept outside IncomingMessage so it is never included in Inbox API payloads.
+model IncomingMessageSecret {
+  pkId            Int             @id @default(autoincrement()) @map("pk_id")
+  messageId       String          @unique @map("message_id")
+  deviceId        Int             @map("device_id")
+  sessionId       String          @map("session_id") @db.VarChar(128)
+  senderJid       String          @map("sender_jid") @db.VarChar(128)
+  senderAltJid    String?         @map("sender_alt_jid") @db.VarChar(128)
+  encryptedSecret String          @map("encrypted_secret") @db.Text
+  createdAt       DateTime        @default(now()) @map("created_at")
+  updatedAt       DateTime        @updatedAt @map("updated_at")
+  incomingMessage IncomingMessage @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  @@index([deviceId, sessionId], map: "idx_incoming_message_secret_device_session")
+  @@map("incoming_message_secret")
 }
 
 /// Denormalized Inbox conversation summary. Message bodies remain in

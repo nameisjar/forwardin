@@ -22,7 +22,12 @@ import fs from 'fs';
 import path from 'path';
 import { getSocketIO } from '../socket';
 import { Server } from 'socket.io';
-import { safeMessageContext, redactPhone, redactMessageObject } from '../utils/logRedaction';
+import {
+    describePayloadShape,
+    safeMessageContext,
+    redactPhone,
+    redactMessageObject,
+} from '../utils/logRedaction';
 import {
     decryptIncomingMessage,
     encryptMessage,
@@ -50,6 +55,15 @@ import {
     outgoingMessageStatusLevel,
     resolveParticipantReceiptStatus,
 } from '../utils/outgoingMessageStatus';
+import {
+    extractMessageEditEnvelope,
+    isMessageEditEnvelope,
+} from '../utils/messageEdit';
+import { applyIncomingMessageEdit } from '../services/incomingMessageEdit';
+import {
+    applySecretIncomingMessageEdit,
+    saveIncomingMessageSecret,
+} from '../services/incomingMessageSecret';
 
 const whatsappMediaHttpsAgent = new https.Agent({
     family: 4,
@@ -305,6 +319,50 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                               jidNormalizedUser(remoteJidRaw);
                         const data = transformPrisma(message);
                         const messageDevicePkId = await getDevicePkId();
+
+                        // Recent WhatsApp versions encrypt group-message edits
+                        // with the original messageSecret. This control event
+                        // must be decrypted and applied in-place, never stored
+                        // as a generic Inbox message.
+                        if (
+                            messageDevicePkId
+                            && await applySecretIncomingMessageEdit({
+                                sessionId,
+                                deviceId: messageDevicePkId,
+                                key: message.key,
+                                content: message.message,
+                                messageTimestamp: message.messageTimestamp,
+                            })
+                        ) continue;
+
+                        // Edits are metadata updates for an existing WhatsApp
+                        // message. Baileys emits the canonical edit through
+                        // messages.update; never let an edit wrapper fall
+                        // through and become a new "[Pesan]" Inbox bubble.
+                        if (isMessageEditEnvelope(message.message)) {
+                            const messageEdit = extractMessageEditEnvelope(
+                                message.message,
+                                message.key.id,
+                                message.messageTimestamp,
+                            );
+                            if (messageEdit && messageDevicePkId) {
+                                await applyIncomingMessageEdit({
+                                    sessionId,
+                                    deviceId: messageDevicePkId,
+                                    messageId: messageEdit.targetMessageId,
+                                    text: messageEdit.text,
+                                    editedAt: messageEdit.editedAt,
+                                    remoteJid: message.key.remoteJid,
+                                });
+                            } else {
+                                logger.warn(
+                                    { sessionId, messageId: message.key.id },
+                                    'Skipped unsupported message-edit envelope',
+                                );
+                            }
+                            continue;
+                        }
+
                         const messageContent = extractMessageContent(message.message);
                         const reactionMessage = messageContent?.reactionMessage;
 
@@ -345,6 +403,16 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                             (messageContent?.audioMessage ? '[Audio]' : '') ||
                             (stickerMessage ? '[Stiker]' : '') ||
                             '[Pesan]';
+
+                        if (messageText === '[Pesan]') {
+                            logger.warn(
+                                safeMessageContext(sessionId, message.key, {
+                                    messageStubType: message.messageStubType,
+                                    payloadShape: describePayloadShape(message.message),
+                                }),
+                                'Unsupported incoming WhatsApp payload shape',
+                            );
+                        }
 
                         const contact = await prisma.contact.findFirst({
                             where: {
@@ -846,6 +914,16 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                                             contact: { include: inboxContactLabelInclude },
                                         },
                                     });
+
+                                    if (messageDevicePkId) {
+                                        await saveIncomingMessageSecret({
+                                            messageId: incomingMessage.id,
+                                            deviceId: messageDevicePkId,
+                                            sessionId,
+                                            key: message.key,
+                                            content: messageContent,
+                                        });
+                                    }
 
                                     // WhatsApp CDN access can be intermittent in production. If the
                                     // initial attempts fail, recover the media without delaying the

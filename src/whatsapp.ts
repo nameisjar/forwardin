@@ -60,6 +60,8 @@ import {
     sendGenericMessage,
     type SendMessageOptions,
 } from './services/messageSender';
+import { extractMessageEdit } from './utils/messageEdit';
+import { applyIncomingMessageEdit } from './services/incomingMessageEdit';
 
 export type SessionDestroyResult = {
     logoutAttempted: boolean;
@@ -1594,11 +1596,34 @@ async function createInstanceInternal(
             if (!isActiveGeneration()) return;
             for (const update of updates) {
                 try {
-                    // Update hanya untuk pesan yang kita kirim (fromMe: true)
-                    if (!update.key || !update.key.fromMe) continue;
+                    if (!update.key) continue;
 
                     const messageId = update.key.id;
                     if (!messageId) continue;
+
+                    // Baileys converts WhatsApp MESSAGE_EDIT protocol messages
+                    // into messages.update events whose key points to the
+                    // original message. Apply incoming edits in-place before
+                    // the outgoing ACK/NACK branch below.
+                    const messageEdit = extractMessageEdit(update.update);
+                    if (messageEdit) {
+                        // Do not trust fromMe here: for edits Baileys can keep
+                        // the sender-perspective flag on the target key. The
+                        // scoped incoming-message lookup is the source of truth.
+                        await applyIncomingMessageEdit({
+                            sessionId,
+                            deviceId,
+                            messageId,
+                            text: messageEdit.text,
+                            editedAt: messageEdit.editedAt,
+                            remoteJid: update.key.remoteJid,
+                        });
+                        continue;
+                    }
+
+                    // The remaining messages.update states are delivery
+                    // updates for messages sent by this account.
+                    if (!update.key.fromMe) continue;
 
                     // Determine new status from update
                     let newStatus: string | null = null;

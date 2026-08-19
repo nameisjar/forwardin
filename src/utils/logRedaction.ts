@@ -131,6 +131,41 @@ export function redactMessageObject(msg: Record<string, unknown> | undefined | n
 }
 
 /**
+ * Describe only the structure of a Baileys payload for protocol diagnostics.
+ * Message bodies and other scalar values are never included. WhatsApp message
+ * IDs and numeric enum values are retained so related protocol events can be
+ * correlated without logging chat content or phone numbers.
+ */
+export function describePayloadShape(
+    value: unknown,
+    depth = 0,
+): unknown {
+    if (depth >= 8) return '[MAX_DEPTH]';
+    if (value === null) return 'null';
+    if (value === undefined) return 'undefined';
+    if (value instanceof Uint8Array) return `[binary:${value.byteLength}]`;
+    if (Array.isArray(value)) {
+        return value.slice(0, 10).map(item => describePayloadShape(item, depth + 1));
+    }
+    if (typeof value !== 'object') return typeof value;
+
+    const result: Record<string, unknown> = {};
+    for (const [key, nestedValue] of Object.entries(value as Record<string, unknown>)) {
+        if (key === 'id' && typeof nestedValue === 'string') {
+            result[key] = nestedValue;
+        } else if (
+            (key === 'type' || key === 'messageStubType')
+            && typeof nestedValue === 'number'
+        ) {
+            result[key] = nestedValue;
+        } else {
+            result[key] = describePayloadShape(nestedValue, depth + 1);
+        }
+    }
+    return result;
+}
+
+/**
  * Check if a key should be fully redacted
  */
 function shouldFullyRedact(key: string): boolean {
