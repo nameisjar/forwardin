@@ -1560,9 +1560,30 @@ export const getDeviceConversationTimeline: RequestHandler = async (req, res) =>
                     )),
             ),
         ];
-        const [senderProfileCache, quotedIncomingMessages, quotedOutgoingMessages] =
+        const senderPhones = [
+            ...new Set(
+                senderJids
+                    .map((jid) => jid.split('@')[0].split(':')[0].replace(/\D/g, ''))
+                    .filter(Boolean),
+            ),
+        ];
+        const [senderProfileCache, senderContacts, quotedIncomingMessages, quotedOutgoingMessages] =
             await Promise.all([
                 getInboxProfileCacheSummaries(device.pkId, senderJids),
+                senderPhones.length > 0
+                    ? prisma.contact.findMany({
+                          where: {
+                              phone: {
+                                  in: [
+                                      ...senderPhones,
+                                      ...senderPhones.map((phone) => `+${phone}`),
+                                  ],
+                              },
+                              contactDevices: { some: { deviceId: device.pkId } },
+                          },
+                          select: inboxContactSelect,
+                      })
+                    : Promise.resolve([]),
                 quotedMessageIds.length > 0
                     ? prisma.incomingMessage.findMany({
                           where: {
@@ -1596,6 +1617,9 @@ export const getDeviceConversationTimeline: RequestHandler = async (req, res) =>
                       })
                     : Promise.resolve([]),
             ]);
+        const senderContactsByPhone = new Map(
+            senderContacts.map((contact) => [contact.phone.replace(/\D/g, ''), contact]),
+        );
         const quotedIncomingById = new Map(
             quotedIncomingMessages.map((message) => [message.id, message]),
         );
@@ -1618,6 +1642,9 @@ export const getDeviceConversationTimeline: RequestHandler = async (req, res) =>
                 && row.participant
                 && senderJids.includes(row.participant),
             );
+            const senderPhone = row.participant
+                ? row.participant.split('@')[0].split(':')[0].replace(/\D/g, '')
+                : '';
             const quotedTarget = row.quotedMessageId
                 ? row.quotedFromMe === true
                     ? quotedOutgoingById.get(row.quotedMessageId)
@@ -1659,6 +1686,9 @@ export const getDeviceConversationTimeline: RequestHandler = async (req, res) =>
                     : null,
                 senderProfileStatus: senderProfile?.status
                     || (senderProfileEligible ? 'pending' : 'unavailable'),
+                senderContact: senderPhone
+                    ? senderContactsByPhone.get(senderPhone) || null
+                    : null,
             };
         });
 

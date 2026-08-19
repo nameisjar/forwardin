@@ -1155,22 +1155,11 @@ export const deleteContacts: RequestHandler = async (req, res) => {
 
         const contactPkIds = contacts.map((c) => c.pkId);
 
-        await prisma.$transaction(async (transaction) => {
-            // Delete related records first
-            await transaction.contactLabel.deleteMany({
-                where: { contactId: { in: contactPkIds } },
-            });
-            await transaction.contactDevice.deleteMany({
-                where: { contactId: { in: contactPkIds } },
-            });
-            await transaction.contactGroup.deleteMany({
-                where: { contactId: { in: contactPkIds } },
-            });
-
-            // Delete contacts
-            await transaction.contact.deleteMany({
-                where: { pkId: { in: contactPkIds } },
-            });
+        // Contact labels/device/group links are removed by their CASCADE
+        // constraints. Message and conversation history is preserved through
+        // SET NULL, so this stays a single indexed database operation.
+        await prisma.contact.deleteMany({
+            where: { pkId: { in: contactPkIds } },
         });
 
         res.status(200).json({
@@ -1231,22 +1220,8 @@ export const deleteAllContacts: RequestHandler = async (req, res) => {
 
         const contactPkIds = contacts.map((c) => c.pkId);
 
-        await prisma.$transaction(async (transaction) => {
-            // Delete related records first
-            await transaction.contactLabel.deleteMany({
-                where: { contactId: { in: contactPkIds } },
-            });
-            await transaction.contactDevice.deleteMany({
-                where: { contactId: { in: contactPkIds } },
-            });
-            await transaction.contactGroup.deleteMany({
-                where: { contactId: { in: contactPkIds } },
-            });
-
-            // Delete contacts
-            await transaction.contact.deleteMany({
-                where: { pkId: { in: contactPkIds } },
-            });
+        await prisma.contact.deleteMany({
+            where: { pkId: { in: contactPkIds } },
         });
 
         res.status(200).json({

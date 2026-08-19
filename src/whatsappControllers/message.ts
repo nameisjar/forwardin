@@ -415,14 +415,31 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                             );
                         }
 
-                        const contact = await prisma.contact.findFirst({
-                            where: {
-                                phone: jid.split('@')[0],
-                                contactDevices: {
-                                    some: { device: { sessions: { some: { sessionId } } } },
-                                },
-                            },
-                        });
+                        const incomingParticipant = jid.includes('@g.us')
+                            ? getPhoneJid(
+                                  message.key.participant,
+                                  message.key.participantAlt,
+                              ) || message.key.participant || null
+                            : null;
+                        const contactJid = incomingParticipant || jid;
+                        const contactPhone = contactJid
+                            .split('@')[0]
+                            .split(':')[0]
+                            .replace(/\D/g, '');
+                        const contact = contactPhone
+                            ? await prisma.contact.findFirst({
+                                  where: {
+                                      phone: { in: [contactPhone, `+${contactPhone}`] },
+                                      contactDevices: {
+                                          some: {
+                                              device: {
+                                                  sessions: { some: { sessionId } },
+                                              },
+                                          },
+                                      },
+                                  },
+                              })
+                            : null;
                         const quoteMetadata = messageDevicePkId
                             ? await resolveIncomingQuoteMetadata({
                                   deviceId: messageDevicePkId,
@@ -664,12 +681,7 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                                     const pushName = message.pushName || null;
                                     
                                     // Get participant (sender in group) from message key
-                                    const participant = jid.includes('@g.us')
-                                        ? getPhoneJid(
-                                              message.key.participant,
-                                              message.key.participantAlt,
-                                          ) || message.key.participant || null
-                                        : null;
+                                    const participant = incomingParticipant;
                                     
                                     // Get group name and picture if it's a group message
                                     let groupName: string | null = null;
@@ -928,9 +940,11 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                                         },
                                         update: {
                                             // Update metadata if changed
+                                            participant,
                                             groupName,
                                             pushName,
                                             message: encryptedIncomingText,
+                                            ...(contact?.pkId ? { contactId: contact.pkId } : {}),
                                             ...(incomingMediaPath ? { mediaPath: incomingMediaPath } : {}),
                                             ...(incomingFileName ? { fileName: incomingFileName } : {}),
                                             ...(quoteMetadata

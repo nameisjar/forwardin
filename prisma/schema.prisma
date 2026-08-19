@@ -398,6 +398,7 @@ model OutgoingMessage {
   @@index([deviceId, inboxHiddenAt, createdAt], map: "idx_outgoing_message_inbox_retention")
   @@index([deviceId, inboxHiddenAt, to, createdAt], map: "idx_outgoing_message_inbox_conversation")
   @@index([quotedMessageId], map: "idx_outgoing_message_quoted_message_id")
+  @@index([contactId], map: "idx_outgoing_message_contact_id")
   @@index([status], map: "idx_outgoing_message_status")
 }
 
@@ -427,7 +428,7 @@ model IncomingMessage {
   deviceId      Int?      @map("device_id")
   device        Device?   @relation(fields: [deviceId], references: [pkId], onDelete: Cascade)
   contactId     Int?
-  contact       Contact?  @relation(fields: [contactId], references: [pkId], onDelete: Cascade)
+  contact       Contact?  @relation(fields: [contactId], references: [pkId], onDelete: SetNull)
   editSecret    IncomingMessageSecret?
 
   @@index([deviceId], map: "idx_incoming_message_device")
@@ -436,6 +437,7 @@ model IncomingMessage {
   @@index([deviceId, inboxHiddenAt, from, receivedAt], map: "idx_incoming_message_inbox_conversation")
   @@index([deviceId, from, isRead], map: "idx_incoming_message_conversation_read")
   @@index([quotedMessageId], map: "idx_incoming_message_quoted_message_id")
+  @@index([contactId], map: "idx_incoming_message_contact_id")
 }
 
 /// Encrypted WhatsApp message secret used to decrypt later edit events.
@@ -484,6 +486,7 @@ model Conversation {
   @@unique([deviceId, jid], map: "conversation_device_jid_key")
   @@index([deviceId, lastMessageAt], map: "idx_conversation_device_latest")
   @@index([deviceId, unreadCount], map: "idx_conversation_device_unread")
+  @@index([contactId], map: "idx_conversation_contact_id")
 }
 
 model InboxRetentionSetting {
