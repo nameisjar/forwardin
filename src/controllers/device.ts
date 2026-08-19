@@ -1455,7 +1455,15 @@ export const getDeviceConversationTimeline: RequestHandler = async (req, res) =>
                 id: deviceUuid,
                 ...accessibleDeviceWhere(req.authenticatedUser.pkId, req.privilege?.pkId),
             },
-            select: { pkId: true },
+            select: {
+                pkId: true,
+                sessions: {
+                    where: { id: { contains: 'config' } },
+                    select: { sessionId: true },
+                    orderBy: { pkId: 'desc' },
+                    take: 1,
+                },
+            },
         });
         if (!device) return res.status(404).json({ message: 'Device not found' });
 
@@ -1533,8 +1541,94 @@ export const getDeviceConversationTimeline: RequestHandler = async (req, res) =>
         const nextCursor = hasMore && page.length > 0
             ? encodeConversationTimelineCursor(page[page.length - 1])
             : null;
+        const quotedMessageIds = [
+            ...new Set(
+                page
+                    .map((row) => row.quotedMessageId)
+                    .filter((id): id is string => Boolean(id)),
+            ),
+        ];
+        const senderJids = [
+            ...new Set(
+                page
+                    .filter((row) => row.direction === 'incoming' && row.isGroup)
+                    .map((row) => row.participant)
+                    .filter((jid): jid is string => Boolean(
+                        jid
+                        && !jid.endsWith('@lid')
+                        && !jid.endsWith('@g.us'),
+                    )),
+            ),
+        ];
+        const [senderProfileCache, quotedIncomingMessages, quotedOutgoingMessages] =
+            await Promise.all([
+                getInboxProfileCacheSummaries(device.pkId, senderJids),
+                quotedMessageIds.length > 0
+                    ? prisma.incomingMessage.findMany({
+                          where: {
+                              deviceId: device.pkId,
+                              id: { in: quotedMessageIds },
+                          },
+                          select: {
+                              id: true,
+                              mediaPath: true,
+                              fileName: true,
+                              message: true,
+                          },
+                      })
+                    : Promise.resolve([]),
+                quotedMessageIds.length > 0
+                    ? prisma.outgoingMessage.findMany({
+                          where: {
+                              deviceId: device.pkId,
+                              OR: [
+                                  { id: { in: quotedMessageIds } },
+                                  { waMessageId: { in: quotedMessageIds } },
+                              ],
+                          },
+                          select: {
+                              id: true,
+                              waMessageId: true,
+                              mediaPath: true,
+                              fileName: true,
+                              message: true,
+                          },
+                      })
+                    : Promise.resolve([]),
+            ]);
+        const quotedIncomingById = new Map(
+            quotedIncomingMessages.map((message) => [message.id, message]),
+        );
+        const quotedOutgoingById = new Map<
+            string,
+            (typeof quotedOutgoingMessages)[number]
+        >();
+        for (const message of quotedOutgoingMessages) {
+            quotedOutgoingById.set(message.id, message);
+            if (message.waMessageId) quotedOutgoingById.set(message.waMessageId, message);
+        }
         const serialized = page.reverse().map((row) => {
             const decryptedMessage = decryptMessage(row.message);
+            const senderProfile = row.participant
+                ? senderProfileCache.get(row.participant)
+                : undefined;
+            const senderProfileEligible = Boolean(
+                row.direction === 'incoming'
+                && row.isGroup
+                && row.participant
+                && senderJids.includes(row.participant),
+            );
+            const quotedTarget = row.quotedMessageId
+                ? row.quotedFromMe === true
+                    ? quotedOutgoingById.get(row.quotedMessageId)
+                    : row.quotedFromMe === false
+                        ? quotedIncomingById.get(row.quotedMessageId)
+                        : quotedIncomingById.get(row.quotedMessageId)
+                            || quotedOutgoingById.get(row.quotedMessageId)
+                : undefined;
+            const quotedTargetText = quotedTarget
+                ? decryptMessage(quotedTarget.message)
+                : '';
             return {
                 ...serializePrisma(row),
                 message: decryptedMessage,
@@ -1545,8 +1639,65 @@ export const getDeviceConversationTimeline: RequestHandler = async (req, res) =>
                     decryptedMessage,
                 ),
                 mediaPath: serializeInboxMediaPath(row.mediaPath, deviceUuid, row.id),
+                quotedMediaPath: quotedTarget?.mediaPath
+                    ? serializeInboxMediaPath(
+                          quotedTarget.mediaPath,
+                          deviceUuid,
+                          quotedTarget.id,
+                      )
+                    : null,
+                quotedMediaType: quotedTarget?.mediaPath
+                    ? resolveInboxMediaType(
+                          quotedTarget.mediaPath,
+                          quotedTarget.fileName,
+                          quotedTargetText,
+                      )
+                    : null,
+                quotedFileName: quotedTarget?.fileName || null,
+                senderProfilePicUrl: senderProfileEligible && row.participant
+                    ? createInboxProfileUrl(deviceUuid, row.participant)
+                    : null,
+                senderProfileStatus: senderProfile?.status
+                    || (senderProfileEligible ? 'pending' : 'unavailable'),
             };
         });
+
+        // Warm only the visible group senders and keep it outside the response
+        // critical path. The browser retries the stable signed URL while this
+        // cache refresh runs, so opening a group conversation stays immediate.
+        const sessionId = device.sessions[0]?.sessionId;
+        if (sessionId && verifyInstance(sessionId) && senderJids.length > 0) {
+            let profileSession: ReturnType<typeof getInstance> | null = null;
+            try {
+                profileSession = getInstance(sessionId);
+            } catch {
+                profileSession = null;
+            }
+            if (profileSession) {
+                const now = Date.now();
+                const refreshQueue = senderJids.filter((jid) => {
+                    const summary = senderProfileCache.get(jid);
+                    if (!summary) return true;
+                    if (summary.nextRetryAt && summary.nextRetryAt.getTime() > now) return false;
+                    return !summary.expiresAt || summary.expiresAt.getTime() <= now;
+                });
+                void (async () => {
+                    const worker = async () => {
+                        while (refreshQueue.length > 0) {
+                            const jid = refreshQueue.shift();
+                            if (!jid) return;
+                            await refreshInboxProfileCache({
+                                deviceId: device.pkId,
+                                jid,
+                                session: profileSession!,
+                            });
+                            await new Promise((resolve) => setTimeout(resolve, 150));
+                        }
+                    };
+                    await Promise.allSettled([worker(), worker()]);
+                })();
+            }
+        }
 
         res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
         res.setHeader('Pragma', 'no-cache');

@@ -1067,6 +1067,55 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                                             });
                                     }
 
+                                    // Group bubbles use the sender's picture, not the
+                                    // group's picture. Cache it independently by the
+                                    // participant PN JID and notify an already-open Inbox.
+                                    if (
+                                        deviceId &&
+                                        jid.includes('@g.us') &&
+                                        participant &&
+                                        !participant.endsWith('@lid') &&
+                                        session &&
+                                        typeof session.profilePictureUrl === 'function'
+                                    ) {
+                                        void refreshInboxProfileCache({
+                                            deviceId,
+                                            jid: participant,
+                                            session,
+                                        })
+                                            .then(async (result) => {
+                                                if (!result.hasImage) return;
+                                                const publicDeviceUuid = await getDeviceUuid();
+                                                if (!publicDeviceUuid) return;
+
+                                                io.to(`session:${sessionId}`)
+                                                    .to(`device:${publicDeviceUuid}`)
+                                                    .emit(
+                                                        `incoming:${sessionId}:profile-updated`,
+                                                        {
+                                                            id: incomingMessage.id,
+                                                            from: jid,
+                                                            participant,
+                                                            senderProfilePicUrl:
+                                                                createInboxProfileUrl(
+                                                                    publicDeviceUuid,
+                                                                    participant,
+                                                                ),
+                                                            senderProfileStatus: result.status,
+                                                        },
+                                                    );
+                                            })
+                                            .catch((picError) => {
+                                                logger.debug(
+                                                    {
+                                                        code: picError?.code,
+                                                        messageId: message.key.id,
+                                                    },
+                                                    '[InboxProfile] Group sender refresh failed',
+                                                );
+                                            });
+                                    }
+
                                     // Emit socket event untuk real-time update
                                     const emitEventName = `incoming:${sessionId}`;
                                     const publicDeviceUuid = await getDeviceUuid();
@@ -1087,6 +1136,19 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                                         profilePicUrl: null,
                                         groupPicUrl: null,
                                         profilePictureStatus: 'pending',
+                                        senderProfilePicUrl:
+                                            publicDeviceUuid
+                                            && participant
+                                            && !participant.endsWith('@lid')
+                                                ? createInboxProfileUrl(
+                                                      publicDeviceUuid,
+                                                      participant,
+                                                  )
+                                                : null,
+                                        senderProfileStatus:
+                                            participant && !participant.endsWith('@lid')
+                                                ? 'pending'
+                                                : 'unavailable',
                                         isGroup: jid.includes('@g.us'),
                                     };
                                     
