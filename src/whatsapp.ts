@@ -1705,11 +1705,28 @@ async function createInstanceInternal(
                             });
 
                             if (device) {
+                                const statusMessage = await prisma.outgoingMessage.findFirst({
+                                    where: { waMessageId: messageId, sessionId },
+                                    select: {
+                                        pkId: true,
+                                        id: true,
+                                        waMessageId: true,
+                                        to: true,
+                                        isGroup: true,
+                                    },
+                                });
                                 io.to(`device:${device.id}`).emit(`device:${device.id}:message-status`, {
-                                    waMessageId: messageId,
+                                    id: statusMessage?.id || messageId,
+                                    messageId: statusMessage?.id || messageId,
+                                    outgoingPkId: statusMessage?.pkId || null,
+                                    waMessageId: statusMessage?.waMessageId || messageId,
                                     status: newStatus,
                                     errorCode: newStatus === 'error' ? failureCode || null : null,
-                                    to: update.key.remoteJid,
+                                    to: statusMessage?.to || update.key.remoteJid,
+                                    conversationJid: statusMessage?.to || update.key.remoteJid,
+                                    isGroup:
+                                        statusMessage?.isGroup
+                                        ?? Boolean((statusMessage?.to || update.key.remoteJid)?.includes('@g.us')),
                                     timestamp: new Date().toISOString(),
                                 });
                             }
@@ -1747,11 +1764,28 @@ async function createInstanceInternal(
                                 });
 
                                 if (device) {
+                                    const statusMessage = await prisma.outgoingMessage.findFirst({
+                                        where: { id: messageId, sessionId },
+                                        select: {
+                                            pkId: true,
+                                            id: true,
+                                            waMessageId: true,
+                                            to: true,
+                                            isGroup: true,
+                                        },
+                                    });
                                     io.to(`device:${device.id}`).emit(`device:${device.id}:message-status`, {
-                                        waMessageId: messageId,
+                                        id: statusMessage?.id || messageId,
+                                        messageId: statusMessage?.id || messageId,
+                                        outgoingPkId: statusMessage?.pkId || null,
+                                        waMessageId: statusMessage?.waMessageId || messageId,
                                         status: newStatus,
                                         errorCode: newStatus === 'error' ? failureCode || null : null,
-                                        to: update.key.remoteJid,
+                                        to: statusMessage?.to || update.key.remoteJid,
+                                        conversationJid: statusMessage?.to || update.key.remoteJid,
+                                        isGroup:
+                                            statusMessage?.isGroup
+                                            ?? Boolean((statusMessage?.to || update.key.remoteJid)?.includes('@g.us')),
                                         timestamp: new Date().toISOString(),
                                     });
                                 }

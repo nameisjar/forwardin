@@ -1443,6 +1443,7 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                         },
                         select: {
                             pkId: true,
+                            id: true,
                             status: true,
                             isGroup: true,
                             readBy: true,
@@ -1531,8 +1532,14 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                         });
                         if (statusUpdate.count > 0) {
                             await emitOutgoingStatus({
+                                id: outgoing.id,
+                                messageId: outgoing.id,
+                                outgoingPkId: outgoing.pkId,
                                 waMessageId: outgoing.waMessageId || key.id,
                                 status: nextStatus,
+                                to: outgoing.to,
+                                conversationJid: outgoing.to,
+                                isGroup: Boolean(outgoing.isGroup),
                                 timestamp: new Date().toISOString(),
                                 ...(set.size > 0
                                     ? { readCount: set.size, readBy: Array.from(set) }
@@ -1552,8 +1559,14 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                         data: updateData,
                     });
                     await emitOutgoingStatus({
+                        id: updatedOutgoing.id,
+                        messageId: updatedOutgoing.id,
+                        outgoingPkId: updatedOutgoing.pkId,
                         waMessageId: updatedOutgoing.waMessageId || key.id,
                         status: updatedOutgoing.status,
+                        to: updatedOutgoing.to,
+                        conversationJid: updatedOutgoing.to,
+                        isGroup: Boolean(updatedOutgoing.isGroup),
                         timestamp: new Date().toISOString(),
                         ...(Array.isArray(updatedOutgoing.readBy)
                             ? {
