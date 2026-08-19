@@ -64,6 +64,7 @@ import {
     applySecretIncomingMessageEdit,
     saveIncomingMessageSecret,
 } from '../services/incomingMessageSecret';
+import { resolveIncomingQuoteMetadata } from '../services/inboxMessageQuote';
 
 const whatsappMediaHttpsAgent = new https.Agent({
     family: 4,
@@ -422,6 +423,16 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                                 },
                             },
                         });
+                        const quoteMetadata = messageDevicePkId
+                            ? await resolveIncomingQuoteMetadata({
+                                  deviceId: messageDevicePkId,
+                                  conversationJid: jid,
+                                  content: messageContent,
+                              })
+                            : null;
+                        const encryptedQuotedText = quoteMetadata?.quotedText
+                            ? encryptMessage(quoteMetadata.quotedText)
+                            : null;
 
                         if (data.message && !data.message.protocolMessage) {
                             const dir = path.join('media', `S${sessionId}`);
@@ -585,6 +596,13 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                                                     sessionId,
                                                     deviceId: messageDevicePkId,
                                                     contactId: contact?.pkId || null,
+                                                    quotedMessageId:
+                                                        quoteMetadata?.quotedMessageId || null,
+                                                    quotedFromMe:
+                                                        quoteMetadata?.quotedFromMe ?? null,
+                                                    quotedText: encryptedQuotedText,
+                                                    quotedSender:
+                                                        quoteMetadata?.quotedSender || null,
                                                 },
                                                 include: {
                                                     contact: { include: inboxContactLabelInclude },
@@ -901,6 +919,12 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                                             sessionId,
                                             deviceId: deviceId || null,
                                             contactId: contact?.pkId || null,
+                                            quotedMessageId:
+                                                quoteMetadata?.quotedMessageId || null,
+                                            quotedFromMe:
+                                                quoteMetadata?.quotedFromMe ?? null,
+                                            quotedText: encryptedQuotedText,
+                                            quotedSender: quoteMetadata?.quotedSender || null,
                                         },
                                         update: {
                                             // Update metadata if changed
@@ -909,6 +933,17 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                                             message: encryptedIncomingText,
                                             ...(incomingMediaPath ? { mediaPath: incomingMediaPath } : {}),
                                             ...(incomingFileName ? { fileName: incomingFileName } : {}),
+                                            ...(quoteMetadata
+                                                ? {
+                                                      quotedMessageId:
+                                                          quoteMetadata.quotedMessageId,
+                                                      quotedFromMe:
+                                                          quoteMetadata.quotedFromMe,
+                                                      quotedText: encryptedQuotedText,
+                                                      quotedSender:
+                                                          quoteMetadata.quotedSender,
+                                                  }
+                                                : {}),
                                         },
                                         include: {
                                             contact: { include: inboxContactLabelInclude },

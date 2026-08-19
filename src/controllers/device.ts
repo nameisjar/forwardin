@@ -1376,6 +1376,10 @@ type ConversationTimelineRow = {
     fileName: string | null;
     timestamp: Date;
     editedAt: Date | null;
+    quotedMessageId: string | null;
+    quotedFromMe: boolean | null;
+    quotedText: string | null;
+    quotedSender: string | null;
     status: string | null;
     isRead: boolean | null;
     isGroup: boolean;
@@ -1472,6 +1476,10 @@ export const getDeviceConversationTimeline: RequestHandler = async (req, res) =>
                     incoming."file_name" AS "fileName",
                     incoming."received_at" AS "timestamp",
                     incoming."edited_at" AS "editedAt",
+                    incoming."quoted_message_id" AS "quotedMessageId",
+                    incoming."quoted_from_me" AS "quotedFromMe",
+                    incoming."quoted_text" AS "quotedText",
+                    incoming."quoted_sender" AS "quotedSender",
                     NULL::TEXT AS "status",
                     incoming."is_read" AS "isRead",
                     (incoming."from" LIKE '%@g.us') AS "isGroup",
@@ -1497,7 +1505,11 @@ export const getDeviceConversationTimeline: RequestHandler = async (req, res) =>
                     outgoing."mediaPath" AS "mediaPath",
                     outgoing."file_name" AS "fileName",
                     outgoing."created_at" AS "timestamp",
-                    NULL::TIMESTAMP(3) AS "editedAt",
+                    outgoing."edited_at" AS "editedAt",
+                    outgoing."quoted_message_id" AS "quotedMessageId",
+                    outgoing."quoted_from_me" AS "quotedFromMe",
+                    outgoing."quoted_text" AS "quotedText",
+                    outgoing."quoted_sender" AS "quotedSender",
                     outgoing."status" AS "status",
                     NULL::BOOLEAN AS "isRead",
                     COALESCE(outgoing."isGroup", false) OR (outgoing."to" LIKE '%@g.us') AS "isGroup",
@@ -1526,6 +1538,7 @@ export const getDeviceConversationTimeline: RequestHandler = async (req, res) =>
             return {
                 ...serializePrisma(row),
                 message: decryptedMessage,
+                quotedText: decryptMessage(row.quotedText),
                 mediaType: resolveInboxMediaType(
                     row.mediaPath,
                     row.fileName,

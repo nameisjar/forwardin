@@ -36,7 +36,7 @@ router.delete('/messages/broadcast-name', controller.deleteBroadcastsByName);
 router.delete('/messages', controller.deleteAllMessages);
 router.delete('/messages/everyone', controller.deleteMessagesForEveryone);
 router.delete('/messages/me', controller.deleteMessagesForMe);
-router.put('/messages/edit', controller.updateMessage);
+router.put('/messages/edit', apiSendRateLimit, controller.updateMessage);
 router.post('/messages/mute', controller.muteChat);
 router.post('/messages/pin', controller.pinChat);
 router.post('/messages/star', controller.starMessage);

@@ -372,6 +372,11 @@ model OutgoingMessage {
   fileName      String?   @map("file_name")
   schedule      DateTime
   status        String    @db.VarChar(20) // pending, submitted, server_ack, delivery_ack, read, played, error
+  editedAt      DateTime? @map("edited_at")
+  quotedMessageId String? @map("quoted_message_id")
+  quotedFromMe  Boolean?  @map("quoted_from_me")
+  quotedText    String?   @map("quoted_text") @db.Text
+  quotedSender  String?   @map("quoted_sender") @db.VarChar(255)
   createdAt     DateTime  @default(now()) @map("created_at")
   updatedAt     DateTime  @default(now()) @map("updated_at")
   inboxHiddenAt DateTime? @map("inbox_hidden_at")
@@ -392,6 +397,7 @@ model OutgoingMessage {
   @@index([deviceId, createdAt], map: "idx_outgoing_message_device_time")
   @@index([deviceId, inboxHiddenAt, createdAt], map: "idx_outgoing_message_inbox_retention")
   @@index([deviceId, inboxHiddenAt, to, createdAt], map: "idx_outgoing_message_inbox_conversation")
+  @@index([quotedMessageId], map: "idx_outgoing_message_quoted_message_id")
   @@index([status], map: "idx_outgoing_message_status")
 }
 
@@ -410,6 +416,10 @@ model IncomingMessage {
   isRead        Boolean   @default(false) @map("is_read") // Status pesan sudah dibaca user
   receivedAt    DateTime  @map("received_at")
   editedAt      DateTime? @map("edited_at")
+  quotedMessageId String? @map("quoted_message_id")
+  quotedFromMe  Boolean?  @map("quoted_from_me")
+  quotedText    String?   @map("quoted_text") @db.Text
+  quotedSender  String?   @map("quoted_sender") @db.VarChar(255)
   createdAt     DateTime  @default(now()) @map("created_at")
   updatedAt     DateTime  @default(now()) @map("updated_at")
   inboxHiddenAt DateTime? @map("inbox_hidden_at")
@@ -425,6 +435,7 @@ model IncomingMessage {
   @@index([deviceId, inboxHiddenAt, receivedAt], map: "idx_incoming_message_inbox_retention")
   @@index([deviceId, inboxHiddenAt, from, receivedAt], map: "idx_incoming_message_inbox_conversation")
   @@index([deviceId, from, isRead], map: "idx_incoming_message_conversation_read")
+  @@index([quotedMessageId], map: "idx_incoming_message_quoted_message_id")
 }
 
 /// Encrypted WhatsApp message secret used to decrypt later edit events.

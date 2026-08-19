@@ -25,6 +25,10 @@ import https from 'https';
 import { sendGenericMessage } from '../services/messageSender';
 import { createTrackedMessageId } from '../utils/outgoingMessageId';
 import { sanitizeMediaFileName } from '../utils/mediaFileName';
+import {
+    type InboxReplyTarget,
+    resolveInboxReplyTarget,
+} from '../services/inboxMessageQuote';
 
 const PROFILE_PICTURE_CACHE_TTL_MS = 5 * 60 * 1000;
 const PROFILE_PICTURE_MAX_BYTES = 5 * 1024 * 1024;
@@ -132,11 +136,30 @@ async function reserveInboxOutgoingMessage(params: {
             existing.deviceId === params.deviceId &&
             existing.to === params.jid &&
             existingText === params.messageText &&
+            (existing.quotedMessageId || null) ===
+                (params.data.quotedMessageId || null) &&
+            (existing.quotedFromMe ?? null) ===
+                (params.data.quotedFromMe ?? null) &&
             (params.fileName === undefined || existing.fileName === params.fileName);
         if (!sameRequest) throw createMessageIdConflictError();
 
         return { created: false, message: existing };
     }
+}
+
+function parseInboxReplyTarget(value: unknown): InboxReplyTarget | null {
+    if (value == null) return null;
+    if (!value || typeof value !== 'object') {
+        throw new Error('Data pesan yang akan dibalas tidak valid');
+    }
+    const targetMessageId = String(
+        (value as { targetMessageId?: unknown }).targetMessageId || '',
+    ).trim();
+    const targetFromMe = (value as { targetFromMe?: unknown }).targetFromMe;
+    if (!targetMessageId || typeof targetFromMe !== 'boolean') {
+        throw new Error('Data pesan yang akan dibalas tidak valid');
+    }
+    return { targetMessageId, targetFromMe };
 }
 
 async function sendQueuedMediaRecipients(params: {
@@ -232,6 +255,7 @@ export const sendMessages: RequestHandler = async (req, res) => {
                 delay = 5000,
                 message,
                 options,
+                replyTo,
             } = item;
 
             try {
@@ -308,6 +332,16 @@ export const sendMessages: RequestHandler = async (req, res) => {
                     throw new Error('Empty message payload');
                 }
 
+                const replyTarget = parseInboxReplyTarget(replyTo);
+                const resolvedReply = replyTarget
+                    ? await resolveInboxReplyTarget({
+                          deviceId: req.authenticatedDevice.deviceId,
+                          sessionId,
+                          conversationJid: jid,
+                          target: replyTarget,
+                      })
+                    : null;
+
                 // Reserve the WhatsApp ID before sending. ACK/NACK events may
                 // arrive before sendMessage resolves, so the receipt handler
                 // needs a pending row to update first.
@@ -347,12 +381,18 @@ export const sendMessages: RequestHandler = async (req, res) => {
                         broadcastType: 'inbox',
                         isGroup: type === 'group',
                         readBy: [],
+                        quotedMessageId: resolvedReply?.quotedMessageId || null,
+                        quotedFromMe: resolvedReply?.quotedFromMe ?? null,
+                        quotedText: resolvedReply?.quotedText
+                            ? encryptMessage(resolvedReply.quotedText)
+                            : null,
+                        quotedSender: resolvedReply?.quotedSender || null,
                     },
                 });
 
                 if (!reservation.created) {
                     const responseMessage = {
-                        ...reservation.message,
+                        ...decryptOutgoingMessage(reservation.message),
                         message: messageText,
                         isOutgoing: true,
                         idempotent: true,
@@ -375,9 +415,15 @@ export const sendMessages: RequestHandler = async (req, res) => {
                 const queuedResult = await sendGenericMessage(
                     session,
                     (req.authenticatedDevice as any).deviceUuid,
-                    jid,
+                    resolvedReply?.deliveryJid || jid,
                     payload,
-                    { ...(options ?? {}), messageId, persist: false },
+                    {
+                        ...(options ?? {}),
+                        ...(resolvedReply ? { quoted: resolvedReply.quoted } : {}),
+                        messageId,
+                        persist: false,
+                        ...(resolvedReply ? { resolveToLid: false } : {}),
+                    },
                 );
                 if (!queuedResult.success) {
                     await markPendingMessageAsFailed(messageId);
@@ -421,7 +467,7 @@ export const sendMessages: RequestHandler = async (req, res) => {
                 }
 
                 const responseMessage = {
-                    ...savedMessage,
+                    ...decryptOutgoingMessage(savedMessage),
                     message: messageText,
                     isOutgoing: true,
                 };
@@ -744,6 +790,20 @@ export const sendInboxMediaMessage: RequestHandler = async (req, res) => {
             const jid = getJid(recipient);
             const isGroup = jid.includes('@g.us');
             await verifyJid(session, jid, isGroup ? 'group' : 'number');
+            const replyTarget = req.body.replyToMessageId
+                ? parseInboxReplyTarget({
+                      targetMessageId: req.body.replyToMessageId,
+                      targetFromMe: req.body.replyToFromMe === 'true',
+                  })
+                : null;
+            const resolvedReply = replyTarget
+                ? await resolveInboxReplyTarget({
+                      deviceId: devicePkId,
+                      sessionId,
+                      conversationJid: jid,
+                      target: replyTarget,
+                  })
+                : null;
 
             const mimeType = req.file.mimetype;
             const mediaType = mimeType.startsWith('image/')
@@ -803,6 +863,12 @@ export const sendInboxMediaMessage: RequestHandler = async (req, res) => {
                     broadcastType: 'inbox',
                     isGroup,
                     readBy: [],
+                    quotedMessageId: resolvedReply?.quotedMessageId || null,
+                    quotedFromMe: resolvedReply?.quotedFromMe ?? null,
+                    quotedText: resolvedReply?.quotedText
+                        ? encryptMessage(resolvedReply.quotedText)
+                        : null,
+                    quotedSender: resolvedReply?.quotedSender || null,
                 },
             });
 
@@ -815,7 +881,7 @@ export const sendInboxMediaMessage: RequestHandler = async (req, res) => {
                 }
                 sendAccepted = true;
                 const responseMessage = {
-                    ...reservation.message,
+                    ...decryptOutgoingMessage(reservation.message),
                     message: messageText,
                     mediaType,
                     isOutgoing: true,
@@ -838,9 +904,15 @@ export const sendInboxMediaMessage: RequestHandler = async (req, res) => {
             const queuedResult = await sendGenericMessage(
                 session,
                 (req.authenticatedDevice as any).deviceUuid,
-                jid,
+                resolvedReply?.deliveryJid || jid,
                 payload,
-                { messageId, persist: false },
+                {
+                    messageId,
+                    persist: false,
+                    ...(resolvedReply
+                        ? { quoted: resolvedReply.quoted, resolveToLid: false }
+                        : {}),
+                },
             );
             if (!queuedResult.success) {
                 await markPendingMessageAsFailed(messageId, true);
@@ -881,7 +953,7 @@ export const sendInboxMediaMessage: RequestHandler = async (req, res) => {
             }
 
             const responseMessage = {
-                ...savedMessage,
+                ...decryptOutgoingMessage(savedMessage),
                 message: messageText,
                 mediaType,
                 isOutgoing: true,
@@ -1927,52 +1999,109 @@ export const deleteMessagesForMe: RequestHandler = async (req, res) => {
 
 export const updateMessage: RequestHandler = async (req, res) => {
     try {
-        const { sessionId } = req.authenticatedDevice;
+        const { sessionId, deviceId: devicePkId } = req.authenticatedDevice;
         const session = getInstance(sessionId);
-        if (!session) return res.status(404).json({ message: 'Session not found' });
+        if (!session?.user) {
+            return res.status(409).json({ message: 'Device WhatsApp belum terhubung' });
+        }
         if (!isUUID(sessionId)) return res.status(400).json({ message: 'Invalid sessionId' });
 
-        const results: { index: number; result?: any }[] = [];
+        const legacyBatch = Array.isArray(req.body);
+        const requests = legacyBatch ? req.body : [req.body];
+        const results: { index: number; result?: any; message?: any }[] = [];
         const errors: { index: number; error: string }[] = [];
 
-        for (const [index, { recipient, messageId, newText }] of (req.body as any[]).entries()) {
+        for (const [index, item] of requests.entries()) {
             try {
-                const jid = getJid(recipient);
-                await verifyJid(session, jid, 'number');
-
-                if (messageId) {
-                    const key = { remoteJid: jid, id: messageId, fromMe: true } as any;
-                    const queuedEdit = await sendGenericMessage(
-                        session,
-                        (req.authenticatedDevice as any).deviceUuid,
-                        jid,
-                        { text: newText, edit: key },
-                        { persist: false, trackHealth: false },
-                    );
-                    if (!queuedEdit.success) {
-                        throw new Error(queuedEdit.error || 'Gagal mengubah pesan');
-                    }
-                    const updateMessageResult = queuedEdit.result;
-                    results.push({ index, result: updateMessageResult });
-                    await prisma.outgoingMessage.update({
-                        where: { sessionId: sessionId, id: messageId } as any,
-                        data: { message: encryptMessage(newText) },
-                    });
-                } else {
-                    throw new Error('messageId is required to update a message');
+                const targetMessageId = String(
+                    item?.targetMessageId || item?.messageId || '',
+                ).trim();
+                const newText = typeof item?.newText === 'string' ? item.newText.trim() : '';
+                if (!targetMessageId || !newText) {
+                    throw new Error('ID pesan dan teks baru wajib diisi');
                 }
+                if (newText.length > 65_536) {
+                    throw new Error('Teks pesan terlalu panjang');
+                }
+
+                const target = await prisma.outgoingMessage.findFirst({
+                    where: {
+                        deviceId: devicePkId,
+                        OR: [{ id: targetMessageId }, { waMessageId: targetMessageId }],
+                    },
+                    select: {
+                        pkId: true,
+                        id: true,
+                        waMessageId: true,
+                        to: true,
+                        mediaPath: true,
+                        status: true,
+                    },
+                });
+                if (!target) throw new Error('Pesan keluar tidak ditemukan');
+                if (target.mediaPath) throw new Error('Pesan media belum dapat diedit');
+                if (['pending', 'sending', 'error', 'revoked'].includes(target.status)) {
+                    throw new Error('Status pesan ini tidak dapat diedit');
+                }
+
+                const whatsappMessageId = target.waMessageId || target.id;
+                const rawMessage = await prisma.message.findFirst({
+                    where: { sessionId, id: whatsappMessageId },
+                    orderBy: { pkId: 'desc' },
+                    select: { remoteJid: true },
+                });
+                const jid = rawMessage?.remoteJid || target.to;
+
+                const key = { remoteJid: jid, id: whatsappMessageId, fromMe: true } as any;
+                const queuedEdit = await sendGenericMessage(
+                    session,
+                    (req.authenticatedDevice as any).deviceUuid,
+                    jid,
+                    { text: newText, edit: key },
+                    { persist: false, trackHealth: false, resolveToLid: false },
+                );
+                if (!queuedEdit.success) {
+                    throw new Error(queuedEdit.error || 'Gagal mengubah pesan');
+                }
+
+                const editedAt = new Date();
+                const updated = await prisma.outgoingMessage.update({
+                    where: { pkId: target.pkId },
+                    data: {
+                        message: encryptMessage(newText),
+                        editedAt,
+                        updatedAt: editedAt,
+                    },
+                    include: { contact: { select: inboxMessageContactSelect } },
+                });
+                const publicMessage = {
+                    ...decryptOutgoingMessage(updated),
+                    isOutgoing: true,
+                };
+                getSocketIO()
+                    .to(`session:${sessionId}`)
+                    .emit(`outgoing:${sessionId}:message-edited`, publicMessage);
+                results.push({ index, result: queuedEdit.result, message: publicMessage });
             } catch (e) {
                 const msg =
                     e instanceof Error ? e.message : 'An error occurred during message update';
-                logger.error(e, msg);
+                logger.warn({ index, messageId: item?.targetMessageId || item?.messageId }, msg);
                 errors.push({ index, error: msg });
             }
         }
 
-        res.status(errors.length > 0 ? 500 : 200).json({ results, errors });
+        if (!legacyBatch) {
+            if (errors.length) return res.status(400).json({ message: errors[0].error });
+            return res.status(200).json({
+                success: true,
+                result: results[0]?.result,
+                message: results[0]?.message,
+            });
+        }
+        return res.status(errors.length > 0 ? 500 : 200).json({ results, errors });
     } catch (error) {
         logger.error(error);
-        res.status(500).json({ message: 'Internal server error' });
+        return res.status(500).json({ message: 'Internal server error' });
     }
 };
 

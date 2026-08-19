@@ -231,14 +231,18 @@ export function decryptMessage(message: string | null | undefined): string | nul
 /**
  * Decrypt message field in an OutgoingMessage object
  */
-export function decryptOutgoingMessage<T extends { message?: string | null }>(
+export function decryptOutgoingMessage<T extends {
+    message?: string | null;
+    quotedText?: string | null;
+}>(
     record: T
 ): T {
-    if (!record || !record.message) return record;
+    if (!record) return record;
     
     return {
         ...record,
-        message: decryptMessage(record.message),
+        ...(record.message ? { message: decryptMessage(record.message) } : {}),
+        ...(record.quotedText ? { quotedText: decryptMessage(record.quotedText) } : {}),
     };
 }
 
@@ -246,14 +250,18 @@ export function decryptOutgoingMessage<T extends { message?: string | null }>(
  * Decrypt content field in an IncomingMessage object
  * Note: IncomingMessage uses 'message' field, not 'content'
  */
-export function decryptIncomingMessage<T extends { message?: string | null }>(
+export function decryptIncomingMessage<T extends {
+    message?: string | null;
+    quotedText?: string | null;
+}>(
     record: T
 ): T {
-    if (!record || !record.message) return record;
+    if (!record) return record;
     
     return {
         ...record,
-        message: decryptMessage(record.message),
+        ...(record.message ? { message: decryptMessage(record.message) } : {}),
+        ...(record.quotedText ? { quotedText: decryptMessage(record.quotedText) } : {}),
     };
 }
 
@@ -274,7 +282,10 @@ export function decryptBroadcast<T extends { message?: string | null }>(
 /**
  * Decrypt an array of OutgoingMessage records
  */
-export function decryptOutgoingMessages<T extends { message?: string | null }>(
+export function decryptOutgoingMessages<T extends {
+    message?: string | null;
+    quotedText?: string | null;
+}>(
     records: T[]
 ): T[] {
     return records.map(decryptOutgoingMessage);
@@ -283,7 +294,10 @@ export function decryptOutgoingMessages<T extends { message?: string | null }>(
 /**
  * Decrypt an array of IncomingMessage records
  */
-export function decryptIncomingMessages<T extends { message?: string | null }>(
+export function decryptIncomingMessages<T extends {
+    message?: string | null;
+    quotedText?: string | null;
+}>(
     records: T[]
 ): T[] {
     return records.map(decryptIncomingMessage);
