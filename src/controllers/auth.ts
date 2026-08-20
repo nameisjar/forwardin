@@ -228,6 +228,7 @@ export const refreshToken: RequestHandler = async (req, res) => {
                 return res.status(401).json({ message: 'Refresh token has been revoked' });
             }
 
+            setRefreshTokenCookie(res, token);
             return res.status(200).json({ accessToken: generateAccessToken(user), id: user.id });
         }
 
@@ -240,6 +241,7 @@ export const refreshToken: RequestHandler = async (req, res) => {
             return res.status(401).json({ message: 'Refresh token has been revoked' });
         }
 
+        setRefreshTokenCookie(res, token);
         return res.status(200).json({ accessToken: generateAccessToken(cs), id: cs.id });
     } catch (error) {
         clearRefreshTokenCookie(res);

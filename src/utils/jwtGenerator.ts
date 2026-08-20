@@ -37,5 +37,8 @@ export function generateRefreshToken(user: refreshTokenPayload): string {
         id: user.id,
     };
 
-    return jwt.sign(payload, jwtSecretKey, { expiresIn: '7d' });
+    // The refresh token intentionally has no JWT expiry. It remains revocable
+    // because only the token stored for the account is accepted by the refresh
+    // endpoint. Access tokens stay short-lived and are renewed automatically.
+    return jwt.sign(payload, jwtSecretKey);
 }

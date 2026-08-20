@@ -1,7 +1,9 @@
 import type { CookieOptions, Request, Response } from 'express';
 
 export const REFRESH_TOKEN_COOKIE_NAME = 'forwardin_refresh_token';
-export const REFRESH_TOKEN_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+// Persistent browser session. The cookie is renewed whenever the access token
+// is refreshed, so an actively used login does not expire automatically.
+export const REFRESH_TOKEN_MAX_AGE_MS = 10 * 365 * 24 * 60 * 60 * 1000;
 
 const refreshTokenCookieOptions = (): CookieOptions => {
     const isProduction = process.env.NODE_ENV === 'production';
