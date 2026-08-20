@@ -4,10 +4,24 @@ import {
     extractMessageEdit,
     extractMessageEditEnvelope,
     extractSupportedMessageText,
+    isWithinMessageEditWindow,
     isMessageEditEnvelope,
 } from '../utils/messageEdit';
 
 describe('WhatsApp message edit parsing', () => {
+    it('allows edits only during the 15-minute window', () => {
+        const now = new Date('2026-08-20T10:15:00.000Z');
+
+        expect(isWithinMessageEditWindow(
+            new Date('2026-08-20T10:00:00.001Z'),
+            now,
+        )).to.equal(true);
+        expect(isWithinMessageEditWindow(
+            new Date('2026-08-20T10:00:00.000Z'),
+            now,
+        )).to.equal(false);
+    });
+
     it('recognizes protocol and normalized edit envelopes', () => {
         expect(isMessageEditEnvelope({
             protocolMessage: {

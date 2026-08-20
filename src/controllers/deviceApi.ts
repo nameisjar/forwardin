@@ -29,6 +29,7 @@ import {
     type InboxReplyTarget,
     resolveInboxReplyTarget,
 } from '../services/inboxMessageQuote';
+import { isWithinMessageEditWindow } from '../utils/messageEdit';
 
 const PROFILE_PICTURE_CACHE_TTL_MS = 5 * 60 * 1000;
 const PROFILE_PICTURE_MAX_BYTES = 5 * 1024 * 1024;
@@ -2036,12 +2037,16 @@ export const updateMessage: RequestHandler = async (req, res) => {
                         to: true,
                         mediaPath: true,
                         status: true,
+                        createdAt: true,
                     },
                 });
                 if (!target) throw new Error('Pesan keluar tidak ditemukan');
                 if (target.mediaPath) throw new Error('Pesan media belum dapat diedit');
                 if (['pending', 'sending', 'error', 'revoked'].includes(target.status)) {
                     throw new Error('Status pesan ini tidak dapat diedit');
+                }
+                if (!isWithinMessageEditWindow(target.createdAt)) {
+                    throw new Error('Batas waktu edit pesan sudah berakhir');
                 }
 
                 const whatsappMessageId = target.waMessageId || target.id;

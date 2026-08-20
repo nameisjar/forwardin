@@ -15,6 +15,16 @@ export type ParsedMessageEdit = {
     editedAt: Date;
 };
 
+export const MESSAGE_EDIT_WINDOW_MS = 15 * 60 * 1000;
+
+export function isWithinMessageEditWindow(
+    createdAt: Date,
+    now: Date = new Date(),
+): boolean {
+    const ageMs = now.getTime() - createdAt.getTime();
+    return Number.isFinite(ageMs) && ageMs >= 0 && ageMs < MESSAGE_EDIT_WINDOW_MS;
+}
+
 const nestedMessage = (
     content: proto.IMessage | null | undefined,
 ): proto.IMessage | null | undefined =>
