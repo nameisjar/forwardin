@@ -2335,6 +2335,7 @@ export const getDeviceInbox: RequestHandler = async (req, res) => {
         let unreadCountByJid = new Map<string, number>();
         let totalConversations = 0;
         let totalMessages = 0;
+        let totalUnreadCount = 0;
         let totalPages = 1;
         let currentPage = requestedPage;
         let conversationKeys: string[] = [];
@@ -2348,7 +2349,7 @@ export const getDeviceInbox: RequestHandler = async (req, res) => {
                 prisma.conversation.count({ where: { deviceId: device.pkId } }),
                 prisma.conversation.aggregate({
                     where: { deviceId: device.pkId },
-                    _sum: { incomingCount: true, outgoingCount: true },
+                    _sum: { incomingCount: true, outgoingCount: true, unreadCount: true },
                 }),
                 prisma.incomingMessage.count({
                     where: {
@@ -2361,6 +2362,7 @@ export const getDeviceInbox: RequestHandler = async (req, res) => {
             totalConversations = summaryCount;
             totalMessages = Number(summaryTotals._sum.incomingCount || 0)
                 + Number(summaryTotals._sum.outgoingCount || 0);
+            totalUnreadCount = Number(summaryTotals._sum.unreadCount || 0);
             todayIncomingCount = todayCount;
             totalPages = Math.max(1, Math.ceil(totalConversations / requestedPageSize));
             currentPage = Math.min(requestedPage, totalPages);
@@ -2419,6 +2421,10 @@ export const getDeviceInbox: RequestHandler = async (req, res) => {
             ]);
             unreadCountByJid = new Map(
                 unreadGroups.map((group) => [group.from, group._count._all]),
+            );
+            totalUnreadCount = unreadGroups.reduce(
+                (sum, group) => sum + group._count._all,
+                0,
             );
             for (const group of incomingGroups) {
                 if (!group._max.receivedAt) continue;
@@ -2522,6 +2528,7 @@ export const getDeviceInbox: RequestHandler = async (req, res) => {
                 metadata: {
                     totalMessages,
                     totalConversations,
+                    totalUnreadCount,
                     currentPage,
                     totalPages,
                     hasMore: currentPage < totalPages,
@@ -2636,6 +2643,7 @@ export const getDeviceInbox: RequestHandler = async (req, res) => {
             metadata: {
                 totalMessages,
                 totalConversations,
+                totalUnreadCount,
                 currentPage,
                 totalPages,
                 hasMore,
