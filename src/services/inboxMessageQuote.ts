@@ -37,16 +37,95 @@ const senderLabel = (value: string | null | undefined) => {
     return text.split('@')[0].replace(/^\+/, '') || null;
 };
 
-const MEDIA_PLACEHOLDERS = new Set([
-    '[gambar]',
-    '[video]',
-    '[audio]',
-    '[stiker]',
-    '[dokumen]',
-]);
+type QuotedSenderContact =
+    | {
+          firstName?: string | null;
+          lastName?: string | null;
+      }
+    | null
+    | undefined;
+
+const contactName = (contact: QuotedSenderContact) =>
+    [String(contact?.firstName || '').trim(), String(contact?.lastName || '').trim()]
+        .filter(Boolean)
+        .join(' ');
+
+export const phoneFromWhatsAppJid = (value: string | null | undefined) => {
+    const jid = String(value || '').trim();
+    if (!jid || jid.endsWith('@lid') || jid.endsWith('@g.us')) return '';
+    return jid.split('@')[0].split(':')[0].replace(/\D/g, '');
+};
+
+export type QuotedSenderIdentity = {
+    name: string | null;
+    phone: string | null;
+};
+
+export const buildQuotedSenderIdentity = (input: {
+    contact?: QuotedSenderContact;
+    jid?: string | null;
+    pushName?: string | null;
+}): QuotedSenderIdentity => {
+    const savedName = contactName(input.contact);
+    if (savedName) return { name: savedName, phone: null };
+
+    const phone = phoneFromWhatsAppJid(input.jid);
+    const formattedPhone = phone ? `+${phone}` : null;
+    const pushName = String(input.pushName || '').trim();
+    if (pushName) {
+        const pushNameDigits = pushName.replace(/\D/g, '');
+        if (formattedPhone && pushNameDigits === phone) {
+            return { name: formattedPhone, phone: null };
+        }
+        return { name: pushName, phone: formattedPhone };
+    }
+
+    return { name: formattedPhone, phone: null };
+};
+
+export const buildQuotedSenderLabel = (input: {
+    contact?: QuotedSenderContact;
+    jid?: string | null;
+    pushName?: string | null;
+}) => {
+    return buildQuotedSenderIdentity(input).name;
+};
+
+const resolveQuotedSenderIdentity = async (input: {
+    deviceId: number;
+    contact?: QuotedSenderContact;
+    candidateJids: Array<string | null | undefined>;
+    pushName?: string | null;
+}) => {
+    const linkedContactName = contactName(input.contact);
+    if (linkedContactName) {
+        return buildQuotedSenderIdentity({ contact: input.contact });
+    }
+
+    const phone = input.candidateJids.map(phoneFromWhatsAppJid).find(Boolean) || '';
+    const storedContact = phone
+        ? await prisma.contact.findFirst({
+              where: {
+                  phone: { in: [phone, `+${phone}`] },
+                  contactDevices: { some: { deviceId: input.deviceId } },
+              },
+              select: { firstName: true, lastName: true },
+          })
+        : null;
+
+    return buildQuotedSenderIdentity({
+        contact: storedContact,
+        jid: phone ? `${phone}@s.whatsapp.net` : input.candidateJids[0],
+        pushName: input.pushName,
+    });
+};
+
+const MEDIA_PLACEHOLDERS = new Set(['[gambar]', '[video]', '[audio]', '[stiker]', '[dokumen]']);
 
 const extensionOf = (value: string | null | undefined) => {
-    const normalized = String(value || '').split(/[?#]/)[0].replace(/\\/g, '/');
+    const normalized = String(value || '')
+        .split(/[?#]/)[0]
+        .replace(/\\/g, '/');
     const name = normalized.split('/').pop() || '';
     return name.includes('.') ? name.slice(name.lastIndexOf('.') + 1).toLowerCase() : '';
 };
@@ -87,12 +166,15 @@ const mimeTypeFor = (
         csv: 'text/csv',
         zip: 'application/zip',
     };
-    return knownMimeTypes[extension] || {
-        image: 'image/jpeg',
-        video: 'video/mp4',
-        audio: 'audio/ogg; codecs=opus',
-        document: 'application/octet-stream',
-    }[mediaType];
+    return (
+        knownMimeTypes[extension] ||
+        {
+            image: 'image/jpeg',
+            video: 'video/mp4',
+            audio: 'audio/ogg; codecs=opus',
+            document: 'application/octet-stream',
+        }[mediaType]
+    );
 };
 
 /**
@@ -114,15 +196,11 @@ export function buildInboxQuotedMessageContent(input: {
         return { stickerMessage: { mimetype: 'image/webp' } };
     }
 
-    const mediaType = resolveInboxMediaType(
-        input.mediaPath,
-        input.fileName,
-        normalizedText,
-    ) || 'document';
+    const mediaType =
+        resolveInboxMediaType(input.mediaPath, input.fileName, normalizedText) || 'document';
     const mimetype = mimeTypeFor(mediaType, input.fileName, input.mediaPath);
-    const caption = normalizedText && !MEDIA_PLACEHOLDERS.has(placeholder)
-        ? normalizedText
-        : undefined;
+    const caption =
+        normalizedText && !MEDIA_PLACEHOLDERS.has(placeholder) ? normalizedText : undefined;
 
     switch (mediaType) {
         case 'image':
@@ -145,13 +223,15 @@ export function buildInboxQuotedMessageContent(input: {
 
 const quoteContextInfo = (content: proto.IMessage | null | undefined) => {
     const normalized = extractMessageContent(content);
-    return normalized?.extendedTextMessage?.contextInfo
-        || normalized?.imageMessage?.contextInfo
-        || normalized?.videoMessage?.contextInfo
-        || normalized?.documentMessage?.contextInfo
-        || normalized?.audioMessage?.contextInfo
-        || normalized?.stickerMessage?.contextInfo
-        || null;
+    return (
+        normalized?.extendedTextMessage?.contextInfo ||
+        normalized?.imageMessage?.contextInfo ||
+        normalized?.videoMessage?.contextInfo ||
+        normalized?.documentMessage?.contextInfo ||
+        normalized?.audioMessage?.contextInfo ||
+        normalized?.stickerMessage?.contextInfo ||
+        null
+    );
 };
 
 export async function resolveInboxReplyTarget(input: {
@@ -227,8 +307,11 @@ export async function resolveInboxReplyTarget(input: {
             mediaPath: true,
             fileName: true,
             receivedAt: true,
+            contact: {
+                select: { firstName: true, lastName: true },
+            },
             editSecret: {
-                select: { senderJid: true },
+                select: { senderJid: true, senderAltJid: true },
             },
         },
     });
@@ -238,11 +321,22 @@ export async function resolveInboxReplyTarget(input: {
 
     const quotedText = decryptMessage(target.message) || '[Pesan]';
     const quotedParticipant = target.editSecret?.senderJid || target.participant;
+    const quotedSender = (await resolveQuotedSenderIdentity({
+        deviceId: input.deviceId,
+        contact: target.contact,
+        candidateJids: [
+            target.editSecret?.senderJid,
+            target.editSecret?.senderAltJid,
+            target.participant,
+            target.from,
+        ],
+        pushName: target.pushName,
+    })).name;
     return {
         quotedMessageId: target.id,
         quotedFromMe: false,
         quotedText,
-        quotedSender: target.pushName || senderLabel(target.participant),
+        quotedSender,
         deliveryJid: target.from,
         quoted: {
             key: {
@@ -290,6 +384,12 @@ export async function resolveIncomingQuoteMetadata(input: {
                 participant: true,
                 pushName: true,
                 message: true,
+                contact: {
+                    select: { firstName: true, lastName: true },
+                },
+                editSecret: {
+                    select: { senderJid: true, senderAltJid: true },
+                },
             },
         }),
     ]);
@@ -303,11 +403,22 @@ export async function resolveIncomingQuoteMetadata(input: {
         };
     }
     if (incoming && sameJid(incoming.from, input.conversationJid)) {
+        const quotedSender = (await resolveQuotedSenderIdentity({
+            deviceId: input.deviceId,
+            contact: incoming.contact,
+            candidateJids: [
+                incoming.editSecret?.senderJid,
+                incoming.editSecret?.senderAltJid,
+                incoming.participant,
+                incoming.from,
+            ],
+            pushName: incoming.pushName,
+        })).name;
         return {
             quotedMessageId: incoming.id,
             quotedFromMe: false,
             quotedText: decryptMessage(incoming.message) || '[Pesan]',
-            quotedSender: incoming.pushName || senderLabel(incoming.participant),
+            quotedSender,
         };
     }
 

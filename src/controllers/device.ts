@@ -44,6 +44,10 @@ import {
     getConversationMessageReactions,
 } from '../services/messageReaction';
 import { cleanupMediaFilesIfUnreferenced } from '../services/mediaCleanup';
+import {
+    buildQuotedSenderIdentity,
+    phoneFromWhatsAppJid,
+} from '../services/inboxMessageQuote';
 import { 
     getDeviceHealth, 
     pauseDevice, 
@@ -1592,9 +1596,18 @@ export const getDeviceConversationTimeline: RequestHandler = async (req, res) =>
                           },
                           select: {
                               id: true,
+                              from: true,
+                              participant: true,
+                              pushName: true,
                               mediaPath: true,
                               fileName: true,
                               message: true,
+                              contact: {
+                                  select: { firstName: true, lastName: true },
+                              },
+                              editSecret: {
+                                  select: { senderJid: true, senderAltJid: true },
+                              },
                           },
                       })
                     : Promise.resolve([]),
@@ -1617,8 +1630,40 @@ export const getDeviceConversationTimeline: RequestHandler = async (req, res) =>
                       })
                     : Promise.resolve([]),
             ]);
+        const quotedSenderPhones = [
+            ...new Set(
+                quotedIncomingMessages
+                    .map((message) => [
+                        message.editSecret?.senderJid,
+                        message.editSecret?.senderAltJid,
+                        message.participant,
+                        message.from,
+                    ].map(phoneFromWhatsAppJid).find(Boolean))
+                    .filter((phone): phone is string => Boolean(phone)),
+            ),
+        ];
+        const missingQuotedSenderPhones = quotedSenderPhones.filter(
+            (phone) => !senderPhones.includes(phone),
+        );
+        const quotedSenderContacts = missingQuotedSenderPhones.length > 0
+            ? await prisma.contact.findMany({
+                  where: {
+                      phone: {
+                          in: [
+                              ...missingQuotedSenderPhones,
+                              ...missingQuotedSenderPhones.map((phone) => `+${phone}`),
+                          ],
+                      },
+                      contactDevices: { some: { deviceId: device.pkId } },
+                  },
+                  select: inboxContactSelect,
+              })
+            : [];
         const senderContactsByPhone = new Map(
-            senderContacts.map((contact) => [contact.phone.replace(/\D/g, ''), contact]),
+            [...senderContacts, ...quotedSenderContacts].map((contact) => [
+                contact.phone.replace(/\D/g, ''),
+                contact,
+            ]),
         );
         const quotedIncomingById = new Map(
             quotedIncomingMessages.map((message) => [message.id, message]),
@@ -1645,21 +1690,50 @@ export const getDeviceConversationTimeline: RequestHandler = async (req, res) =>
             const senderPhone = row.participant
                 ? row.participant.split('@')[0].split(':')[0].replace(/\D/g, '')
                 : '';
-            const quotedTarget = row.quotedMessageId
-                ? row.quotedFromMe === true
-                    ? quotedOutgoingById.get(row.quotedMessageId)
-                    : row.quotedFromMe === false
-                        ? quotedIncomingById.get(row.quotedMessageId)
-                        : quotedIncomingById.get(row.quotedMessageId)
-                            || quotedOutgoingById.get(row.quotedMessageId)
+            const quotedIncomingTarget = row.quotedMessageId
+                ? quotedIncomingById.get(row.quotedMessageId)
                 : undefined;
+            const quotedOutgoingTarget = row.quotedMessageId
+                ? quotedOutgoingById.get(row.quotedMessageId)
+                : undefined;
+            const quotedTarget = row.quotedFromMe === true
+                ? quotedOutgoingTarget
+                : row.quotedFromMe === false
+                    ? quotedIncomingTarget
+                    : quotedIncomingTarget || quotedOutgoingTarget;
             const quotedTargetText = quotedTarget
                 ? decryptMessage(quotedTarget.message)
                 : '';
+            const quotedSenderJid = quotedIncomingTarget
+                ? [
+                      quotedIncomingTarget.editSecret?.senderJid,
+                      quotedIncomingTarget.editSecret?.senderAltJid,
+                      quotedIncomingTarget.participant,
+                      quotedIncomingTarget.from,
+                  ].find((jid) => Boolean(phoneFromWhatsAppJid(jid))) || null
+                : null;
+            const quotedSenderPhone = phoneFromWhatsAppJid(quotedSenderJid);
+            const quotedSenderIdentity = row.quotedFromMe === true
+                ? { name: 'Anda', phone: null }
+                : quotedIncomingTarget
+                    ? buildQuotedSenderIdentity({
+                          contact: quotedIncomingTarget.contact
+                              || (quotedSenderPhone
+                                  ? senderContactsByPhone.get(quotedSenderPhone)
+                                  : null),
+                          jid: quotedSenderJid,
+                          pushName: quotedIncomingTarget.pushName,
+                      })
+                    : quotedOutgoingTarget
+                        ? { name: 'Anda', phone: null }
+                        : { name: row.quotedSender, phone: null };
+            const resolvedQuotedSender = quotedSenderIdentity.name || row.quotedSender;
             return {
                 ...serializePrisma(row),
                 message: decryptedMessage,
                 quotedText: decryptMessage(row.quotedText),
+                quotedSender: resolvedQuotedSender,
+                quotedSenderPhone: quotedSenderIdentity.phone,
                 mediaType: resolveInboxMediaType(
                     row.mediaPath,
                     row.fileName,

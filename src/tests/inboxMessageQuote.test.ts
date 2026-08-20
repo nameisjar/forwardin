@@ -1,5 +1,9 @@
 import { expect } from 'chai';
-import { buildInboxQuotedMessageContent } from '../services/inboxMessageQuote';
+import {
+    buildInboxQuotedMessageContent,
+    buildQuotedSenderIdentity,
+    buildQuotedSenderLabel,
+} from '../services/inboxMessageQuote';
 
 describe('Inbox media quote payload', () => {
     it('keeps an image target as an image message', () => {
@@ -44,5 +48,59 @@ describe('Inbox media quote payload', () => {
     it('continues to quote ordinary text as a conversation', () => {
         const content = buildInboxQuotedMessageContent({ text: 'Halo' });
         expect(content).to.deep.equal({ conversation: 'Halo' });
+    });
+});
+
+describe('Inbox quoted sender label', () => {
+    it('prefers the saved contact name over phone and WhatsApp push name', () => {
+        expect(
+            buildQuotedSenderLabel({
+                contact: { firstName: 'Bramantyo', lastName: 'Parents' },
+                jid: '6281234567890@s.whatsapp.net',
+                pushName: 'Rohani Suci',
+            }),
+        ).to.equal('Bramantyo Parents');
+    });
+
+    it('uses the WhatsApp push name as the label when contact is missing', () => {
+        expect(
+            buildQuotedSenderLabel({
+                jid: '6281234567890:12@s.whatsapp.net',
+                pushName: 'Rohani Suci',
+            }),
+        ).to.equal('Rohani Suci');
+    });
+
+    it('keeps the clean phone beside the push name for an unsaved contact', () => {
+        expect(
+            buildQuotedSenderIdentity({
+                jid: '6281234567890:12@s.whatsapp.net',
+                pushName: 'Rohani Suci',
+            }),
+        ).to.deep.equal({
+            name: 'Rohani Suci',
+            phone: '+6281234567890',
+        });
+    });
+
+    it('does not repeat the phone when the push name is also a number', () => {
+        expect(
+            buildQuotedSenderIdentity({
+                jid: '6281234567890@s.whatsapp.net',
+                pushName: '+62 812-3456-7890',
+            }),
+        ).to.deep.equal({
+            name: '+6281234567890',
+            phone: null,
+        });
+    });
+
+    it('does not expose a linked-device identifier', () => {
+        expect(
+            buildQuotedSenderLabel({
+                jid: '123456789@lid',
+                pushName: 'Rohani Suci',
+            }),
+        ).to.equal('Rohani Suci');
     });
 });

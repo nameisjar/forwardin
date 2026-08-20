@@ -18,6 +18,7 @@ import {
 } from '../services/inboxProfileCache';
 import { getInstance, verifyInstance } from '../whatsapp';
 import { getSocketIO } from '../socket';
+import { syncContactToWhatsApp } from '../services/whatsappContactSync';
 
 // Helper to format phone number (08 -> 628)
 const formatPhoneNumber = (phone: any): string => {
@@ -33,7 +34,16 @@ const formatPhoneNumber = (phone: any): string => {
 
 export const createContact: RequestHandler = async (req, res) => {
     try {
-        const { firstName, lastName, email, gender, dob, labels, deviceId } = req.body;
+        const {
+            firstName,
+            lastName,
+            email,
+            gender,
+            dob,
+            labels,
+            deviceId,
+            syncToWhatsApp,
+        } = req.body;
         const phone = formatPhoneNumber(req.body.phone);
 
         if (!firstName || !phone || !deviceId) {
@@ -145,10 +155,24 @@ export const createContact: RequestHandler = async (req, res) => {
             return { contactId: createdContact.id, contactName: createdContact.firstName };
         });
 
+        const whatsappSync = syncToWhatsApp === true
+            ? await syncContactToWhatsApp({
+                  devicePkId: existingDevice.pkId,
+                  phone,
+                  firstName,
+                  lastName,
+              })
+            : {
+                  requested: false as const,
+                  synced: false,
+                  status: 'not_requested' as const,
+              };
+
         res.status(200).json({
             message: 'Contact created successfully',
             contactId: created.contactId,
             contactName: created.contactName,
+            whatsappSync,
         });
     } catch (error: unknown) {
         logger.error(error);
@@ -412,7 +436,16 @@ export const importContacts: RequestHandler = async (req, res) => {
 export const updateContact: RequestHandler = async (req, res) => {
     try {
         const contactId = req.params.contactId;
-        const { firstName, lastName, email, gender, dob, labels, deviceId } = req.body;
+        const {
+            firstName,
+            lastName,
+            email,
+            gender,
+            dob,
+            labels,
+            deviceId,
+            syncToWhatsApp,
+        } = req.body;
         const phone = req.body.phone ? formatPhoneNumber(req.body.phone) : undefined;
         const userId = req.authenticatedUser.pkId;
         const privilegeId = req.privilege.pkId;
@@ -420,7 +453,7 @@ export const updateContact: RequestHandler = async (req, res) => {
             return res.status(400).json({ message: 'Invalid contactId' });
         }
 
-        await prisma.$transaction(async (transaction) => {
+        const updated = await prisma.$transaction(async (transaction) => {
             // Verify ownership through device relationship
             const existingContact = await transaction.contact.findFirst({
                 where: {
@@ -429,7 +462,7 @@ export const updateContact: RequestHandler = async (req, res) => {
                         some: { device: accessibleDeviceWhere(userId, privilegeId) },
                     },
                 },
-                include: { contactDevices: { select: { id: true } } },
+                include: { contactDevices: { select: { id: true, deviceId: true } } },
             });
 
             if (!existingContact) {
@@ -449,6 +482,7 @@ export const updateContact: RequestHandler = async (req, res) => {
                 },
             });
 
+            let syncDevicePkId = existingContact.contactDevices[0]?.deviceId || null;
             if (deviceId) {
                 const existingDevice = await transaction.device.findFirst({
                     where: {
@@ -459,6 +493,7 @@ export const updateContact: RequestHandler = async (req, res) => {
                 if (!existingDevice) {
                     throw new Error('Device not found');
                 }
+                syncDevicePkId = existingDevice.pkId;
 
                 if (existingContact.contactDevices.length > 0) {
                     await transaction.contactDevice.update({
@@ -493,9 +528,24 @@ export const updateContact: RequestHandler = async (req, res) => {
                     });
                 }
             }
+
+            return { updatedContact, syncDevicePkId };
         });
 
-        res.status(200).json({ message: 'Contact updated successfully' });
+        const whatsappSync = syncToWhatsApp === true && updated.syncDevicePkId
+            ? await syncContactToWhatsApp({
+                  devicePkId: updated.syncDevicePkId,
+                  phone: updated.updatedContact.phone,
+                  firstName: updated.updatedContact.firstName,
+                  lastName: updated.updatedContact.lastName,
+              })
+            : {
+                  requested: false as const,
+                  synced: false,
+                  status: 'not_requested' as const,
+              };
+
+        res.status(200).json({ message: 'Contact updated successfully', whatsappSync });
     } catch (error) {
         logger.error(error);
         res.status(500).json({ message: 'Internal server error' });
