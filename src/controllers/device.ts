@@ -1166,7 +1166,7 @@ export const deleteConversation: RequestHandler = async (req, res) => {
         const deletedCount = incomingResult.count + outgoingResult.count;
 
         res.status(200).json({
-            message: `Berhasil menghapus ${deletedCount} pesan dari ${from}`,
+            message: `Berhasil menghapus ${deletedCount} pesan`,
             deletedCount,
             deletedIncomingCount: incomingResult.count,
             deletedOutgoingCount: outgoingResult.count,
