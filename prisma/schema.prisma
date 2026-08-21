@@ -555,6 +555,7 @@ model MessageReaction {
   targetMessageId   String   @map("target_message_id") @db.VarChar(255)
   targetFromMe      Boolean  @map("target_from_me")
   reactorJid        String   @map("reactor_jid") @db.VarChar(128)
+  reactorDisplayName String? @map("reactor_display_name") @db.VarChar(255)
   emoji             String   @db.VarChar(64)
   reactionMessageId String?  @map("reaction_message_id") @db.VarChar(255)
   reactedAt         DateTime @map("reacted_at")

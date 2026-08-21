@@ -223,6 +223,7 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
         targetKey: WAMessageKey,
         reaction: proto.IReaction,
         conversationJidOverride?: string,
+        reactorDisplayName?: string | null,
     ) => {
         if (!targetKey.id) return null;
 
@@ -278,6 +279,7 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
             targetMessageId: targetKey.id,
             targetFromMe: Boolean(targetKey.fromMe),
             reactorJid,
+            reactorDisplayName,
             emoji: reaction.text,
             reactionMessageId: reactionKey?.id || null,
             reactedAt: reactionTimestamp(reaction.senderTimestampMs),
@@ -376,6 +378,7 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                                     reactionMessage.key,
                                     { ...reactionMessage, key: message.key },
                                     jid,
+                                    message.pushName,
                                 );
                             } catch (reactionError) {
                                 logger.warn(

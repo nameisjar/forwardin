@@ -13,9 +13,11 @@ export interface MessageReactionState {
 }
 
 interface MessageReactionRow {
+    session_id?: string;
     target_message_id: string;
     target_from_me: boolean;
     reactor_jid: string;
+    reactor_display_name: string | null;
     emoji: string;
     reaction_message_id: string | null;
     reacted_at: Date;
@@ -28,6 +30,7 @@ interface SaveMessageReactionInput {
     targetMessageId: string;
     targetFromMe: boolean;
     reactorJid: string;
+    reactorDisplayName?: string | null;
     emoji?: string | null;
     reactionMessageId?: string | null;
     reactedAt: Date;
@@ -37,6 +40,7 @@ const serializeReaction = (row: MessageReactionRow): MessageReactionState => ({
     targetMessageId: row.target_message_id,
     targetFromMe: row.target_from_me,
     reactorJid: row.reactor_jid,
+    reactorDisplayName: row.reactor_display_name,
     emoji: row.emoji,
     reactionMessageId: row.reaction_message_id,
     reactedAt: row.reacted_at.toISOString(),
@@ -87,6 +91,18 @@ const getContactDisplayName = (contact: {
     return [contact.firstName, contact.lastName].filter(Boolean).join(' ').trim() || null;
 };
 
+export const resolveReactionDisplayName = (input: {
+    contact?: Parameters<typeof getContactDisplayName>[0];
+    storedDisplayName?: string | null;
+    pushName?: string | null;
+}): string | null => {
+    const contactName = getContactDisplayName(input.contact);
+    if (contactName) return contactName;
+
+    const candidates = [input.storedDisplayName, input.pushName];
+    return candidates.map((value) => String(value || '').trim()).find(Boolean) || null;
+};
+
 export const reactionTimestamp = (value: unknown): Date => {
     let numericValue: number;
     if (typeof value === 'object' && value && 'toNumber' in value) {
@@ -115,6 +131,7 @@ export const saveMessageReaction = async (
             targetMessageId: input.targetMessageId,
             targetFromMe: input.targetFromMe,
             reactorJid: input.reactorJid,
+            reactorDisplayName: input.reactorDisplayName?.trim() || null,
             emoji: '',
             reactionMessageId: input.reactionMessageId || null,
             reactedAt: input.reactedAt.toISOString(),
@@ -125,25 +142,31 @@ export const saveMessageReaction = async (
     const rows = await prisma.$queryRaw<MessageReactionRow[]>`
         INSERT INTO "message_reaction" (
             "device_id", "session_id", "conversation_jid", "target_message_id",
-            "target_from_me", "reactor_jid", "emoji", "reaction_message_id", "reacted_at",
+            "target_from_me", "reactor_jid", "reactor_display_name", "emoji",
+            "reaction_message_id", "reacted_at",
             "created_at", "updated_at"
         ) VALUES (
             ${input.deviceId}, ${input.sessionId}, ${input.conversationJid},
             ${input.targetMessageId}, ${input.targetFromMe}, ${input.reactorJid},
-            ${emoji}, ${input.reactionMessageId || null}, ${input.reactedAt},
+            ${input.reactorDisplayName?.trim() || null}, ${emoji},
+            ${input.reactionMessageId || null}, ${input.reactedAt},
             CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
         )
         ON CONFLICT ("device_id", "session_id", "target_message_id", "reactor_jid")
         DO UPDATE SET
             "conversation_jid" = EXCLUDED."conversation_jid",
             "target_from_me" = EXCLUDED."target_from_me",
+            "reactor_display_name" = COALESCE(
+                NULLIF(EXCLUDED."reactor_display_name", ''),
+                "message_reaction"."reactor_display_name"
+            ),
             "emoji" = EXCLUDED."emoji",
             "reaction_message_id" = EXCLUDED."reaction_message_id",
             "reacted_at" = EXCLUDED."reacted_at",
             "updated_at" = CURRENT_TIMESTAMP
         RETURNING
-            "target_message_id", "target_from_me", "reactor_jid", "emoji",
-            "reaction_message_id", "reacted_at"
+            "target_message_id", "target_from_me", "reactor_jid",
+            "reactor_display_name", "emoji", "reaction_message_id", "reacted_at"
     `;
 
     return { ...serializeReaction(rows[0]), removed: false };
@@ -155,14 +178,32 @@ export const getConversationMessageReactions = async (
 ): Promise<MessageReactionState[]> => {
     const rows = await prisma.$queryRaw<MessageReactionRow[]>`
         SELECT
-            "target_message_id", "target_from_me", "reactor_jid", "emoji",
-            "reaction_message_id", "reacted_at"
+            "session_id", "target_message_id", "target_from_me", "reactor_jid",
+            "reactor_display_name", "emoji", "reaction_message_id", "reacted_at"
         FROM "message_reaction"
         WHERE "device_id" = ${deviceId}
           AND "conversation_jid" = ${conversationJid}
         ORDER BY "reacted_at" ASC
     `;
     const reactions = rows.map(serializeReaction);
+    const rawReactionMessageFilters = rows
+        .filter((row) => Boolean(row.reaction_message_id))
+        .map((row) => ({
+            sessionId: row.session_id,
+            id: row.reaction_message_id!,
+        }));
+    const rawReactionMessages = rawReactionMessageFilters.length > 0
+        ? await prisma.message.findMany({
+              where: { OR: rawReactionMessageFilters },
+              select: { sessionId: true, id: true, pushName: true },
+          })
+        : [];
+    const rawPushNameByReaction = new Map(
+        rawReactionMessages.map((message) => [
+            `${message.sessionId || ''}\u0000${message.id}`,
+            message.pushName,
+        ]),
+    );
     const reactorJids = [
         ...new Set(
             reactions
@@ -203,8 +244,9 @@ export const getConversationMessageReactions = async (
         ],
     );
     const identityFilters = [...exactIdentityFilters, ...phoneIdentityFilters];
-    const incomingIdentities = identityFilters.length > 0
-        ? await prisma.incomingMessage.findMany({
+    const [incomingIdentities, conversationIdentities] = identityFilters.length > 0
+        ? await Promise.all([
+            prisma.incomingMessage.findMany({
               where: {
                   deviceId,
                   OR: identityFilters,
@@ -221,8 +263,29 @@ export const getConversationMessageReactions = async (
                       select: { senderJid: true, senderAltJid: true },
                   },
               },
-          })
-        : [];
+            }),
+            prisma.conversation.findMany({
+                where: {
+                    deviceId,
+                    isGroup: false,
+                    OR: [
+                        ...(reactorIdentityJids.length > 0
+                            ? [{ jid: { in: reactorIdentityJids } }]
+                            : []),
+                        ...reactorPhones.map((phone) => ({ jid: { startsWith: phone } })),
+                    ],
+                },
+                orderBy: { updatedAt: 'desc' },
+                select: {
+                    jid: true,
+                    pushName: true,
+                    contact: {
+                        select: { firstName: true, lastName: true, phone: true },
+                    },
+                },
+            }),
+        ])
+        : [[], []];
     const identityPhones = incomingIdentities
         .flatMap((identity) => identityJids(identity).map(normalizeReactionPhone))
         .filter(Boolean);
@@ -254,8 +317,17 @@ export const getConversationMessageReactions = async (
             }
         }
     }
+    const conversationsByKey = new Map<string, (typeof conversationIdentities)[number]>();
+    for (const conversation of conversationIdentities) {
+        const jidKey = conversation.jid.toLowerCase();
+        const phoneKey = normalizeReactionPhone(conversation.jid);
+        if (!conversationsByKey.has(jidKey)) conversationsByKey.set(jidKey, conversation);
+        if (phoneKey && !conversationsByKey.has(phoneKey)) {
+            conversationsByKey.set(phoneKey, conversation);
+        }
+    }
 
-    return reactions.map((reaction) => {
+    return reactions.map((reaction, index) => {
         if (reaction.reactorJid === 'me') {
             return { ...reaction, reactorDisplayName: 'Anda', reactorPhone: null };
         }
@@ -263,12 +335,24 @@ export const getConversationMessageReactions = async (
         const directPhone = normalizeReactionPhone(reaction.reactorJid);
         const identity = identitiesByKey.get(reaction.reactorJid.toLowerCase())
             || (directPhone ? identitiesByKey.get(directPhone) : undefined);
-        const reactorPhone = directPhone || identityPhone(identity) || null;
-        const contact = (reactorPhone ? contactsByPhone.get(reactorPhone) : undefined)
-            || identity?.contact;
-        const reactorDisplayName = getContactDisplayName(contact)
-            || identity?.pushName?.trim()
+        const conversationIdentity = conversationsByKey.get(reaction.reactorJid.toLowerCase())
+            || (directPhone ? conversationsByKey.get(directPhone) : undefined);
+        const reactorPhone = directPhone
+            || identityPhone(identity)
+            || normalizeReactionPhone(conversationIdentity?.jid)
             || null;
+        const contact = (reactorPhone ? contactsByPhone.get(reactorPhone) : undefined)
+            || identity?.contact
+            || conversationIdentity?.contact;
+        const reactorDisplayName = resolveReactionDisplayName({
+            contact,
+            storedDisplayName: reaction.reactorDisplayName,
+            pushName: identity?.pushName
+                || conversationIdentity?.pushName
+                || rawPushNameByReaction.get(
+                    `${rows[index].session_id}\u0000${reaction.reactionMessageId || ''}`,
+                ),
+        });
 
         return {
             ...reaction,
