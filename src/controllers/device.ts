@@ -2778,12 +2778,15 @@ export const getInboxConversationReactions: RequestHandler = async (req, res) =>
         );
         const ownPhone = String(device.phone || '').replace(/\D/g, '');
         const ownJid = ownPhone ? `${ownPhone}@s.whatsapp.net` : null;
-        const getProfileJid = (reactorJid: string) =>
-            reactorJid === 'me' ? ownJid : reactorJid;
+        const getProfileJid = (reaction: (typeof reactions)[number]) => {
+            if (reaction.reactorJid === 'me') return ownJid;
+            const phone = String(reaction.reactorPhone || '').replace(/\D/g, '');
+            return phone ? `${phone}@s.whatsapp.net` : reaction.reactorJid;
+        };
         const reactorJids = [
             ...new Set(
                 reactions
-                    .map((reaction) => getProfileJid(reaction.reactorJid))
+                    .map(getProfileJid)
                     .filter((jid) =>
                         Boolean(jid)
                         && !jid!.endsWith('@lid')
@@ -2796,7 +2799,7 @@ export const getInboxConversationReactions: RequestHandler = async (req, res) =>
             reactorJids,
         );
         const reactionsWithProfiles = reactions.map((reaction) => {
-            const profileJid = getProfileJid(reaction.reactorJid);
+            const profileJid = getProfileJid(reaction);
             const eligible = Boolean(profileJid && reactorJids.includes(profileJid));
             const summary = eligible && profileJid
                 ? profileSummaries.get(profileJid)

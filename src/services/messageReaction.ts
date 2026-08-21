@@ -1,3 +1,4 @@
+import { Prisma } from '@prisma/client';
 import prisma from '../utils/db';
 
 export interface MessageReactionState {
@@ -41,11 +42,42 @@ const serializeReaction = (row: MessageReactionRow): MessageReactionState => ({
     reactedAt: row.reacted_at.toISOString(),
 });
 
-const normalizeReactionPhone = (value: string | null | undefined): string =>
-    String(value || '')
+export const normalizeReactionPhone = (value: string | null | undefined): string => {
+    const jid = String(value || '').trim().toLowerCase();
+    if (!jid || jid === 'me' || jid.endsWith('@lid') || jid.endsWith('@g.us')) return '';
+    return jid
         .split('@')[0]
         .split(':')[0]
         .replace(/\D/g, '');
+};
+
+type IncomingReactionIdentity = {
+    from: string;
+    participant: string | null;
+    pushName: string | null;
+    contact: {
+        firstName: string;
+        lastName: string | null;
+        phone: string;
+    } | null;
+    editSecret: {
+        senderJid: string;
+        senderAltJid: string | null;
+    } | null;
+};
+
+const identityJids = (identity: IncomingReactionIdentity) => [
+    identity.editSecret?.senderJid,
+    identity.editSecret?.senderAltJid,
+    identity.participant,
+    identity.from,
+].filter((jid): jid is string => Boolean(jid));
+
+const identityLookupJids = (identity: IncomingReactionIdentity) =>
+    identityJids(identity).filter((jid) => !jid.toLowerCase().endsWith('@g.us'));
+
+const identityPhone = (identity: IncomingReactionIdentity | undefined) =>
+    identity ? identityJids(identity).map(normalizeReactionPhone).find(Boolean) || '' : '';
 
 const getContactDisplayName = (contact: {
     firstName: string;
@@ -141,6 +173,9 @@ export const getConversationMessageReactions = async (
     const reactorPhones = [
         ...new Set(reactorJids.map(normalizeReactionPhone).filter(Boolean)),
     ];
+    const reactorIdentityJids = reactorJids.filter(
+        (jid) => !jid.toLowerCase().endsWith('@g.us'),
+    );
 
     if (reactorJids.length === 0) {
         return reactions.map((reaction) => ({
@@ -150,46 +185,67 @@ export const getConversationMessageReactions = async (
         }));
     }
 
-    const contactPhoneCandidates = [
-        ...new Set(reactorPhones.flatMap((phone) => [phone, `+${phone}`])),
-    ];
-    const [contacts, incomingIdentities] = await Promise.all([
-        contactPhoneCandidates.length > 0
-            ? prisma.contact.findMany({
-                  where: {
-                      phone: { in: contactPhoneCandidates },
-                      contactDevices: { some: { deviceId } },
+    const exactIdentityFilters: Prisma.IncomingMessageWhereInput[] =
+        reactorIdentityJids.length > 0
+            ? [
+                  { participant: { in: reactorIdentityJids } },
+                  { from: { in: reactorIdentityJids } },
+                  { editSecret: { is: { senderJid: { in: reactorIdentityJids } } } },
+                  { editSecret: { is: { senderAltJid: { in: reactorIdentityJids } } } },
+              ]
+            : [];
+    const phoneIdentityFilters: Prisma.IncomingMessageWhereInput[] = reactorPhones.flatMap(
+        (phone) => [
+            { participant: { startsWith: phone } },
+            { from: { startsWith: phone } },
+            { editSecret: { is: { senderJid: { startsWith: phone } } } },
+            { editSecret: { is: { senderAltJid: { startsWith: phone } } } },
+        ],
+    );
+    const identityFilters = [...exactIdentityFilters, ...phoneIdentityFilters];
+    const incomingIdentities = identityFilters.length > 0
+        ? await prisma.incomingMessage.findMany({
+              where: {
+                  deviceId,
+                  OR: identityFilters,
+              },
+              orderBy: { receivedAt: 'desc' },
+              select: {
+                  from: true,
+                  participant: true,
+                  pushName: true,
+                  contact: {
+                      select: { firstName: true, lastName: true, phone: true },
                   },
-                  select: { firstName: true, lastName: true, phone: true },
-              })
-            : Promise.resolve([]),
-        prisma.incomingMessage.findMany({
-            where: {
-                deviceId,
-                OR: [
-                    { participant: { in: reactorJids } },
-                    { from: { in: reactorJids } },
-                ],
-            },
-            orderBy: { receivedAt: 'desc' },
-            select: {
-                from: true,
-                participant: true,
-                pushName: true,
-                contact: {
-                    select: { firstName: true, lastName: true, phone: true },
-                },
-            },
-        }),
-    ]);
+                  editSecret: {
+                      select: { senderJid: true, senderAltJid: true },
+                  },
+              },
+          })
+        : [];
+    const identityPhones = incomingIdentities
+        .flatMap((identity) => identityJids(identity).map(normalizeReactionPhone))
+        .filter(Boolean);
+    const contactPhones = [...new Set([...reactorPhones, ...identityPhones])];
+    const contactPhoneCandidates = [
+        ...new Set(contactPhones.flatMap((phone) => [phone, `+${phone}`])),
+    ];
+    const contacts = contactPhoneCandidates.length > 0
+        ? await prisma.contact.findMany({
+              where: {
+                  phone: { in: contactPhoneCandidates },
+                  contactDevices: { some: { deviceId } },
+              },
+              select: { firstName: true, lastName: true, phone: true },
+          })
+        : [];
 
     const contactsByPhone = new Map(
         contacts.map((contact) => [normalizeReactionPhone(contact.phone), contact]),
     );
     const identitiesByKey = new Map<string, (typeof incomingIdentities)[number]>();
     for (const identity of incomingIdentities) {
-        for (const value of [identity.participant, identity.from]) {
-            if (!value) continue;
+        for (const value of identityLookupJids(identity)) {
             const jidKey = value.toLowerCase();
             const phoneKey = normalizeReactionPhone(value);
             if (!identitiesByKey.has(jidKey)) identitiesByKey.set(jidKey, identity);
@@ -204,9 +260,10 @@ export const getConversationMessageReactions = async (
             return { ...reaction, reactorDisplayName: 'Anda', reactorPhone: null };
         }
 
-        const reactorPhone = normalizeReactionPhone(reaction.reactorJid) || null;
+        const directPhone = normalizeReactionPhone(reaction.reactorJid);
         const identity = identitiesByKey.get(reaction.reactorJid.toLowerCase())
-            || (reactorPhone ? identitiesByKey.get(reactorPhone) : undefined);
+            || (directPhone ? identitiesByKey.get(directPhone) : undefined);
+        const reactorPhone = directPhone || identityPhone(identity) || null;
         const contact = (reactorPhone ? contactsByPhone.get(reactorPhone) : undefined)
             || identity?.contact;
         const reactorDisplayName = getContactDisplayName(contact)
