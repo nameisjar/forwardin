@@ -43,7 +43,10 @@ import {
     resolveInboxMediaType,
     serializeInboxMediaPath,
 } from '../utils/inboxMedia';
-import { refreshInboxProfileCache } from '../services/inboxProfileCache';
+import {
+    getInboxProfileCache,
+    refreshInboxProfileCache,
+} from '../services/inboxProfileCache';
 import {
     deleteReactionPlaceholder,
     reactionTimestamp,
@@ -1171,7 +1174,18 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
 
                                     // Emit socket event untuk real-time update
                                     const emitEventName = `incoming:${sessionId}`;
-                                    const publicDeviceUuid = await getDeviceUuid();
+                                    const [publicDeviceUuid, cachedConversationProfile] =
+                                        await Promise.all([
+                                            getDeviceUuid(),
+                                            deviceId && !jid.endsWith('@lid')
+                                                ? getInboxProfileCache(deviceId, jid)
+                                                : Promise.resolve(null),
+                                        ]);
+                                    const cachedProfileUrl =
+                                        publicDeviceUuid
+                                        && cachedConversationProfile?.imageData?.length
+                                            ? createInboxProfileUrl(publicDeviceUuid, jid)
+                                            : null;
                                     const emitPayload = {
                                         ...decryptIncomingMessage(incomingMessage),
                                         mediaType: resolveInboxMediaType(
@@ -1186,9 +1200,14 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                                                   incomingMessage.id,
                                               )
                                             : incomingMessage.mediaPath,
-                                        profilePicUrl: null,
-                                        groupPicUrl: null,
-                                        profilePictureStatus: 'pending',
+                                        profilePicUrl: jid.includes('@g.us')
+                                            ? null
+                                            : cachedProfileUrl,
+                                        groupPicUrl: jid.includes('@g.us')
+                                            ? cachedProfileUrl
+                                            : null,
+                                        profilePictureStatus:
+                                            cachedConversationProfile?.status || 'pending',
                                         senderProfilePicUrl:
                                             publicDeviceUuid
                                             && participant
