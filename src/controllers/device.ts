@@ -48,6 +48,10 @@ import {
     buildQuotedSenderIdentity,
     phoneFromWhatsAppJid,
 } from '../services/inboxMessageQuote';
+import {
+    parseMessageReadReceipts,
+    resolveMessageReadReceipts,
+} from '../services/messageReadReceipt';
 import { 
     getDeviceHealth, 
     pauseDevice, 
@@ -1392,6 +1396,7 @@ type ConversationTimelineRow = {
     groupName: string | null;
     waMessageId: string | null;
     readBy: unknown;
+    readReceipts: unknown;
 };
 
 type ConversationTimelineCursor = {
@@ -1499,7 +1504,8 @@ export const getDeviceConversationTimeline: RequestHandler = async (req, res) =>
                     incoming."push_name" AS "pushName",
                     incoming."group_name" AS "groupName",
                     NULL::TEXT AS "waMessageId",
-                    NULL::JSONB AS "readBy"
+                    NULL::JSONB AS "readBy",
+                    NULL::JSONB AS "readReceipts"
                 FROM "IncomingMessage" incoming
                 WHERE incoming."device_id" = ${device.pkId}
                   AND incoming."from" = ${conversationJid}
@@ -1529,7 +1535,8 @@ export const getDeviceConversationTimeline: RequestHandler = async (req, res) =>
                     NULL::TEXT AS "pushName",
                     NULL::TEXT AS "groupName",
                     outgoing."wa_message_id" AS "waMessageId",
-                    outgoing."read_by" AS "readBy"
+                    outgoing."read_by" AS "readBy",
+                    outgoing."read_receipts" AS "readReceipts"
                 FROM "OutgoingMessage" outgoing
                 WHERE outgoing."device_id" = ${device.pkId}
                   AND outgoing."to" = ${conversationJid}
@@ -2733,6 +2740,140 @@ export const getDeviceInbox: RequestHandler = async (req, res) => {
     } catch (error) {
         logger.error(error);
         res.status(500).json({ message: 'Internal server error' });
+    }
+};
+
+/** Get the people who read one outgoing Inbox message, including read time. */
+export const getInboxMessageReadReceipts: RequestHandler = async (req, res) => {
+    try {
+        const deviceUuid = req.params.deviceId;
+        const messageId = typeof req.query.messageId === 'string'
+            ? req.query.messageId.trim()
+            : '';
+        if (!isUUID(deviceUuid) || !messageId) {
+            return res.status(400).json({ message: 'Invalid read receipt query' });
+        }
+
+        const device = await prisma.device.findFirst({
+            where: {
+                id: deviceUuid,
+                ...accessibleDeviceWhere(req.authenticatedUser.pkId, req.privilege?.pkId),
+            },
+            select: {
+                pkId: true,
+                id: true,
+                sessions: {
+                    where: { id: { contains: 'config' } },
+                    select: { sessionId: true },
+                    orderBy: { pkId: 'desc' },
+                    take: 1,
+                },
+            },
+        });
+        if (!device) return res.status(404).json({ message: 'Device not found' });
+
+        const outgoing = await prisma.outgoingMessage.findFirst({
+            where: {
+                deviceId: device.pkId,
+                OR: [{ id: messageId }, { waMessageId: messageId }],
+            },
+            select: {
+                id: true,
+                waMessageId: true,
+                readBy: true,
+                readReceipts: true,
+                updatedAt: true,
+            },
+        });
+        if (!outgoing) return res.status(404).json({ message: 'Message not found' });
+
+        let storedReceipts = parseMessageReadReceipts(outgoing.readReceipts);
+        if (storedReceipts.length === 0 && Array.isArray(outgoing.readBy)) {
+            storedReceipts = outgoing.readBy
+                .map((readerJid) => String(readerJid || '').trim())
+                .filter(Boolean)
+                .map((readerJid) => ({
+                    readerJid,
+                    readAt: outgoing.updatedAt.toISOString(),
+                    estimated: true,
+                }));
+        }
+
+        const resolvedReceipts = await resolveMessageReadReceipts(
+            device.pkId,
+            storedReceipts,
+        );
+        const profileJids = [
+            ...new Set(
+                resolvedReceipts
+                    .map((receipt) => receipt.profileJid)
+                    .filter((jid): jid is string => Boolean(jid)),
+            ),
+        ];
+        const profileSummaries = await getInboxProfileCacheSummaries(
+            device.pkId,
+            profileJids,
+        );
+        const readers = resolvedReceipts.map((receipt) => {
+            const summary = receipt.profileJid
+                ? profileSummaries.get(receipt.profileJid)
+                : undefined;
+            return {
+                ...receipt,
+                readerProfilePicUrl: receipt.profileJid
+                    ? createInboxProfileUrl(device.id, receipt.profileJid)
+                    : null,
+                readerProfileStatus: summary?.status
+                    || (receipt.profileJid ? 'pending' : 'unavailable'),
+            };
+        });
+
+        const sessionId = device.sessions[0]?.sessionId;
+        let profileSession: ReturnType<typeof getInstance> | null = null;
+        if (sessionId && verifyInstance(sessionId)) {
+            try {
+                profileSession = getInstance(sessionId);
+            } catch {
+                profileSession = null;
+            }
+        }
+        if (profileSession && profileJids.length > 0) {
+            const now = Date.now();
+            const refreshQueue = profileJids.filter((jid) => {
+                const summary = profileSummaries.get(jid);
+                if (!summary) return true;
+                if (summary.nextRetryAt && summary.nextRetryAt.getTime() > now) return false;
+                return !summary.expiresAt || summary.expiresAt.getTime() <= now;
+            });
+            void (async () => {
+                const worker = async () => {
+                    while (refreshQueue.length > 0) {
+                        const jid = refreshQueue.shift();
+                        if (!jid) return;
+                        await refreshInboxProfileCache({
+                            deviceId: device.pkId,
+                            jid,
+                            session: profileSession!,
+                        });
+                        await new Promise((resolve) => setTimeout(resolve, 150));
+                    }
+                };
+                await Promise.allSettled([worker(), worker()]);
+            })().catch(() => undefined);
+        }
+
+        res.setHeader('Cache-Control', 'no-store');
+        return res.status(200).json({
+            messageId: outgoing.waMessageId || outgoing.id,
+            readCount: readers.length,
+            readers,
+        });
+    } catch (error) {
+        logger.warn(
+            { code: (error as { code?: unknown })?.code },
+            'Failed to load outgoing message read receipts',
+        );
+        return res.status(500).json({ message: 'Failed to load message readers' });
     }
 };
 

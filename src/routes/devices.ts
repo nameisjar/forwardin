@@ -23,6 +23,7 @@ router.post('/:deviceId/access-token', controller.issueDeviceAccessToken);
 router.get('/:deviceId/inbox', controller.getDeviceInbox);
 router.get('/:deviceId/inbox/timeline', controller.getDeviceConversationTimeline);
 router.get('/:deviceId/inbox/reactions', controller.getInboxConversationReactions);
+router.get('/:deviceId/inbox/read-receipts', controller.getInboxMessageReadReceipts);
 router.delete('/:deviceId/inbox', controller.deleteAllInbox);
 router.delete('/:deviceId/inbox/conversation', controller.deleteConversation);
 router.put('/:deviceId/inbox/conversation/read', controller.markConversationAsRead);

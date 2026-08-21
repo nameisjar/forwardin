@@ -388,6 +388,8 @@ model OutgoingMessage {
   isGroup       Boolean?  @default(false) // Track if message is for group
   /// For group messages: list of participant JIDs who have read the message (best-effort).
   readBy        Json?     @map("read_by")
+  /// Per-reader WhatsApp read receipt metadata, including the read timestamp.
+  readReceipts  Json?     @map("read_receipts")
   contact       Contact?  @relation(fields: [contactId], references: [pkId], onDelete: SetNull)
   device        Device?   @relation(fields: [deviceId], references: [pkId], onDelete: SetNull)
 

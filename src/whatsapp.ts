@@ -9,6 +9,7 @@ import makeWASocket, {
     fetchLatestBaileysVersion,
     S_WHATSAPP_NET,
 } from '@whiskeysockets/baileys';
+import { Prisma } from '@prisma/client';
 import prisma from './utils/db';
 import { toDataURL, toString as qrToString } from 'qrcode';
 import logger from './config/logger';
@@ -62,6 +63,7 @@ import {
 } from './services/messageSender';
 import { extractMessageEdit } from './utils/messageEdit';
 import { applyIncomingMessageEdit } from './services/incomingMessageEdit';
+import { upsertMessageReadReceipt } from './services/messageReadReceipt';
 
 export type SessionDestroyResult = {
     logoutAttempted: boolean;
@@ -1730,7 +1732,7 @@ async function createInstanceInternal(
                             });
 
                             if (device) {
-                                const statusMessage = await prisma.outgoingMessage.findFirst({
+                                let statusMessage = await prisma.outgoingMessage.findFirst({
                                     where: { waMessageId: messageId, sessionId },
                                     select: {
                                         pkId: true,
@@ -1738,8 +1740,46 @@ async function createInstanceInternal(
                                         waMessageId: true,
                                         to: true,
                                         isGroup: true,
+                                        readBy: true,
+                                        readReceipts: true,
                                     },
                                 });
+                                if (
+                                    statusMessage
+                                    && newStatus === 'read'
+                                    && !statusMessage.isGroup
+                                    && statusMessage.to
+                                ) {
+                                    const readBy = new Set(
+                                        Array.isArray(statusMessage.readBy)
+                                            ? statusMessage.readBy.map(String)
+                                            : [],
+                                    );
+                                    readBy.add(statusMessage.to);
+                                    statusMessage = await prisma.outgoingMessage.update({
+                                        where: { pkId: statusMessage.pkId },
+                                        data: {
+                                            readBy: Array.from(readBy),
+                                            readReceipts: upsertMessageReadReceipt(
+                                                statusMessage.readReceipts,
+                                                {
+                                                    readerJid: statusMessage.to,
+                                                    readAt: new Date().toISOString(),
+                                                    estimated: true,
+                                                },
+                                            ) as unknown as Prisma.InputJsonValue,
+                                        },
+                                        select: {
+                                            pkId: true,
+                                            id: true,
+                                            waMessageId: true,
+                                            to: true,
+                                            isGroup: true,
+                                            readBy: true,
+                                            readReceipts: true,
+                                        },
+                                    });
+                                }
                                 io.to(`device:${device.id}`).emit(`device:${device.id}:message-status`, {
                                     id: statusMessage?.id || messageId,
                                     messageId: statusMessage?.id || messageId,
@@ -1752,6 +1792,13 @@ async function createInstanceInternal(
                                     isGroup:
                                         statusMessage?.isGroup
                                         ?? Boolean((statusMessage?.to || update.key.remoteJid)?.includes('@g.us')),
+                                    ...(statusMessage && Array.isArray(statusMessage.readBy)
+                                        ? {
+                                              readCount: statusMessage.readBy.length,
+                                              readBy: statusMessage.readBy,
+                                              readReceipts: statusMessage.readReceipts || [],
+                                          }
+                                        : {}),
                                     timestamp: new Date().toISOString(),
                                 });
                             }
@@ -1789,7 +1836,7 @@ async function createInstanceInternal(
                                 });
 
                                 if (device) {
-                                    const statusMessage = await prisma.outgoingMessage.findFirst({
+                                    let statusMessage = await prisma.outgoingMessage.findFirst({
                                         where: { id: messageId, sessionId },
                                         select: {
                                             pkId: true,
@@ -1797,8 +1844,46 @@ async function createInstanceInternal(
                                             waMessageId: true,
                                             to: true,
                                             isGroup: true,
+                                            readBy: true,
+                                            readReceipts: true,
                                         },
                                     });
+                                    if (
+                                        statusMessage
+                                        && newStatus === 'read'
+                                        && !statusMessage.isGroup
+                                        && statusMessage.to
+                                    ) {
+                                        const readBy = new Set(
+                                            Array.isArray(statusMessage.readBy)
+                                                ? statusMessage.readBy.map(String)
+                                                : [],
+                                        );
+                                        readBy.add(statusMessage.to);
+                                        statusMessage = await prisma.outgoingMessage.update({
+                                            where: { pkId: statusMessage.pkId },
+                                            data: {
+                                                readBy: Array.from(readBy),
+                                                readReceipts: upsertMessageReadReceipt(
+                                                    statusMessage.readReceipts,
+                                                    {
+                                                        readerJid: statusMessage.to,
+                                                        readAt: new Date().toISOString(),
+                                                        estimated: true,
+                                                    },
+                                                ) as unknown as Prisma.InputJsonValue,
+                                            },
+                                            select: {
+                                                pkId: true,
+                                                id: true,
+                                                waMessageId: true,
+                                                to: true,
+                                                isGroup: true,
+                                                readBy: true,
+                                                readReceipts: true,
+                                            },
+                                        });
+                                    }
                                     io.to(`device:${device.id}`).emit(`device:${device.id}:message-status`, {
                                         id: statusMessage?.id || messageId,
                                         messageId: statusMessage?.id || messageId,
@@ -1811,6 +1896,13 @@ async function createInstanceInternal(
                                         isGroup:
                                             statusMessage?.isGroup
                                             ?? Boolean((statusMessage?.to || update.key.remoteJid)?.includes('@g.us')),
+                                        ...(statusMessage && Array.isArray(statusMessage.readBy)
+                                            ? {
+                                                  readCount: statusMessage.readBy.length,
+                                                  readBy: statusMessage.readBy,
+                                                  readReceipts: statusMessage.readReceipts || [],
+                                              }
+                                            : {}),
                                         timestamp: new Date().toISOString(),
                                     });
                                 }

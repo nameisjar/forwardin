@@ -65,6 +65,10 @@ import {
     saveIncomingMessageSecret,
 } from '../services/incomingMessageSecret';
 import { resolveIncomingQuoteMetadata } from '../services/inboxMessageQuote';
+import {
+    receiptTimestamp,
+    upsertMessageReadReceipt,
+} from '../services/messageReadReceipt';
 
 const whatsappMediaHttpsAgent = new https.Agent({
     family: 4,
@@ -1237,6 +1241,7 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                             waMessageId: true,
                             isGroup: true,
                             readBy: true,
+                            readReceipts: true,
                             to: true, // ✅ Include 'to' for debugging
                         };
 
@@ -1639,6 +1644,7 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                             status: true,
                             isGroup: true,
                             readBy: true,
+                            readReceipts: true,
                             waMessageId: true,
                             to: true,
                         },
@@ -1666,12 +1672,13 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
 
                     // 🔧 FIX: Track reader untuk SEMUA pesan (group & individual)
                     const readerJid = (receipt as any)?.userJid;
+                    const readTimestamp = receiptTimestamp((receipt as any)?.readTimestamp);
                     if (hasRead) {
-                        if (readerJid) {
+                        if (!outgoing.isGroup) {
+                            set.clear();
+                            set.add(String(readerJid || outgoing.to));
+                        } else if (readerJid) {
                             set.add(String(readerJid));
-                        } else if (!outgoing.isGroup && outgoing.to) {
-                            // Untuk pesan individual tanpa userJid, gunakan recipient (to)
-                            set.add(String(outgoing.to));
                         }
                     }
 
@@ -1701,6 +1708,21 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                     };
 
                     if (hasRead && set.size) updateData.readBy = Array.from(set);
+                    if (hasRead) {
+                        const receiptReaderJid = String(
+                            readerJid || (!outgoing.isGroup ? outgoing.to : ''),
+                        ).trim();
+                        if (receiptReaderJid) {
+                            updateData.readReceipts = upsertMessageReadReceipt(
+                                outgoing.isGroup ? outgoing.readReceipts : [],
+                                {
+                                    readerJid: receiptReaderJid,
+                                    readAt: readTimestamp.date.toISOString(),
+                                    estimated: readTimestamp.estimated,
+                                },
+                            );
+                        }
+                    }
                     const shouldUpdateStatus = canApplyOutgoingMessageStatus(
                         outgoing.status,
                         nextStatus,
@@ -1734,7 +1756,11 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                                 isGroup: Boolean(outgoing.isGroup),
                                 timestamp: new Date().toISOString(),
                                 ...(set.size > 0
-                                    ? { readCount: set.size, readBy: Array.from(set) }
+                                    ? {
+                                          readCount: set.size,
+                                          readBy: Array.from(set),
+                                          readReceipts: updateData.readReceipts || [],
+                                      }
                                     : {}),
                             });
                             return;
@@ -1764,6 +1790,7 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                             ? {
                                   readCount: updatedOutgoing.readBy.length,
                                   readBy: updatedOutgoing.readBy,
+                                  readReceipts: updatedOutgoing.readReceipts || [],
                               }
                             : {}),
                     });
