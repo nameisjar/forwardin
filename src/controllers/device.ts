@@ -49,9 +49,15 @@ import {
     phoneFromWhatsAppJid,
 } from '../services/inboxMessageQuote';
 import {
-    parseMessageReadReceipts,
+    filterOwnMessageReadReceipts,
+    filterOwnReadBy,
     resolveMessageReadReceipts,
 } from '../services/messageReadReceipt';
+import {
+    buildOwnWhatsAppIdentityJids,
+    canonicalPersonalPhoneJid,
+    phoneJidFromMessageKey,
+} from '../utils/whatsappIdentity';
 import { 
     getDeviceHealth, 
     pauseDevice, 
@@ -64,6 +70,30 @@ type RuntimeDevice = {
     status: string | null;
     sessions: Array<{ sessionId: string }>;
 };
+
+type WhatsAppIdentitySession = {
+    user?: { id?: string | null; lid?: string | null } | null;
+    signalRepository?: {
+        lidMapping?: {
+            getPNForLID?: (jid: string) => Promise<string | null | undefined>;
+        };
+    };
+};
+
+function getOwnIdentityJids(
+    devicePhone: string | null | undefined,
+    sessionId: string | null | undefined,
+): string[] {
+    let socketUser: { id?: string | null; lid?: string | null } | null = null;
+    if (sessionId && verifyInstance(sessionId)) {
+        try {
+            socketUser = (getInstance(sessionId) as unknown as WhatsAppIdentitySession).user || null;
+        } catch {
+            socketUser = null;
+        }
+    }
+    return buildOwnWhatsAppIdentityJids(devicePhone, socketUser);
+}
 
 const inboxContactSelect = {
     firstName: true,
@@ -1466,6 +1496,7 @@ export const getDeviceConversationTimeline: RequestHandler = async (req, res) =>
             },
             select: {
                 pkId: true,
+                phone: true,
                 sessions: {
                     where: { id: { contains: 'config' } },
                     select: { sessionId: true },
@@ -1549,6 +1580,10 @@ export const getDeviceConversationTimeline: RequestHandler = async (req, res) =>
 
         const hasMore = rows.length > requestedLimit;
         const page = rows.slice(0, requestedLimit);
+        const ownIdentityJids = getOwnIdentityJids(
+            device.phone,
+            device.sessions[0]?.sessionId,
+        );
         const nextCursor = hasMore && page.length > 0
             ? encodeConversationTimelineCursor(page[page.length - 1])
             : null;
@@ -1735,8 +1770,16 @@ export const getDeviceConversationTimeline: RequestHandler = async (req, res) =>
                         ? { name: 'Anda', phone: null }
                         : { name: row.quotedSender, phone: null };
             const resolvedQuotedSender = quotedSenderIdentity.name || row.quotedSender;
+            const readBy = row.isGroup
+                ? filterOwnReadBy(row.readBy, ownIdentityJids)
+                : [];
+            const readReceipts = row.isGroup
+                ? filterOwnMessageReadReceipts(row.readReceipts, ownIdentityJids)
+                : [];
             return {
                 ...serializePrisma(row),
+                readBy,
+                readReceipts,
                 message: decryptedMessage,
                 quotedText: decryptMessage(row.quotedText),
                 quotedSender: resolvedQuotedSender,
@@ -2051,6 +2094,126 @@ export function shutdownScheduledJobs(): void {
 }
 
 /**
+ * Merge legacy/alternate personal-chat keys into one phone-number JID. New
+ * messages already prefer remoteJidAlt, but old @lid summaries can otherwise
+ * remain visible beside broadcast messages sent to the phone-number JID.
+ */
+async function repairDeviceConversationIdentities(devicePkId: number): Promise<number> {
+    const conversations = await prisma.conversation.findMany({
+        where: {
+            deviceId: devicePkId,
+            isGroup: false,
+            OR: [
+                { jid: { endsWith: '@lid' } },
+                { jid: { endsWith: '@hosted.lid' } },
+                { jid: { contains: ':', endsWith: '@s.whatsapp.net' } },
+            ],
+        },
+        select: {
+            jid: true,
+            contact: { select: { phone: true } },
+        },
+    });
+    if (conversations.length === 0) return 0;
+
+    const mappings = new Map<string, string>();
+    const unresolvedLids: string[] = [];
+    for (const conversation of conversations) {
+        const sourceJid = conversation.jid.trim().toLowerCase();
+        const directPhoneJid = canonicalPersonalPhoneJid(sourceJid);
+        if (directPhoneJid) {
+            if (sourceJid !== directPhoneJid) mappings.set(sourceJid, directPhoneJid);
+            continue;
+        }
+
+        if (!sourceJid.endsWith('lid')) continue;
+        const contactPhoneJid = canonicalPersonalPhoneJid(conversation.contact?.phone);
+        if (contactPhoneJid) mappings.set(sourceJid, contactPhoneJid);
+        else unresolvedLids.push(sourceJid);
+    }
+
+    if (unresolvedLids.length > 0) {
+        const sessionRows = await prisma.session.findMany({
+            where: { deviceId: devicePkId },
+            distinct: ['sessionId'],
+            select: { sessionId: true },
+        });
+        const sessionIds = sessionRows.map((row) => row.sessionId);
+        const rawMessages = sessionIds.length > 0
+            ? await prisma.message.findMany({
+                  where: {
+                      remoteJid: { in: unresolvedLids },
+                      sessionId: { in: sessionIds },
+                  },
+                  orderBy: { pkId: 'desc' },
+                  distinct: ['remoteJid'],
+                  select: { remoteJid: true, key: true },
+              })
+            : [];
+        for (const rawMessage of rawMessages) {
+            if (mappings.has(rawMessage.remoteJid)) continue;
+            const phoneJid = phoneJidFromMessageKey(rawMessage.key);
+            if (phoneJid) mappings.set(rawMessage.remoteJid, phoneJid);
+        }
+
+        for (const lid of unresolvedLids) {
+            if (mappings.has(lid)) continue;
+            for (const sessionId of sessionIds) {
+                if (!verifyInstance(sessionId)) continue;
+                try {
+                    const session = getInstance(sessionId) as unknown as WhatsAppIdentitySession;
+                    const mapped = await session?.signalRepository?.lidMapping?.getPNForLID?.(lid);
+                    const phoneJid = canonicalPersonalPhoneJid(mapped);
+                    if (phoneJid) {
+                        mappings.set(lid, phoneJid);
+                        break;
+                    }
+                } catch (error) {
+                    logger.debug(
+                        { devicePkId, sessionId },
+                        'Could not resolve legacy Inbox LID conversation',
+                    );
+                }
+            }
+        }
+    }
+
+    let repaired = 0;
+    for (const [sourceJid, canonicalJid] of mappings) {
+        if (!canonicalJid || sourceJid === canonicalJid) continue;
+        await prisma.$transaction(async (tx) => {
+            await tx.incomingMessage.updateMany({
+                where: { deviceId: devicePkId, from: sourceJid },
+                data: { from: canonicalJid, updatedAt: new Date() },
+            });
+            await tx.outgoingMessage.updateMany({
+                where: { deviceId: devicePkId, to: sourceJid },
+                data: { to: canonicalJid, updatedAt: new Date() },
+            });
+            // Update triggers rebuild the canonical summary. Remove an orphaned
+            // alternate row as the final step so the list cannot show both keys.
+            await tx.conversation.deleteMany({
+                where: { deviceId: devicePkId, jid: sourceJid },
+            });
+        });
+        await prisma.$executeRaw`
+            UPDATE "message_reaction"
+            SET "conversation_jid" = ${canonicalJid},
+                "updated_at" = CURRENT_TIMESTAMP
+            WHERE "device_id" = ${devicePkId}
+              AND "conversation_jid" = ${sourceJid}
+        `.catch(() => {
+            logger.warn(
+                { devicePkId, sourceJid, canonicalJid },
+                'Could not migrate reaction conversation identity',
+            );
+        });
+        repaired += 1;
+    }
+    return repaired;
+}
+
+/**
  * Convert legacy personal-chat @lid identities to their phone-number JID using
  * Baileys' remoteJidAlt metadata. The normalized value is also persisted so
  * future reads, read acknowledgements, and deletes use one conversation key.
@@ -2359,6 +2522,16 @@ export const getDeviceInbox: RequestHandler = async (req, res) => {
 
         if (!device) {
             return res.status(404).json({ message: 'Device not found' });
+        }
+
+        const repairedConversationAliases = await repairDeviceConversationIdentities(
+            device.pkId,
+        );
+        if (repairedConversationAliases > 0) {
+            logger.info(
+                { devicePkId: device.pkId, repairedConversationAliases },
+                'Merged alternate Inbox conversation identities',
+            );
         }
 
         const {
@@ -2762,6 +2935,7 @@ export const getInboxMessageReadReceipts: RequestHandler = async (req, res) => {
             select: {
                 pkId: true,
                 id: true,
+                phone: true,
                 sessions: {
                     where: { id: { contains: 'config' } },
                     select: { sessionId: true },
@@ -2780,6 +2954,7 @@ export const getInboxMessageReadReceipts: RequestHandler = async (req, res) => {
             select: {
                 id: true,
                 waMessageId: true,
+                isGroup: true,
                 readBy: true,
                 readReceipts: true,
                 updatedAt: true,
@@ -2787,9 +2962,27 @@ export const getInboxMessageReadReceipts: RequestHandler = async (req, res) => {
         });
         if (!outgoing) return res.status(404).json({ message: 'Message not found' });
 
-        let storedReceipts = parseMessageReadReceipts(outgoing.readReceipts);
+        // One-to-one chats already communicate read state through the WhatsApp
+        // ticks. The per-person reader list is a group-only feature.
+        if (!outgoing.isGroup) {
+            res.setHeader('Cache-Control', 'no-store');
+            return res.status(200).json({
+                messageId: outgoing.waMessageId || outgoing.id,
+                readCount: 0,
+                readers: [],
+            });
+        }
+
+        const ownIdentityJids = getOwnIdentityJids(
+            device.phone,
+            device.sessions[0]?.sessionId,
+        );
+        let storedReceipts = filterOwnMessageReadReceipts(
+            outgoing.readReceipts,
+            ownIdentityJids,
+        );
         if (storedReceipts.length === 0 && Array.isArray(outgoing.readBy)) {
-            storedReceipts = outgoing.readBy
+            storedReceipts = filterOwnReadBy(outgoing.readBy, ownIdentityJids)
                 .map((readerJid) => String(readerJid || '').trim())
                 .filter(Boolean)
                 .map((readerJid) => ({

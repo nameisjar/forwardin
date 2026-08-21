@@ -66,9 +66,15 @@ import {
 } from '../services/incomingMessageSecret';
 import { resolveIncomingQuoteMetadata } from '../services/inboxMessageQuote';
 import {
+    filterOwnMessageReadReceipts,
+    filterOwnReadBy,
     receiptTimestamp,
     upsertMessageReadReceipt,
 } from '../services/messageReadReceipt';
+import {
+    buildOwnWhatsAppIdentityJids,
+    isOwnWhatsAppIdentity,
+} from '../utils/whatsappIdentity';
 
 const whatsappMediaHttpsAgent = new https.Agent({
     family: 4,
@@ -195,6 +201,7 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
     let listening = false;
     let deviceUuidPromise: Promise<string | null> | null = null;
     let devicePkIdPromise: Promise<number | null> | null = null;
+    let ownIdentityJidsPromise: Promise<string[]> | null = null;
     const getDeviceUuid = () => {
         if (!deviceId) return Promise.resolve(null);
         if (!deviceUuidPromise) {
@@ -212,6 +219,31 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                 .then((session) => session?.deviceId || null);
         }
         return devicePkIdPromise;
+    };
+    const getOwnIdentityJids = () => {
+        if (!ownIdentityJidsPromise) {
+            ownIdentityJidsPromise = (async () => {
+                const pkId = await getDevicePkId();
+                const device = pkId
+                    ? await prisma.device.findUnique({
+                          where: { pkId },
+                          select: { phone: true },
+                      })
+                    : null;
+                let socketUser: { id?: string | null; lid?: string | null } | null = null;
+                try {
+                    socketUser = (
+                        getInstance(sessionId) as unknown as {
+                            user?: { id?: string | null; lid?: string | null } | null;
+                        }
+                    ).user || null;
+                } catch {
+                    socketUser = null;
+                }
+                return buildOwnWhatsAppIdentityJids(device?.phone, socketUser);
+            })();
+        }
+        return ownIdentityJidsPromise;
     };
     const emitOutgoingStatus = async (payload: Record<string, unknown>) => {
         const publicDeviceUuid = await getDeviceUuid();
@@ -1593,6 +1625,7 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
     const updateReceipt: BaileysEventHandler<'message-receipt.update'> = async (updates) => {
         for (const { key, receipt } of updates) {
             try {
+                const ownIdentityJids = await getOwnIdentityJids();
                 await prisma.$transaction(async (tx) => {
                     // Try to update Message.userReceipt if Message row exists (optional)
                     const message = await tx.message.findFirst({
@@ -1667,17 +1700,26 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                         receiptType.includes('delivered') ||
                         receiptType === 'delivery';
 
-                    const prev = Array.isArray(outgoing.readBy) ? (outgoing.readBy as any[]) : [];
-                    const set = new Set<string>(prev.map((x) => String(x)));
+                    const previousReaders = outgoing.isGroup
+                        ? filterOwnReadBy(outgoing.readBy, ownIdentityJids)
+                        : Array.isArray(outgoing.readBy)
+                            ? outgoing.readBy.map((value) => String(value))
+                            : [];
+                    const set = new Set<string>(previousReaders);
 
                     // 🔧 FIX: Track reader untuk SEMUA pesan (group & individual)
                     const readerJid = (receipt as any)?.userJid;
+                    const isOwnGroupReader = Boolean(
+                        outgoing.isGroup
+                        && readerJid
+                        && isOwnWhatsAppIdentity(String(readerJid), ownIdentityJids),
+                    );
                     const readTimestamp = receiptTimestamp((receipt as any)?.readTimestamp);
                     if (hasRead) {
                         if (!outgoing.isGroup) {
                             set.clear();
                             set.add(String(readerJid || outgoing.to));
-                        } else if (readerJid) {
+                        } else if (readerJid && !isOwnGroupReader) {
                             set.add(String(readerJid));
                         }
                     }
@@ -1707,14 +1749,24 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                         updatedAt: new Date(),
                     };
 
-                    if (hasRead && set.size) updateData.readBy = Array.from(set);
+                    if (hasRead && outgoing.isGroup) updateData.readBy = Array.from(set);
+                    else if (hasRead && set.size) updateData.readBy = Array.from(set);
                     if (hasRead) {
                         const receiptReaderJid = String(
                             readerJid || (!outgoing.isGroup ? outgoing.to : ''),
                         ).trim();
-                        if (receiptReaderJid) {
+                        const currentReceipts = outgoing.isGroup
+                            ? filterOwnMessageReadReceipts(
+                                  outgoing.readReceipts,
+                                  ownIdentityJids,
+                              )
+                            : [];
+                        if (outgoing.isGroup) {
+                            updateData.readReceipts = currentReceipts;
+                        }
+                        if (receiptReaderJid && !isOwnGroupReader) {
                             updateData.readReceipts = upsertMessageReadReceipt(
-                                outgoing.isGroup ? outgoing.readReceipts : [],
+                                currentReceipts,
                                 {
                                     readerJid: receiptReaderJid,
                                     readAt: readTimestamp.date.toISOString(),

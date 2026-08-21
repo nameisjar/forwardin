@@ -1,5 +1,9 @@
 import { Prisma } from '@prisma/client';
 import prisma from '../utils/db';
+import {
+    isOwnWhatsAppIdentity,
+    whatsappIdentityPhone,
+} from '../utils/whatsappIdentity';
 
 export interface StoredMessageReadReceipt {
     readerJid: string;
@@ -98,11 +102,23 @@ export const upsertMessageReadReceipt = (
 
 export const normalizeReadReceiptPhone = (
     value: string | null | undefined,
-): string => {
-    const jid = String(value || '').trim().toLowerCase();
-    if (!jid || jid.endsWith('@lid') || jid.endsWith('@g.us')) return '';
-    return jid.split('@')[0].split(':')[0].replace(/\D/g, '');
-};
+): string => whatsappIdentityPhone(value);
+
+export const filterOwnMessageReadReceipts = (
+    value: unknown,
+    ownIdentityJids: readonly string[],
+): StoredMessageReadReceipt[] => parseMessageReadReceipts(value).filter(
+    (receipt) => !isOwnWhatsAppIdentity(receipt.readerJid, ownIdentityJids),
+);
+
+export const filterOwnReadBy = (
+    value: unknown,
+    ownIdentityJids: readonly string[],
+): string[] => (Array.isArray(value) ? value : [])
+    .map((readerJid) => String(readerJid || '').trim())
+    .filter(
+        (readerJid) => readerJid && !isOwnWhatsAppIdentity(readerJid, ownIdentityJids),
+    );
 
 const identityJids = (identity: IncomingReaderIdentity | null | undefined) => [
     identity?.editSecret?.senderJid,
