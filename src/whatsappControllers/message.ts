@@ -1049,6 +1049,16 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                                         } catch (groupErr) {
                                             logger.debug({ groupErr, jid }, 'Failed to fetch group metadata');
                                         }
+                                        // Metadata requests can be rate-limited by WhatsApp. Reuse the
+                                        // last synchronized group name so the real-time event never
+                                        // regresses to a raw group JID while the database is current.
+                                        if (!groupName && deviceId) {
+                                            const storedGroup = await prisma.whatsAppGroup.findFirst({
+                                                where: { deviceId, groupId: jid },
+                                                select: { groupName: true },
+                                            });
+                                            groupName = storedGroup?.groupName || null;
+                                        }
                                     }
                                     
                                     // ✅ PERFORMANCE FIX: Simpan pesan DULU tanpa profile picture (instant)

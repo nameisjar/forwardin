@@ -163,13 +163,24 @@ async function persistPendingOutgoingMessage(params: {
     }
 
     const phone = params.jid.split('@')[0].replace(/\D/g, '');
-    const contact = await prisma.contact.findFirst({
-        where: {
-            phone: { in: [phone, `+${phone}`] },
-            contactDevices: { some: { deviceId: context.pkId } },
-        },
-        select: { pkId: true },
-    });
+    const isGroup = params.jid.includes('@g.us');
+    const [contact, group] = await Promise.all([
+        isGroup
+            ? Promise.resolve(null)
+            : prisma.contact.findFirst({
+                  where: {
+                      phone: { in: [phone, `+${phone}`] },
+                      contactDevices: { some: { deviceId: context.pkId } },
+                  },
+                  select: { pkId: true },
+              }),
+        isGroup
+            ? prisma.whatsAppGroup.findFirst({
+                  where: { deviceId: context.pkId, groupId: params.jid },
+                  select: { groupName: true },
+              })
+            : Promise.resolve(null),
+    ]);
     const encryptedText = params.text ? encryptMessage(params.text) : null;
 
     let savedMessage;
@@ -187,7 +198,7 @@ async function persistPendingOutgoingMessage(params: {
                 sessionId: context.sessionId,
                 deviceId: context.pkId,
                 contactId: contact?.pkId || null,
-                isGroup: params.jid.includes('@g.us'),
+                isGroup,
                 readBy: [],
             },
         });
@@ -207,6 +218,7 @@ async function persistPendingOutgoingMessage(params: {
                 ...savedMessage,
                 message: params.text || '',
                 isOutgoing: true,
+                groupName: group?.groupName || null,
             });
         }
     } catch (error) {
