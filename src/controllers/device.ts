@@ -52,6 +52,7 @@ import {
     filterOwnMessageReadReceipts,
     filterOwnReadBy,
     resolveMessageReadReceipts,
+    resolveReadReceiptIdentityAliases,
 } from '../services/messageReadReceipt';
 import {
     deleteAllDevicePolls,
@@ -2982,8 +2983,10 @@ export const getInboxMessageReadReceipts: RequestHandler = async (req, res) => {
                 OR: [{ id: messageId }, { waMessageId: messageId }],
             },
             select: {
+                pkId: true,
                 id: true,
                 waMessageId: true,
+                to: true,
                 isGroup: true,
                 readBy: true,
                 readReceipts: true,
@@ -3022,10 +3025,55 @@ export const getInboxMessageReadReceipts: RequestHandler = async (req, res) => {
                 }));
         }
 
+        const sessionId = device.sessions[0]?.sessionId;
+        let profileSession: ReturnType<typeof getInstance> | null = null;
+        if (sessionId && verifyInstance(sessionId)) {
+            try {
+                profileSession = getInstance(sessionId);
+            } catch {
+                profileSession = null;
+            }
+        }
+        const identityAliases = profileSession
+            ? await resolveReadReceiptIdentityAliases(
+                  profileSession,
+                  outgoing.to,
+                  storedReceipts.map((receipt) => receipt.readerJid),
+              )
+            : new Map();
         const resolvedReceipts = await resolveMessageReadReceipts(
             device.pkId,
             storedReceipts,
+            identityAliases,
         );
+
+        // Persist the resolved PN/name alongside the private LID. This keeps the
+        // reader list useful after reconnects, when the in-memory LID map is gone.
+        const enrichedReceipts = resolvedReceipts.map((receipt) => ({
+            readerJid: receipt.readerJid,
+            readAt: receipt.readAt,
+            estimated: receipt.estimated,
+            ...(receipt.readerDisplayName
+                ? { readerDisplayName: receipt.readerDisplayName }
+                : {}),
+            ...(receipt.readerPhone ? { readerPhone: receipt.readerPhone } : {}),
+            ...(receipt.profileJid ? { profileJid: receipt.profileJid } : {}),
+        }));
+        if (JSON.stringify(enrichedReceipts) !== JSON.stringify(storedReceipts)) {
+            try {
+                await prisma.outgoingMessage.update({
+                    where: { pkId: outgoing.pkId },
+                    data: {
+                        readReceipts: enrichedReceipts as unknown as Prisma.InputJsonValue,
+                    },
+                });
+            } catch (error) {
+                logger.debug(
+                    { code: (error as { code?: unknown })?.code },
+                    'Failed to cache enriched message reader identities',
+                );
+            }
+        }
         const profileJids = [
             ...new Set(
                 resolvedReceipts
@@ -3051,15 +3099,6 @@ export const getInboxMessageReadReceipts: RequestHandler = async (req, res) => {
             };
         });
 
-        const sessionId = device.sessions[0]?.sessionId;
-        let profileSession: ReturnType<typeof getInstance> | null = null;
-        if (sessionId && verifyInstance(sessionId)) {
-            try {
-                profileSession = getInstance(sessionId);
-            } catch {
-                profileSession = null;
-            }
-        }
         if (profileSession && profileJids.length > 0) {
             const now = Date.now();
             const refreshQueue = profileJids.filter((jid) => {

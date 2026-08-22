@@ -1,6 +1,7 @@
 import { Prisma } from '@prisma/client';
 import prisma from '../utils/db';
 import {
+    canonicalPersonalPhoneJid,
     isOwnWhatsAppIdentity,
     whatsappIdentityPhone,
 } from '../utils/whatsappIdentity';
@@ -9,6 +10,9 @@ export interface StoredMessageReadReceipt {
     readerJid: string;
     readAt: string;
     estimated: boolean;
+    readerDisplayName?: string | null;
+    readerPhone?: string | null;
+    profileJid?: string | null;
 }
 
 export interface ResolvedMessageReadReceipt extends StoredMessageReadReceipt {
@@ -30,6 +34,32 @@ type IncomingReaderIdentity = {
         senderJid: string;
         senderAltJid: string | null;
     } | null;
+};
+
+type GroupReaderIdentity = {
+    id: string;
+    lid?: string | null;
+    phoneNumber?: string | null;
+    name?: string | null;
+    notify?: string | null;
+    verifiedName?: string | null;
+};
+
+type ReadReceiptIdentitySession = {
+    signalRepository?: {
+        lidMapping?: {
+            getPNForLID?: (jid: string) => Promise<string | null | undefined>;
+        };
+    };
+    groupMetadata?: (jid: string) => Promise<{
+        participants?: GroupReaderIdentity[];
+    }>;
+};
+
+export type ReadReceiptIdentityAlias = {
+    readerPhone: string | null;
+    phoneJid: string | null;
+    readerDisplayName: string | null;
 };
 
 const asIsoDate = (value: unknown): string | null => {
@@ -71,10 +101,17 @@ export const parseMessageReadReceipts = (
         const readAt = asIsoDate(candidate.readAt);
         if (!readerJid || !readAt) continue;
 
+        const readerPhone = whatsappIdentityPhone(String(candidate.readerPhone || ''));
+        const readerDisplayName = String(candidate.readerDisplayName || '').trim();
+        const profileJid = canonicalPersonalPhoneJid(String(candidate.profileJid || ''));
+
         receipts.set(readerJid.toLowerCase(), {
             readerJid,
             readAt,
             estimated: candidate.estimated === true,
+            ...(readerDisplayName ? { readerDisplayName } : {}),
+            ...(readerPhone ? { readerPhone } : {}),
+            ...(profileJid ? { profileJid } : {}),
         });
     }
     return [...receipts.values()];
@@ -103,6 +140,79 @@ export const upsertMessageReadReceipt = (
 export const normalizeReadReceiptPhone = (
     value: string | null | undefined,
 ): string => whatsappIdentityPhone(value);
+
+const comparableJid = (value: string | null | undefined): string => {
+    const normalized = String(value || '').trim().toLowerCase();
+    if (!normalized.includes('@')) return normalized;
+    const [localPart, domain] = normalized.split('@');
+    return `${localPart.split(':')[0]}@${domain}`;
+};
+
+const groupReaderName = (identity: GroupReaderIdentity | undefined): string | null => {
+    if (!identity) return null;
+    return [identity.name, identity.notify, identity.verifiedName]
+        .map((value) => String(value || '').trim())
+        .find(Boolean) || null;
+};
+
+/** Resolve private WhatsApp LIDs to their public phone identities while online. */
+export const resolveReadReceiptIdentityAliases = async (
+    session: ReadReceiptIdentitySession,
+    conversationJid: string,
+    readerJids: readonly string[],
+): Promise<Map<string, ReadReceiptIdentityAlias>> => {
+    const uniqueReaderJids = [...new Set(
+        readerJids.map((jid) => String(jid || '').trim()).filter(Boolean),
+    )];
+    const lidReaderJids = uniqueReaderJids.filter((jid) =>
+        jid.toLowerCase().endsWith('@lid') || jid.toLowerCase().endsWith('@hosted.lid'),
+    );
+
+    let participants: GroupReaderIdentity[] = [];
+    if (lidReaderJids.length > 0
+        && conversationJid.toLowerCase().endsWith('@g.us')
+        && session.groupMetadata) {
+        try {
+            participants = (await session.groupMetadata(conversationJid)).participants || [];
+        } catch {
+            participants = [];
+        }
+    }
+
+    const participantsByJid = new Map<string, GroupReaderIdentity>();
+    for (const participant of participants) {
+        for (const jid of [participant.id, participant.lid]) {
+            const key = comparableJid(jid);
+            if (key && !participantsByJid.has(key)) participantsByJid.set(key, participant);
+        }
+    }
+
+    const aliases = new Map<string, ReadReceiptIdentityAlias>();
+    await Promise.all(uniqueReaderJids.map(async (readerJid) => {
+        const participant = participantsByJid.get(comparableJid(readerJid));
+        let phoneJid = canonicalPersonalPhoneJid(readerJid);
+
+        if (!phoneJid && session.signalRepository?.lidMapping?.getPNForLID) {
+            try {
+                phoneJid = canonicalPersonalPhoneJid(
+                    await session.signalRepository.lidMapping.getPNForLID(readerJid),
+                );
+            } catch {
+                phoneJid = null;
+            }
+        }
+        phoneJid = phoneJid
+            || canonicalPersonalPhoneJid(participant?.phoneNumber)
+            || canonicalPersonalPhoneJid(participant?.id);
+
+        aliases.set(readerJid.toLowerCase(), {
+            readerPhone: whatsappIdentityPhone(phoneJid),
+            phoneJid,
+            readerDisplayName: groupReaderName(participant),
+        });
+    }));
+    return aliases;
+};
 
 export const filterOwnMessageReadReceipts = (
     value: unknown,
@@ -137,14 +247,25 @@ const contactName = (contact: {
 export const resolveMessageReadReceipts = async (
     deviceId: number,
     receipts: StoredMessageReadReceipt[],
+    identityAliases: ReadonlyMap<string, ReadReceiptIdentityAlias> = new Map(),
 ): Promise<ResolvedMessageReadReceipt[]> => {
     const readerJids = [...new Set(receipts.map((receipt) => receipt.readerJid).filter(Boolean))];
     if (readerJids.length === 0) return [];
 
-    const directPhones = [
-        ...new Set(readerJids.map(normalizeReadReceiptPhone).filter(Boolean)),
-    ];
-    const identityJidsToFind = readerJids.filter((jid) => !jid.endsWith('@g.us'));
+    const directPhones = [...new Set(receipts.flatMap((receipt) => {
+        const alias = identityAliases.get(receipt.readerJid.toLowerCase());
+        return [
+            normalizeReadReceiptPhone(receipt.readerJid),
+            normalizeReadReceiptPhone(receipt.readerPhone),
+            normalizeReadReceiptPhone(receipt.profileJid),
+            alias?.readerPhone || '',
+        ];
+    }).filter(Boolean))];
+    const aliasPhoneJids = [...identityAliases.values()]
+        .map((alias) => alias.phoneJid)
+        .filter((jid): jid is string => Boolean(jid));
+    const identityJidsToFind = [...new Set([...readerJids, ...aliasPhoneJids])]
+        .filter((jid) => !jid.endsWith('@g.us'));
     const exactFilters: Prisma.IncomingMessageWhereInput[] = [
         { participant: { in: identityJidsToFind } },
         { from: { in: identityJidsToFind } },
@@ -226,7 +347,12 @@ export const resolveMessageReadReceipts = async (
     }
 
     const resolved = receipts.map((receipt) => {
-        const directPhone = normalizeReadReceiptPhone(receipt.readerJid);
+        const alias = identityAliases.get(receipt.readerJid.toLowerCase());
+        const directPhone = normalizeReadReceiptPhone(receipt.readerJid)
+            || normalizeReadReceiptPhone(receipt.readerPhone)
+            || normalizeReadReceiptPhone(receipt.profileJid)
+            || alias?.readerPhone
+            || '';
         const identity = identitiesByKey.get(receipt.readerJid.toLowerCase())
             || (directPhone ? identitiesByKey.get(directPhone) : undefined);
         const conversation = conversationsByKey.get(receipt.readerJid.toLowerCase())
@@ -243,6 +369,8 @@ export const resolveMessageReadReceipts = async (
             readerDisplayName: contactName(contact)
                 || identity?.pushName?.trim()
                 || conversation?.pushName?.trim()
+                || receipt.readerDisplayName?.trim()
+                || alias?.readerDisplayName
                 || null,
             readerPhone,
             profileJid: readerPhone
