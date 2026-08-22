@@ -4,6 +4,7 @@ import { sendDocumentMessage } from './messageSender';
 import { canDeviceSend, recordRateLimitWithError } from './signalDetector';
 import type { RateLimitResult } from './rateLimiter';
 import { redactPhone } from '../utils/logRedaction';
+import { persistGeneratedMediaBuffer } from './generatedMediaStorage';
 
 type WhatsAppSession = Parameters<typeof verifyJid>[0];
 
@@ -354,6 +355,26 @@ export async function sendMonthlyFeedbackBatch(
                     break;
                 }
 
+                let persistedMediaPath: string | null = null;
+                try {
+                    persistedMediaPath = await persistGeneratedMediaBuffer(
+                        options.deviceUuid,
+                        generatedItem.document.buffer,
+                        generatedItem.document.fileName,
+                    );
+                } catch (error) {
+                    // A local Inbox copy is helpful, but its failure must not
+                    // prevent an otherwise valid WhatsApp delivery.
+                    logger.warn(
+                        {
+                            deviceId: options.deviceUuid,
+                            recipient: redactPhone(recipient.normalizedPhone),
+                            error,
+                        },
+                        '[MonthlyFeedback] Could not persist generated PDF for Inbox',
+                    );
+                }
+
                 const sendResult = await sendDocumentMessage(
                     options.session,
                     options.deviceUuid,
@@ -363,6 +384,7 @@ export async function sendMonthlyFeedbackBatch(
                         caption: generatedItem.document.caption,
                         fileName: generatedItem.document.fileName,
                         mimetype: 'application/pdf',
+                        persistedMediaPath,
                     },
                 );
 

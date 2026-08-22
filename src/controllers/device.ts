@@ -1954,6 +1954,7 @@ export const getDeviceOutboxConversations: RequestHandler = async (req, res) => 
                 status: true,
                 createdAt: true,
                 isGroup: true,
+                broadcastId: true,
                 broadcastType: true,
                 contact: {
                     select: inboxContactSelect,
@@ -1962,9 +1963,53 @@ export const getDeviceOutboxConversations: RequestHandler = async (req, res) => 
             orderBy: { createdAt: 'desc' },
         });
 
+        const latestBroadcastIds = [
+            ...new Set(
+                latestMessages
+                    .map((message) => message.broadcastId)
+                    .filter((id): id is number => typeof id === 'number'),
+            ),
+        ];
+        const broadcastRecipientRows = await prisma.broadcastRecipient.findMany({
+            where: {
+                OR: [
+                    { messageId: { in: latestMessages.map((message) => message.id) } },
+                    ...(latestBroadcastIds.length > 0
+                        ? [{ broadcastId: { in: latestBroadcastIds } }]
+                        : []),
+                ],
+            },
+            select: { broadcastId: true, messageId: true, phone: true, jid: true },
+        });
+        const broadcastPhoneByMessageId = new Map<string, string>();
+        const broadcastPhoneByRecipient = new Map<string, string>();
+        for (const recipient of broadcastRecipientRows) {
+            const phoneJid = canonicalPersonalPhoneJid(recipient.phone);
+            if (phoneJid) {
+                const phone = phoneJid.split('@')[0];
+                if (recipient.messageId) {
+                    broadcastPhoneByMessageId.set(recipient.messageId, phone);
+                }
+                if (recipient.jid) {
+                    broadcastPhoneByRecipient.set(
+                        `${recipient.broadcastId}:${recipient.jid.toLowerCase()}`,
+                        phone,
+                    );
+                }
+            }
+        }
+
         const { decryptOutgoingMessages } = await import('../utils/messageEncryption');
         const decryptedMessages = decryptOutgoingMessages(latestMessages).map((message) => ({
             ...message,
+            recipientPhone:
+                broadcastPhoneByMessageId.get(message.id) ||
+                (message.broadcastId
+                    ? broadcastPhoneByRecipient.get(
+                          `${message.broadcastId}:${message.to.toLowerCase()}`,
+                      )
+                    : null) ||
+                null,
             mediaType: resolveInboxMediaType(
                 message.mediaPath,
                 message.fileName,
@@ -1975,9 +2020,12 @@ export const getDeviceOutboxConversations: RequestHandler = async (req, res) => 
         const recipientJids = [...new Set(decryptedMessages.map((message) => message.to))];
         const recipientPhones = [
             ...new Set(
-                recipientJids
-                    .filter((jid) => !jid.includes('@g.us') && !jid.includes('@lid'))
-                    .map((jid) => jid.split('@')[0].replace(/\D/g, ''))
+                [
+                    ...recipientJids
+                        .filter((jid) => !jid.includes('@g.us') && !jid.includes('@lid'))
+                        .map((jid) => jid.split('@')[0].replace(/\D/g, '')),
+                    ...decryptedMessages.map((message) => message.recipientPhone || ''),
+                ]
                     .filter(Boolean),
             ),
         ];
@@ -2054,7 +2102,8 @@ export const getDeviceOutboxConversations: RequestHandler = async (req, res) => 
             })
             .map((message) => {
                 const incomingIdentity = incomingIdentityByJid.get(message.to);
-                const phone = message.to.split('@')[0].replace(/\D/g, '');
+                const phone =
+                    message.recipientPhone || message.to.split('@')[0].replace(/\D/g, '');
                 const contact =
                     message.contact || incomingIdentity?.contact || contactsByPhone.get(phone) || null;
                 const profileCache = profileCacheByJid.get(message.to);
@@ -2748,7 +2797,11 @@ export const getDeviceInbox: RequestHandler = async (req, res) => {
         if (useConversationSummaries && !directConversationJid && !hasSearchFilter) {
             const summaryJids = summaryRows.map((summary) => summary.jid);
             const groupJids = summaryJids.filter((jid) => jid.endsWith('@g.us'));
-            const [profileCacheByJid, inboxGroups] = await Promise.all([
+            const outgoingSummaryMessageIds = summaryRows
+                .filter((summary) => summary.lastMessageDirection === 'outgoing')
+                .map((summary) => summary.lastMessageId)
+                .filter((id): id is string => Boolean(id));
+            const [profileCacheByJid, inboxGroups, summaryBroadcastRecipients] = await Promise.all([
                 getInboxProfileCacheSummaries(device.pkId, summaryJids),
                 groupJids.length > 0
                     ? prisma.whatsAppGroup.findMany({
@@ -2756,10 +2809,27 @@ export const getDeviceInbox: RequestHandler = async (req, res) => {
                           select: { groupId: true, groupName: true },
                       })
                     : Promise.resolve([]),
+                outgoingSummaryMessageIds.length > 0
+                    ? prisma.broadcastRecipient.findMany({
+                          where: { messageId: { in: outgoingSummaryMessageIds } },
+                          select: { messageId: true, phone: true },
+                      })
+                    : Promise.resolve([]),
             ]);
             const groupNameByJid = new Map(
                 inboxGroups.map((group) => [group.groupId, group.groupName]),
             );
+            const summaryRecipientPhoneByMessageId = new Map<string, string>();
+            for (const recipient of summaryBroadcastRecipients) {
+                if (!recipient.messageId) continue;
+                const phoneJid = canonicalPersonalPhoneJid(recipient.phone);
+                if (phoneJid) {
+                    summaryRecipientPhoneByMessageId.set(
+                        recipient.messageId,
+                        phoneJid.split('@')[0],
+                    );
+                }
+            }
             const serializedSummaries = summaryRows.map((summary) => {
                 const isGroup = summary.isGroup || summary.jid.endsWith('@g.us');
                 const message = decryptMessage(summary.lastMessagePreview || '');
@@ -2785,6 +2855,9 @@ export const getDeviceInbox: RequestHandler = async (req, res) => {
                     receivedAt: summary.lastMessageAt,
                     isOutgoing: summary.lastMessageDirection === 'outgoing',
                     isGroup,
+                    recipientPhone: summary.lastMessageId
+                        ? summaryRecipientPhoneByMessageId.get(summary.lastMessageId) || null
+                        : null,
                     contact: summary.contact,
                     pushName: summary.pushName,
                     groupName: summary.groupName || groupNameByJid.get(summary.jid) || null,

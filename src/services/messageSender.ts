@@ -331,6 +331,8 @@ export interface SendMediaOptions extends SendMessageOptions {
     caption?: string;
     fileName?: string;
     mimetype?: string;
+    /** Local copy used by Inbox when the WhatsApp payload itself is a Buffer. */
+    persistedMediaPath?: string | null;
 }
 
 export interface SendResult {
@@ -814,7 +816,9 @@ export async function sendDocumentMessage(
                 jid,
                 messageId,
                 text: options?.caption || options?.fileName || '[Dokumen]',
-                mediaPath: !Buffer.isBuffer(document) ? document.url : null,
+                mediaPath:
+                    options?.persistedMediaPath ||
+                    (!Buffer.isBuffer(document) ? document.url : null),
                 fileName: options?.fileName || null,
                 session,
                 retryFailedReservation: options?.retryFailedReservation,
