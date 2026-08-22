@@ -75,6 +75,12 @@ import {
     upsertMessageReadReceipt,
 } from '../services/messageReadReceipt';
 import {
+    applyMessagePollUpdate,
+    extractMessagePollDefinition,
+    messagePollPreview,
+    saveMessagePoll,
+} from '../services/messagePoll';
+import {
     buildOwnWhatsAppIdentityJids,
     isOwnWhatsAppIdentity,
 } from '../utils/whatsappIdentity';
@@ -431,9 +437,60 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                             }
                             continue;
                         }
+
+                        const pollUpdateMessage = messageContent?.pollUpdateMessage;
+                        if (pollUpdateMessage?.pollCreationMessageKey?.id) {
+                            if (messageDevicePkId) {
+                                try {
+                                    let ownJid: string | null = null;
+                                    let ownLid: string | null = null;
+                                    let pollSession = null;
+                                    try {
+                                        pollSession = getInstance(sessionId);
+                                        ownJid = pollSession?.user?.id || null;
+                                        ownLid = pollSession?.user?.lid || null;
+                                    } catch {
+                                        pollSession = null;
+                                        ownJid = null;
+                                        ownLid = null;
+                                    }
+                                    const pollUpdate = await applyMessagePollUpdate({
+                                        deviceId: messageDevicePkId,
+                                        sessionId,
+                                        session: pollSession,
+                                        ownJid,
+                                        ownLid,
+                                        voterDisplayName: message.pushName || null,
+                                        key: message.key,
+                                        content: messageContent,
+                                    });
+                                    if (pollUpdate.pollData) {
+                                        getSocketIO()
+                                            .to(`session:${sessionId}`)
+                                            .emit(`poll:${sessionId}`, pollUpdate);
+                                    }
+                                } catch (pollError) {
+                                    logger.warn(
+                                        {
+                                            sessionId,
+                                            messageId: message.key.id,
+                                            targetMessageId:
+                                                pollUpdateMessage.pollCreationMessageKey.id,
+                                            code: (pollError as { code?: unknown })?.code,
+                                        },
+                                        'Failed to apply WhatsApp poll update',
+                                    );
+                                }
+                            }
+                            // A vote updates its original poll and must never become a
+                            // separate generic Inbox bubble.
+                            continue;
+                        }
                         const stickerMessage = messageContent?.stickerMessage;
+                        const pollDefinition = extractMessagePollDefinition(messageContent);
 
                         const messageText =
+                            messagePollPreview(pollDefinition) ||
                             messageContent?.conversation ||
                             messageContent?.extendedTextMessage?.text ||
                             messageContent?.imageMessage?.caption ||
@@ -446,6 +503,42 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                             (messageContent?.audioMessage ? '[Audio]' : '') ||
                             (stickerMessage ? '[Stiker]' : '') ||
                             '[Pesan]';
+
+                        let pollData = null;
+                        if (pollDefinition && messageDevicePkId && message.key.id) {
+                            try {
+                                let ownJid: string | null = null;
+                                let ownLid: string | null = null;
+                                try {
+                                    const pollSession = getInstance(sessionId);
+                                    ownJid = pollSession?.user?.id || null;
+                                    ownLid = pollSession?.user?.lid || null;
+                                } catch {
+                                    ownJid = null;
+                                    ownLid = null;
+                                }
+                                pollData = await saveMessagePoll({
+                                    deviceId: messageDevicePkId,
+                                    sessionId,
+                                    conversationJid: jid,
+                                    targetMessageId: message.key.id,
+                                    targetFromMe: Boolean(message.key.fromMe),
+                                    ownJid,
+                                    ownLid,
+                                    key: message.key,
+                                    content: messageContent,
+                                });
+                            } catch (pollError) {
+                                logger.warn(
+                                    {
+                                        sessionId,
+                                        messageId: message.key.id,
+                                        code: (pollError as { code?: unknown })?.code,
+                                    },
+                                    'Failed to persist WhatsApp poll definition',
+                                );
+                            }
+                        }
 
                         if (messageText === '[Pesan]') {
                             logger.warn(
@@ -593,7 +686,10 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                                                 );
                                                 io.to(`session:${sessionId}`).emit(
                                                     `outgoing:${sessionId}`,
-                                                    decryptOutgoingMessage(outgoingMessage),
+                                                    {
+                                                        ...decryptOutgoingMessage(outgoingMessage),
+                                                        ...(pollData ? { pollData } : {}),
+                                                    },
                                                 );
                                             }
                                         }
@@ -638,7 +734,10 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                                                     io.to(`session:${sessionId}`).emit(`message:${sessionId}`, updatedMessage);
                                                     io.to(`session:${sessionId}`).emit(
                                                         `outgoing:${sessionId}`,
-                                                        decryptOutgoingMessage(updatedMessage),
+                                                        {
+                                                            ...decryptOutgoingMessage(updatedMessage),
+                                                            ...(pollData ? { pollData } : {}),
+                                                        },
                                                     );
                                                 }
                                             }
@@ -670,7 +769,10 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                                             io.to(`session:${sessionId}`).emit(`message:${sessionId}`, outgoingMessage);
                                             io.to(`session:${sessionId}`).emit(
                                                 `outgoing:${sessionId}`,
-                                                decryptOutgoingMessage(outgoingMessage),
+                                                {
+                                                    ...decryptOutgoingMessage(outgoingMessage),
+                                                    ...(pollData ? { pollData } : {}),
+                                                },
                                             );
                                         }
                                     }
@@ -1222,6 +1324,7 @@ export default function messageHandler(sessionId: string, event: BaileysEventEmi
                                                 ? 'pending'
                                                 : 'unavailable',
                                         isGroup: jid.includes('@g.us'),
+                                        pollData,
                                     };
                                     
                                     if (

@@ -19,6 +19,13 @@ import {
 } from '../utils/messageEncryption';
 import { getSocketIO } from '../socket';
 import { deleteMessageReactions, saveMessageReaction } from '../services/messageReaction';
+import {
+    createInitialMessagePollState,
+    deleteMessagePolls,
+    normalizeOutgoingMessagePoll,
+    saveMessagePoll,
+    sendMessagePollVote,
+} from '../services/messagePoll';
 import { cleanupMediaFilesIfUnreferenced } from '../services/mediaCleanup';
 import axios from 'axios';
 import https from 'https';
@@ -332,6 +339,8 @@ export const sendMessages: RequestHandler = async (req, res) => {
                 ) {
                     throw new Error('Empty message payload');
                 }
+                const outgoingPoll = normalizeOutgoingMessagePoll(payload);
+                if (outgoingPoll) payload = outgoingPoll.content;
 
                 const replyTarget = parseInboxReplyTarget(replyTo);
                 const resolvedReply = replyTarget
@@ -347,7 +356,9 @@ export const sendMessages: RequestHandler = async (req, res) => {
                 // arrive before sendMessage resolves, so the receipt handler
                 // needs a pending row to update first.
                 const messageText =
-                    typeof payload === 'string'
+                    outgoingPoll
+                        ? `📊 Polling: ${outgoingPoll.definition.question}`
+                        : typeof payload === 'string'
                         ? payload
                         : payload?.text || JSON.stringify(payload);
                 const messageId = createTrackedMessageId(options?.messageId, session?.user?.id);
@@ -392,11 +403,15 @@ export const sendMessages: RequestHandler = async (req, res) => {
                 });
 
                 if (!reservation.created) {
+                    const pollData = outgoingPoll
+                        ? createInitialMessagePollState(outgoingPoll.definition)
+                        : null;
                     const responseMessage = {
                         ...decryptOutgoingMessage(reservation.message),
                         message: messageText,
                         isOutgoing: true,
                         idempotent: true,
+                        ...(pollData ? { pollData } : {}),
                     };
                     results.push({
                         index,
@@ -446,6 +461,33 @@ export const sendMessages: RequestHandler = async (req, res) => {
                 }
 
                 const result = queuedResult.result;
+                let pollData = outgoingPoll
+                    ? createInitialMessagePollState(outgoingPoll.definition)
+                    : null;
+                if (outgoingPoll && result?.key && result?.message) {
+                    try {
+                        pollData = await saveMessagePoll({
+                            deviceId: req.authenticatedDevice.deviceId,
+                            sessionId,
+                            conversationJid: jid,
+                            targetMessageId: messageId,
+                            targetFromMe: true,
+                            ownJid: session.user?.id || null,
+                            ownLid: session.user?.lid || null,
+                            key: result.key,
+                            content: result.message,
+                        }) || pollData;
+                    } catch (pollError) {
+                        logger.warn(
+                            {
+                                sessionId,
+                                messageId,
+                                code: (pollError as { code?: unknown })?.code,
+                            },
+                            'Polling terkirim, tetapi metadata polling belum dapat disimpan',
+                        );
+                    }
+                }
                 const returnedMessageId = result?.key?.id;
                 if (returnedMessageId && returnedMessageId !== messageId) {
                     logger.warn(
@@ -471,6 +513,7 @@ export const sendMessages: RequestHandler = async (req, res) => {
                     ...decryptOutgoingMessage(savedMessage),
                     message: messageText,
                     isOutgoing: true,
+                    ...(pollData ? { pollData } : {}),
                 };
                 getSocketIO()
                     .to(`session:${sessionId}`)
@@ -514,7 +557,7 @@ export const sendMessages: RequestHandler = async (req, res) => {
         const allErrorsShareControlledStatus =
             errors.length > 0 &&
             typeof controlledStatus === 'number' &&
-            [409, 423, 503].includes(controlledStatus) &&
+            [400, 409, 423, 503].includes(controlledStatus) &&
             errors.every((error) => error.statusCode === controlledStatus);
         res.status(
             errors.length > 0 ? (allErrorsShareControlledStatus ? controlledStatus : 500) : 200,
@@ -1022,6 +1065,61 @@ const isSupportedReactionEmoji = (emoji: string): boolean => {
     );
 };
 
+/** Send, change, or remove the authenticated account's vote on one poll. */
+export const sendInboxPollVote: RequestHandler = async (req, res) => {
+    try {
+        const sessionId = req.authenticatedDevice.sessionId;
+        const devicePkId = req.authenticatedDevice.deviceId;
+        const targetMessageId = typeof req.body.targetMessageId === 'string'
+            ? req.body.targetMessageId.trim()
+            : '';
+        const selectedOptionIds = Array.isArray(req.body.selectedOptionIds)
+            ? req.body.selectedOptionIds
+                  .map((value: unknown) => String(value || '').trim())
+                  .filter(Boolean)
+            : null;
+
+        if (
+            !isUUID(sessionId)
+            || !targetMessageId
+            || !selectedOptionIds
+            || selectedOptionIds.length > 12
+        ) {
+            return res.status(400).json({ message: 'Data vote polling tidak valid' });
+        }
+        const session = getInstance(sessionId);
+        if (!session?.user) {
+            return res.status(409).json({ message: 'Device WhatsApp belum terhubung' });
+        }
+
+        const pollEvent = await sendMessagePollVote({
+            deviceId: devicePkId,
+            sessionId,
+            session,
+            targetMessageId,
+            selectedOptionIds,
+            reactionMessageId: createTrackedMessageId(undefined, session.user.id),
+        });
+        getSocketIO().to(`session:${sessionId}`).emit(`poll:${sessionId}`, pollEvent);
+        return res.status(200).json({ success: true, ...pollEvent });
+    } catch (error) {
+        const typedError = error as { statusCode?: unknown; code?: unknown };
+        const statusCode = typeof typedError.statusCode === 'number'
+            ? typedError.statusCode
+            : 500;
+        logger.warn(
+            { code: typedError.code, statusCode },
+            'Failed to send Inbox poll vote',
+        );
+        return res.status(statusCode).json({
+            message: error instanceof Error
+                ? error.message
+                : 'Gagal mengirim vote polling WhatsApp',
+            ...(typeof typedError.code === 'string' ? { code: typedError.code } : {}),
+        });
+    }
+};
+
 /**
  * Send or remove the authenticated WhatsApp account's reaction to one Inbox
  * message. The conversation and participant are resolved from persisted data,
@@ -1278,6 +1376,12 @@ export const deleteInboxMessage: RequestHandler = async (req, res) => {
             logger.warn(
                 { code: (error as { code?: unknown })?.code },
                 'Failed to delete reaction metadata for deleted message',
+            );
+        });
+        await deleteMessagePolls(devicePkId, [whatsappTargetId]).catch((error) => {
+            logger.warn(
+                { code: (error as { code?: unknown })?.code },
+                'Failed to delete poll metadata for deleted message',
             );
         });
         const mediaCleanup = await cleanupMediaFilesIfUnreferenced(

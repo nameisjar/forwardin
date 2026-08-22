@@ -6,7 +6,7 @@
     "scripts": {
         "start": "node .",
         "dev": "nodemon .",
-        "postinstall": "node scripts/patch-baileys-tctoken.js",
+        "postinstall": "node scripts/patch-baileys-tctoken.js && node scripts/patch-baileys-poll-vote.js",
         "prebuild": "node scripts/prebuild.js",
         "build": "node --max_old_space_size=4096 ./node_modules/typescript/bin/tsc",
         "lint:check": "eslint .",

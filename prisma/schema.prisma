@@ -460,6 +460,49 @@ model IncomingMessageSecret {
   @@map("incoming_message_secret")
 }
 
+/// Structured WhatsApp poll metadata. The definition and cryptographic secret
+/// stay outside Inbox message rows so poll vote events can update their target
+/// without creating placeholder messages.
+model MessagePoll {
+  pkId                   Int               @id @default(autoincrement()) @map("pk_id")
+  deviceId               Int               @map("device_id")
+  sessionId              String            @map("session_id") @db.VarChar(128)
+  conversationJid        String            @map("conversation_jid") @db.VarChar(128)
+  targetMessageId        String            @map("target_message_id") @db.VarChar(255)
+  targetFromMe           Boolean           @map("target_from_me")
+  creatorJid             String            @map("creator_jid") @db.VarChar(128)
+  encryptedDefinition    String            @map("encrypted_definition") @db.Text
+  encryptedSecret        String?           @map("encrypted_secret") @db.Text
+  createdAt              DateTime           @default(now()) @map("created_at")
+  updatedAt              DateTime           @updatedAt @map("updated_at")
+  votes                  MessagePollVote[]
+
+  @@unique([deviceId, targetMessageId], map: "message_poll_device_target_key")
+  @@index([deviceId, conversationJid], map: "idx_message_poll_conversation")
+  @@index([sessionId], map: "idx_message_poll_session")
+  @@map("message_poll")
+}
+
+/// Latest selection per voter. The lookup hash supports idempotent updates,
+/// while identity fields remain encrypted at rest for Inbox result details.
+model MessagePollVote {
+  pkId              Int         @id @default(autoincrement()) @map("pk_id")
+  pollId            Int         @map("poll_id")
+  voterHash         String      @map("voter_hash") @db.VarChar(64)
+  encryptedVoterJid String?     @map("encrypted_voter_jid") @db.Text
+  encryptedVoterName String?    @map("encrypted_voter_name") @db.Text
+  isOwnVote         Boolean     @default(false) @map("is_own_vote")
+  selectedOptionIds Json        @map("selected_option_ids")
+  votedAt           DateTime    @map("voted_at")
+  createdAt         DateTime    @default(now()) @map("created_at")
+  updatedAt         DateTime    @updatedAt @map("updated_at")
+  poll              MessagePoll @relation(fields: [pollId], references: [pkId], onDelete: Cascade)
+
+  @@unique([pollId, voterHash], map: "message_poll_vote_voter_key")
+  @@index([pollId], map: "idx_message_poll_vote_poll")
+  @@map("message_poll_vote")
+}
+
 /// Denormalized Inbox conversation summary. Message bodies remain in
 /// IncomingMessage and OutgoingMessage; this model makes conversation lists,
 /// counts, unread state, and latest-message ordering inexpensive.

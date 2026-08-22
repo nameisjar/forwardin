@@ -64,6 +64,7 @@ import {
 import { extractMessageEdit } from './utils/messageEdit';
 import { applyIncomingMessageEdit } from './services/incomingMessageEdit';
 import { upsertMessageReadReceipt } from './services/messageReadReceipt';
+import { rejectPendingPollVote } from './services/pollVoteDelivery';
 
 export type SessionDestroyResult = {
     logoutAttempted: boolean;
@@ -1654,6 +1655,10 @@ async function createInstanceInternal(
 
                     if (newStatus) {
                         const newLevel = outgoingMessageStatusLevel(newStatus);
+
+                        if (newStatus === 'error') {
+                            rejectPendingPollVote(messageId, failureCode);
+                        }
 
                         // The database filter makes transitions atomic: a
                         // delayed ACK cannot revive error/failed, while NACK is

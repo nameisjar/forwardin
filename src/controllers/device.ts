@@ -54,6 +54,11 @@ import {
     resolveMessageReadReceipts,
 } from '../services/messageReadReceipt';
 import {
+    deleteAllDevicePolls,
+    deleteConversationPolls,
+    getMessagePollStates,
+} from '../services/messagePoll';
+import {
     buildOwnWhatsAppIdentityJids,
     canonicalPersonalPhoneJid,
     phoneJidFromMessageKey,
@@ -1196,6 +1201,12 @@ export const deleteConversation: RequestHandler = async (req, res) => {
                 'Failed to delete conversation reaction metadata',
             );
         });
+        await deleteConversationPolls(device.pkId, from).catch((error) => {
+            logger.warn(
+                { code: (error as { code?: unknown })?.code },
+                'Failed to delete conversation poll metadata',
+            );
+        });
         const mediaCleanup = await cleanupMediaFilesIfUnreferenced(
             [...incomingMedia, ...outgoingMedia].map((item) => item.mediaPath),
             'delete-inbox-conversation',
@@ -1300,6 +1311,12 @@ export const deleteAllInbox: RequestHandler = async (req, res) => {
             logger.warn(
                 { code: (error as { code?: unknown })?.code },
                 'Failed to delete device reaction metadata',
+            );
+        });
+        await deleteAllDevicePolls(device.pkId).catch((error) => {
+            logger.warn(
+                { code: (error as { code?: unknown })?.code },
+                'Failed to delete device poll metadata',
             );
         });
 
@@ -1613,7 +1630,13 @@ export const getDeviceConversationTimeline: RequestHandler = async (req, res) =>
                     .filter(Boolean),
             ),
         ];
-        const [senderProfileCache, senderContacts, quotedIncomingMessages, quotedOutgoingMessages] =
+        const [
+            senderProfileCache,
+            senderContacts,
+            quotedIncomingMessages,
+            quotedOutgoingMessages,
+            pollStatesByMessageId,
+        ] =
             await Promise.all([
                 getInboxProfileCacheSummaries(device.pkId, senderJids),
                 senderPhones.length > 0
@@ -1671,6 +1694,7 @@ export const getDeviceConversationTimeline: RequestHandler = async (req, res) =>
                           },
                       })
                     : Promise.resolve([]),
+                getMessagePollStates(device.pkId, page.map((row) => row.id)),
             ]);
         const quotedSenderPhones = [
             ...new Set(
@@ -1813,6 +1837,7 @@ export const getDeviceConversationTimeline: RequestHandler = async (req, res) =>
                 senderContact: senderPhone
                     ? senderContactsByPhone.get(senderPhone) || null
                     : null,
+                pollData: pollStatesByMessageId.get(row.id) || null,
             };
         });
 
@@ -2848,6 +2873,10 @@ export const getDeviceInbox: RequestHandler = async (req, res) => {
         const inboxGroupNameByJid = new Map(
             inboxGroups.map((group) => [group.groupId, group.groupName]),
         );
+        const pollStatesByMessageId = await getMessagePollStates(
+            device.pkId,
+            normalizedMessages.map((message) => message.id),
+        );
         const serialized = normalizedMessages.map((message) => {
             const item = serializePrisma(decryptIncomingMessage(message));
             if (message.from.endsWith('@g.us') && !item.groupName) {
@@ -2880,6 +2909,7 @@ export const getDeviceInbox: RequestHandler = async (req, res) => {
                 item.profilePicUrl = null;
                 item.groupPicUrl = null;
             }
+            item.pollData = pollStatesByMessageId.get(message.id) || null;
             return item;
         });
         const hasMore = currentPage < totalPages;
